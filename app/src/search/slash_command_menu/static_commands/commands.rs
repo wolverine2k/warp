@@ -14,7 +14,7 @@ pub static AGENT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/agent",
     description: t_static!("slash-cmd-agent-desc"),
     icon_path: "bundled/svg/oz.svg",
-    availability: Availability::AI_ENABLED,
+    availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
     argument: Some(Argument::optional().with_execute_on_selection()),
 });
@@ -154,7 +154,8 @@ pub static FORK: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
         | Availability::NO_LRC_CONTROL
-        | Availability::AI_ENABLED,
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
     argument: Some(Argument::optional().with_hint_text(t_static!("slash-cmd-fork-hint"))),
 });
@@ -248,7 +249,9 @@ pub static NEW: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/new",
     description: t_static!("slash-cmd-new-desc"),
     icon_path: "bundled/svg/new-conversation.svg",
-    availability: Availability::NO_LRC_CONTROL | Availability::AI_ENABLED,
+    availability: Availability::NO_LRC_CONTROL
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: false,
     argument: Some(Argument::optional().with_execute_on_selection()),
 });
@@ -266,7 +269,9 @@ pub static PROFILE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/profile",
     description: t_static!("slash-cmd-profile-desc"),
     icon_path: "bundled/svg/psychology.svg",
-    availability: Availability::AGENT_VIEW | Availability::AI_ENABLED,
+    availability: Availability::AGENT_VIEW
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
     argument: None,
 });
@@ -309,7 +314,8 @@ pub static COMPACT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
         | Availability::NO_LRC_CONTROL
-        | Availability::AI_ENABLED,
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
     argument: Some(Argument::optional().with_hint_text(t_static!("slash-cmd-compact-hint"))),
 });
@@ -321,7 +327,8 @@ pub static COMPACT_AND: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
         | Availability::NO_LRC_CONTROL
-        | Availability::AI_ENABLED,
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
     argument: Some(Argument::optional().with_hint_text(t_static!("slash-cmd-compact-and-hint"))),
 });
@@ -333,7 +340,8 @@ pub static QUEUE: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
         | Availability::NO_LRC_CONTROL
-        | Availability::AI_ENABLED,
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
     argument: Some(Argument::required().with_hint_text(t_static!("slash-cmd-queue-hint"))),
 });
@@ -345,7 +353,8 @@ pub static FORK_AND_COMPACT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCo
     availability: Availability::AGENT_VIEW
         | Availability::ACTIVE_CONVERSATION
         | Availability::NO_LRC_CONTROL
-        | Availability::AI_ENABLED,
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
     argument: Some(
         Argument::optional().with_hint_text(t_static!("slash-cmd-fork-and-compact-hint")),
@@ -358,7 +367,8 @@ pub static FORK_FROM: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     icon_path: "bundled/svg/arrow-split.svg",
     availability: Availability::AGENT_VIEW
         .union(Availability::NO_LRC_CONTROL)
-        .union(Availability::AI_ENABLED),
+        .union(Availability::AI_ENABLED)
+        .union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: true,
     argument: None,
 });
@@ -378,7 +388,7 @@ pub static REMOTE_CONTROL: LazyLock<StaticCommand> = LazyLock::new(|| StaticComm
     name: "/remote-control",
     description: t_static!("slash-cmd-remote-control-desc"),
     icon_path: "bundled/svg/phone-01.svg",
-    availability: Availability::AI_ENABLED,
+    availability: Availability::AI_ENABLED.union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: false,
     argument: None,
 });
@@ -405,7 +415,9 @@ pub static REWIND: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/rewind",
     description: t_static!("slash-cmd-rewind-desc"),
     icon_path: "bundled/svg/clock-rewind.svg",
-    availability: Availability::AGENT_VIEW.union(Availability::AI_ENABLED),
+    availability: Availability::AGENT_VIEW
+        .union(Availability::AI_ENABLED)
+        .union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: true,
     argument: None,
 });
@@ -414,7 +426,9 @@ pub static EXPORT_TO_CLIPBOARD: LazyLock<StaticCommand> = LazyLock::new(|| Stati
     name: "/export-to-clipboard",
     description: t_static!("slash-cmd-export-to-clipboard-desc"),
     icon_path: "bundled/svg/copy.svg",
-    availability: Availability::AGENT_VIEW.union(Availability::AI_ENABLED),
+    availability: Availability::AGENT_VIEW
+        .union(Availability::AI_ENABLED)
+        .union(Availability::NOT_CLOUD_AGENT),
     auto_enter_ai_mode: true,
     argument: None,
 });
@@ -423,7 +437,9 @@ pub static EXPORT_TO_FILE: LazyLock<StaticCommand> = LazyLock::new(|| StaticComm
     name: "/export-to-file",
     description: t_static!("slash-cmd-export-to-file-desc"),
     icon_path: "bundled/svg/download-01.svg",
-    availability: Availability::AGENT_VIEW | Availability::AI_ENABLED,
+    availability: Availability::AGENT_VIEW
+        | Availability::AI_ENABLED
+        | Availability::NOT_CLOUD_AGENT,
     auto_enter_ai_mode: true,
     argument: Some(Argument::optional().with_hint_text(t_static!("slash-cmd-export-to-file-hint"))),
 });
