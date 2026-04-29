@@ -86,7 +86,7 @@ Phases 1–3 are **library-only**; they don't touch any UI or dispatch path. If 
   - `pub fn compose_system_prompt(supported: &[ToolType], context_window: Option<u32>) -> String` with `{tools}` and `{context_window}` substitution.
 - `crates/ai/src/local_provider/system_prompt.md` — the actual prompt body, sectioned per tech.md §6.4 (role framing, tools, output format, diff format, safety guardrails, context-window hint).
 - `crates/ai/src/local_provider/tools.rs`:
-  - `ToolDef` struct + a static registry of the 5 v1 tools (`read_files`, `apply_file_diffs`, `run_shell_command`, `grep`, `file_glob`).
+  - `ToolDef` struct + a static registry of the 5 v1 tools (`read_files`, `apply_file_diffs`, `run_shell_command`, `grep`, `file_glob_v2`).
   - For each tool: literal JSON-schema string + `parse_args` returning the typed `Message::ToolCall.tool::*` variant.
   - `pub fn tool_definitions(supported: &[ToolType]) -> Vec<OpenAiToolDefinition>`.
   - `pub fn translate_openai_tool_call(call: &OpenAiToolCall) -> Result<Message::ToolCall, ToolParseError>`.
@@ -231,13 +231,13 @@ Phases 1–3 are **library-only**; they don't touch any UI or dispatch path. If 
 | 0 — Prep | 0.25 | low (calendar-bound on label) |
 | 1 — Adapter | 2 | low (proto constructibility resolved) |
 | 2 — Request + HTTP (with stub prompt) | 1.5 | low |
-| 2.5 — System prompt + tool schemas | 4 | **high** (content iteration; biggest quality lever) |
+| 2.5 — System prompt + tool schemas | 5–6 | **high** (content iteration; biggest quality lever; ApplyFileDiffs alone is non-trivial) |
 | 3 — Settings storage | 1 | low |
 | 4 — Picker injection | 1 | low |
 | 5 — Dispatch fork | 1.5 | medium (cross-cutting + reviewer load) |
 | 6 — Settings UI | 2 | medium (UX iteration) |
 | 7 — Tool-call cycle | 2 | medium (now that tools.rs ships parsers, this is mostly wiring) |
 | 8 — Stabilization | 2+ | low (calendar-bound) |
-| **Total** | **~17 days** of focused work plus a multi-week dogfood window | |
+| **Total** | **~18–19 days** of focused work plus a multi-week dogfood window | |
 
-The `~17 days` is a 95th-percentile estimate for a single engineer working with reviewer round-trips. Realistic calendar time, accounting for label-wait, Oz/SME review cycles, and dogfood feedback loops, is closer to 6–10 weeks end-to-end.
+The `~18–19 days` is a 95th-percentile estimate for a single engineer working with reviewer round-trips. Realistic calendar time, accounting for label-wait, Oz/SME review cycles, and dogfood feedback loops, is closer to 6–10 weeks end-to-end.

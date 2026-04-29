@@ -37,7 +37,7 @@ Each test is a fixture in (`input_sse_chunks`, `expected_response_events`) form,
 | 1.7 | `text_finish_content_filter` | `finish_reason="content_filter"` ⇒ `Finished{Other}` (with diagnostic in `error_message`) |
 | 1.8 | `tool_call_single_complete` | one tool call streamed in 4 fragments, complete on `finish_reason="tool_calls"` ⇒ `AddMessagesToTask([ToolCall])` then `Finished{Done}` |
 | 1.9 | `tool_call_streamed_args` | `arguments` arrives as 6 string fragments concatenated; assert final ToolCall has full JSON |
-| 1.10 | `tool_call_args_whole` | `arguments` arrives as a complete string in one chunk; assert ToolCall is emitted on first sight of complete args |
+| 1.10 | `tool_call_args_whole` | `arguments` arrives as a complete JSON string in one chunk, immediately followed by a chunk with `finish_reason="tool_calls"`; assert ToolCall is emitted exactly once, before the closing transaction action (matches tech.md §6 emission rule: "buffer until `finish_reason` arrives OR a higher-index fragment arrives") |
 | 1.11 | `tool_call_two_interleaved` | indices 0 and 1 fragments interleave; both ToolCalls emit in correct order with correct args |
 | 1.12 | `text_then_tool` | text deltas precede a tool call; assert event ordering matches input ordering |
 | 1.13 | `tool_then_text` | tool fragments then text delta in same response (rare but valid); assert ordering |
@@ -105,13 +105,13 @@ Each test is a fixture in (`input_sse_chunks`, `expected_response_events`) form,
 | 3.5.4 | `prompt_includes_context_window_when_set` | `context_window=Some(8192)` ⇒ "approximately 8192 tokens" appears |
 | 3.5.5 | `prompt_omits_context_window_when_none` | `context_window=None` ⇒ no "approximately N tokens" line |
 | 3.5.6 | `prompt_is_stable_across_runs` | same inputs ⇒ identical output (deterministic; no `format!()` of timestamps etc.) |
-| 3.5.7 | `prompt_passes_through_jinja_substitution_safely` | tool names containing `{` and `}` (defensive) don't corrupt the template |
+| 3.5.7 | `prompt_template_substitution_is_brace_safe` | tool names containing `{` and `}` (defensive) don't corrupt the template (the implementation uses `str::replace` rather than a `format!`-style parser, but the test exists to lock that in) |
 
 ## 3.6. Unit tests — tool definitions & translation
 
 **File:** `crates/ai/src/local_provider/tools_tests.rs`
 
-The hardest-to-get-right area; deserves heavy coverage. Each of the 5 v1 tools (`read_files`, `apply_file_diffs`, `run_shell_command`, `grep`, `file_glob`) gets the same 5-test pattern:
+The hardest-to-get-right area; deserves heavy coverage. Each of the 5 v1 tools (`read_files`, `apply_file_diffs`, `run_shell_command`, `grep`, `file_glob_v2`) gets the same 5-test pattern:
 
 | Pattern test | Asserts |
 |---|---|
@@ -133,8 +133,8 @@ Plus per-tool semantic tests:
 | 3.6.A | `apply_file_diffs_v4a_diff_parses` | a real V4A-format diff string from the prompt gets translated into the typed `ApplyFileDiffsArgs` with each hunk's `search`/`replace` populated |
 | 3.6.B | `run_shell_command_purpose_required` | the user-friendly `purpose` field maps to whichever proto field carries the model's rationale; missing ⇒ defaults to empty string, not error |
 | 3.6.C | `read_files_paths_array` | `paths` JSON array maps to the proto's `repeated string paths` |
-| 3.6.D | `grep_pattern_passes_through_unchanged` | regex-special characters in `pattern` are not escaped/altered |
-| 3.6.E | `file_glob_pattern_relative_path_ok` | both relative (`*.rs`) and absolute (`/abs/**`) globs accepted |
+| 3.6.D | `grep_queries_array_passes_through` | the `Grep` proto's `repeated string queries` field is populated from a JSON array; regex-special characters in each query are not escaped/altered |
+| 3.6.E | `file_glob_v2_pattern_relative_path_ok` | both relative (`*.rs`) and absolute (`/abs/**`) globs accepted; `search_dir`, `max_matches`, `max_depth`, `min_depth` all populated when present |
 
 And the round-trip / outbound:
 
@@ -222,7 +222,15 @@ Configure a local provider, select its model, then disable `local_provider_enabl
 
 ### 5.9 `local_provider_transaction_lifecycle.rs`
 
-Mock server emits a normal text-only response. Assert the synthesized event stream contains, in order: `Init`, `BeginTransaction`, ≥1 `AppendToMessageContent`, `CommitTransaction`, `Finished{Done}`. Then run a second test where the mock simulates a mid-stream HTTP failure; assert the stream contains `Init`, `BeginTransaction`, ≥0 `AppendToMessageContent`, `RollbackTransaction`, `Finished{Other}`. Both cases assert the conversation state on the controller side after the stream completes — clean turn for commit, no orphaned half-message for rollback.
+Three sub-cases:
+
+**5.9a (commit happy path):** Mock emits a normal text-only response. Assert the synthesized event stream contains, in order: `Init` → `ClientActions{BeginTransaction}` → ≥1 `ClientActions{AppendToMessageContent}` → `ClientActions{CommitTransaction}` → `Finished{Done}`. Assert: no `ClientActions` are emitted between `CommitTransaction` and `Finished` (per tech.md §6.6 ordering invariant). Final controller state has the assistant turn persisted.
+
+**5.9b (rollback on stream error):** Mock simulates a mid-stream HTTP failure after one `AppendToMessageContent`. Assert: `Init` → `BeginTransaction` → 1 `AppendToMessageContent` → `RollbackTransaction` → `Finished{Other}`. Final controller state has NO orphaned half-message; the user can retry cleanly.
+
+**5.9c (stale prior transaction):** Configure the controller with a pre-existing open transaction (simulate by injecting a `BeginTransaction` without a matching Commit/Rollback). Trigger a new local turn. Assert: the wrapper detects the stale state and emits `RollbackTransaction` BEFORE its own `BeginTransaction` (per tech.md §6.6 stale-transaction edge case), then proceeds normally. Final state is clean.
+
+**5.9d (cancel mid-stream → rollback):** Same as 5.9a but cancel after the first `AppendToMessageContent`. Assert: the next event is `RollbackTransaction` followed by `Finished` with a non-`Done` reason (the cancel path). The conversation does NOT contain the partial assistant turn (matches the existing "cancel discards partial output" semantic for server turns).
 
 ### 5.10 `local_provider_tool_arg_round_trip.rs`
 
@@ -234,6 +242,17 @@ Mock server emits a tool call with malformed JSON arguments (e.g. `{"paths": [`)
 - the adapter does NOT crash or drop the turn
 - the conversation contains a synthetic assistant text message describing the parse failure (per tech.md §Risks "ToolParseError" mitigation)
 - the user can ask the model to retry without a state reset
+
+### 5.12 `local_provider_conversation_id_round_trip.rs`
+
+Configure local provider, send turn 1 against the mock. Adapter generates `StreamInit { conversation_id: "local:abc-123", request_id, run_id }`. Assert turn 1's reply renders normally and the controller persists `"local:abc-123"` as the conversation's server-side identifier on the conversation row.
+
+Send turn 2 in the same conversation. Assert:
+- the outbound HTTP request body to the mock has `messages` with the turn-1 history populated (proves the controller used the persisted conversation context)
+- the controller does NOT trigger any "new conversation" code path on turn 2
+- network audit confirms zero requests to `*.warp.dev` during either turn
+
+This locks in the synthetic-conversation-id assumption from tech.md §5 and protects against future controller changes that might add format validation on `conversation_id`.
 
 ## 6. Network audit (manual but reproducible)
 

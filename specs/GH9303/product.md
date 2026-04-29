@@ -36,7 +36,7 @@ have no path to do so without forking the closed-source backend.
 - A user can configure one custom provider (base URL + model id + optional API key) in settings and select that provider's model from the Agent Mode model picker.
 - When that model is selected, the chat turn is sent **directly** from the client to the user's endpoint over HTTPS/HTTP, bypassing `warp.dev` entirely for the LLM call.
 - Streaming responses (text deltas) render incrementally in the UI, identical to the existing experience.
-- Tool calling works when the user's model supports the OpenAI `tools` field. The client ships a curated subset of Warp's tool catalog as JSON schemas (initial set: `read_files`, `apply_file_diffs`, `run_shell_command`, `grep`, `file_glob`; expandable later) so file edits, shell commands, and search continue to function.
+- Tool calling works when the user's model supports the OpenAI `tools` field. The client ships a curated subset of Warp's tool catalog as JSON schemas (initial set: `read_files`, `apply_file_diffs`, `run_shell_command`, `grep`, `file_glob_v2`; expandable later) so file edits, shell commands, and search continue to function.
 - Reasoning/thinking content (when emitted by the model) renders in the existing "thinking" UI region.
 - A reusable, model-agnostic Warp system prompt template ships with the client; users see (and can later override) the prompt that gets prepended to their conversation.
 - The feature is hidden behind a feature flag while it stabilizes; off by default.
@@ -46,7 +46,7 @@ have no path to do so without forking the closed-source backend.
 These are not bugs — they're design consequences of being a client-only contribution.
 
 - **Quality gap vs. Warp's tuned models.** Warp's backend tunes its system prompt and tool schemas continuously against its model lineup. Our re-authored generic prompt won't match that. Smaller / weaker local models will visibly struggle with tool-call formatting, multi-step planning, and diff generation. Settings page documents this; first-run dialog warns users.
-- **Reduced tool coverage in v1.** Out of ~25+ tool variants in `Message.ToolCall.tool`, v1 ships JSON schemas for the 5 listed under Goals. Other tools (MCP, computer-use, file-glob-v2, web-search, code-review, etc.) are not exposed to the local model in v1. The agent gracefully degrades — those features just don't appear as available actions on a local-model turn.
+- **Reduced tool coverage in v1.** Out of 33 tool variants in `Message.ToolCall.tool`, v1 ships JSON schemas for the 5 listed under Goals. Other tools (MCP read/call, computer-use, web-search, web-fetch, code-review, ask-user-question, start-agent, todos, skills, upload-file-artifact, etc.) are not exposed to the local model in v1. The agent gracefully degrades — those features just don't appear as available actions on a local-model turn.
 - **No Warp-side rate limiting / safety filters.** The user's prompt + Warp's tool descriptions go to the user's endpoint as-is. Endpoint trust is the user's responsibility.
 - **Streaming behavior depends on the local server.** Local servers vary in tool-call streaming maturity; we test against the common ones (Ollama, LM Studio, vLLM, llama.cpp, NIM) and document quirks.
 

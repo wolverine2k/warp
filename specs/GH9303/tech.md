@@ -90,6 +90,7 @@ local_provider_display_name: SettingType { type: String, default: "Local".to_str
 local_provider_base_url: SettingType { type: String, default: "".to_string(), toml_path: "agents.local_provider.base_url" },
 local_provider_model_id: SettingType { type: String, default: "".to_string(), toml_path: "agents.local_provider.model_id" },
 local_provider_supports_tools: SettingType { type: bool, default: true, toml_path: "agents.local_provider.supports_tools" },
+local_provider_context_window: SettingType { type: u32, default: 0, toml_path: "agents.local_provider.context_window" },  // 0 means "unset/auto"
 ```
 
 All `sync_to_cloud: SyncToCloud::Never`, `private: false`. (The flag itself stays local — both because Warp Drive currently doesn't sync model config and because users may have an endpoint that's only reachable from one device.)
@@ -122,6 +123,10 @@ pub struct LocalProviderConfig {
     pub model_id: String,
     pub api_key: Option<String>,
     pub supports_tools: bool,
+    /// Optional context-window size in tokens, surfaced in the system prompt
+    /// when populated. Read from the corresponding setting; `None` means
+    /// "omit from prompt and let the model handle context limits itself".
+    pub context_window: Option<u32>,
 }
 
 impl LocalProviderConfig {
@@ -184,31 +189,62 @@ The picker rendering (`execution_profiles/model_menu_items.rs:147`) gets a small
 
 ### 5. Dispatch router
 
-Refactor `app/src/ai/agent/api/impl.rs::generate_multi_agent_output` (the wrapper that today directly calls `server_api.generate_multi_agent_output`) into a small router:
+The actual signature of `app/src/ai/agent/api/impl.rs::generate_multi_agent_output` is:
 
 ```rust
 pub async fn generate_multi_agent_output(
-    server_api: &ServerApi,
-    params: RequestParams,
-    cancel_rx: oneshot::Receiver<()>,
-    ctx: &mut AppContext,
+    server_api: Arc<ServerApi>,
+    mut params: RequestParams,
+    cancellation_rx: futures::channel::oneshot::Receiver<()>,
+) -> Result<AIOutputStream<ResponseEvent>, Arc<AIApiError>>;
+```
+
+Note: **no `&AppContext` parameter, and the function is called from inside an async task** that doesn't own one. The router must therefore make its decisions purely from `params`. The fix is to extend `RequestParams` with an opt-in snapshot of the local-provider config, populated at every call site (which DOES have `AppContext`):
+
+```rust
+// in RequestParams (new field; default None)
+pub local_provider_config: Option<LocalProviderConfig>,
+```
+
+Call sites that build `RequestParams` (`response_stream.rs:97`, `response_stream.rs:160`, `passive_suggestions/maa.rs`) snapshot `LocalProviderConfig::from_app(ctx)` while still on the `AppContext`-owning thread:
+
+```rust
+// at the call site, where `ctx: &mut AppContext` is in scope
+let local_provider_config = if FeatureFlag::LocalLlmProvider.is_enabled() {
+    LocalProviderConfig::from_app(ctx)
+} else {
+    None
+};
+let params = RequestParams { /* existing fields */, local_provider_config, .. };
+generate_multi_agent_output(server_api, params, cancellation_rx).await
+```
+
+Inside the dispatch function, the router becomes:
+
+```rust
+pub async fn generate_multi_agent_output(
+    server_api: Arc<ServerApi>,
+    mut params: RequestParams,
+    cancellation_rx: futures::channel::oneshot::Receiver<()>,
 ) -> Result<AIOutputStream<ResponseEvent>, Arc<AIApiError>> {
-    if FeatureFlag::LocalLlmProvider.is_enabled()
-        && is_local_model_id(&params.model)
-        && let Some(cfg) = LocalProviderConfig::from_app(ctx)
-    {
-        let stream = local_provider::run_chat_turn(params, cfg, cancel_rx, ctx).await?;
-        return Ok(stream);
+    if let (true, Some(cfg)) = (is_local_model_id(&params.model), params.local_provider_config.take()) {
+        return local_provider::run_chat_turn(params, cfg, cancellation_rx, server_api.http_client()).await;
     }
 
     // existing path
-    let request = build_request(params, ...);
+    let request = build_request(params, /* ... */);
     let stream = server_api.generate_multi_agent_output(&request).await?;
-    Ok(Box::pin(stream.take_until(async move { let _ = cancel_rx.await; })))
+    Ok(Box::pin(stream.take_until(async move { let _ = cancellation_rx.await; })))
 }
 ```
 
-`is_local_model_id` checks the `local:` prefix. We don't read `host_configs` here because the serialized cache might carry stale data; the prefix-on-LLMId is unambiguous and round-trips through preferences cleanly.
+`is_local_model_id` checks the `local:` prefix on `params.model`. The snapshot approach has three nice properties: (1) the dispatch function stays `AppContext`-free, preserving the existing async ownership model; (2) cancelling the local provider mid-config-change is safe — the in-flight request continues with the snapshot it captured; (3) tests can construct a `RequestParams` with any synthetic config, no `AppContext` mock needed. The cost is that every call site grows two lines, an acceptable trade.
+
+The HTTP client is passed through explicitly via `server_api.http_client()` rather than reaching for a global so the local provider runs against the same retry/timeout/proxy config as the server path.
+
+**Snapshot cost.** `LocalProviderConfig::from_app(ctx)` reads the `AISettings` singleton (cheap) plus a single `secure_storage::read_value` call to fetch the API key (cheap on the hot path because the OS keychain stays unlocked across calls within a session, but **not** zero — macOS Keychain Services and Linux Secret Service both involve IPC). For high-frequency call sites such as `passive_suggestions/maa.rs`, this adds ~1ms per build. v1 accepts that cost because passive-suggestion turns won't route to the local provider anyway (the model id won't match `local:*`). If profiling later shows the per-call cost is a regression, the fix is a `LocalProviderConfigCache` singleton that caches the snapshot and invalidates on the existing `ApiKeyManagerEvent::KeysUpdated` event plus an analogous event from `LocalProviderKeyManager`. Listed in follow-ups.
+
+**Synthetic conversation_id assumption.** The adapter sets `conversation_id = "local:{uuid}"` in `StreamInit` (§6 below). The existing controller round-trips this string into request metadata on subsequent turns (`Request.Metadata.conversation_id`) — verified by reading `app/src/ai/blocklist/controller/conversation.rs`'s persistence path, which treats the field as an opaque string. There is no client-side format validation. The `local:` prefix is therefore safe, distinguishes local conversations from server-issued IDs in logs/db rows, and round-trips correctly. Test §5.12 in test-plan.md exercises a two-turn local conversation and asserts the second turn carries the same `local:{uuid}` value the first turn returned. **No backend traffic is generated for that round-trip** — the value never leaves the client.
 
 ### 6. Local provider client
 
@@ -220,9 +256,11 @@ pub async fn run_chat_turn(
     params: RequestParams,
     cfg: LocalProviderConfig,
     cancel_rx: oneshot::Receiver<()>,
-    ctx: &mut AppContext,
+    http: http_client::Client,                 // shared client from ServerApi::http_client()
 ) -> Result<AIOutputStream<ResponseEvent>, Arc<AIApiError>>;
 ```
+
+The function is `AppContext`-free by design (per §5 — config was already snapshotted into `cfg` at the call site, and the HTTP client is passed in so the local path inherits the same retry/timeout/proxy config the server path uses). This is intentional and aligns with B3's resolution.
 
 Steps:
 1. Translate `params` → OpenAI `ChatCompletionRequest` (see `request.rs`).
@@ -251,7 +289,7 @@ Therefore `crates/ai/src/local_provider/prompt.rs` ships a hand-authored, model-
 1. **Role framing** — "You are a coding assistant operating inside the Warp terminal..."
 2. **Available tools** — short prose description of the tools the model can call (must match the schemas in `tools.rs`). Reads from the same registry so prompt and schemas can never drift.
 3. **Output format guidance** — "If the user asks you to take an action that requires a tool, emit a tool call. Otherwise, respond in plain Markdown."
-4. **Diff format** — when `apply_file_diffs` is in the tool set, the prompt includes the literal V4A-style diff format that the proto's `ApplyFileDiffsArgs` expects, so the model produces diffs we can deterministically translate into the typed proto variant.
+4. **Diff format** — when `apply_file_diffs` is in the tool set, the prompt instructs the model to emit **search/replace blocks** (the simpler `FileDiff { file_path, search, replace }` shape from the proto's `ApplyFileDiffsArgs`, not the more complex V4A hunk format also supported by that message). Search/replace is dramatically easier for smaller local models to produce reliably; V4A is left for a follow-up gated on `supports_v4a_file_diffs`. The prompt shows one worked example so the model's output is predictable.
 5. **Safety guardrails** — "Do not run destructive commands without confirmation"; "When uncertain, ask"; minimal versions of Warp's published guidance.
 6. **Context-window hint** — `"You have approximately N tokens of context"` if `cfg.context_window` is set; omitted otherwise.
 
@@ -259,7 +297,7 @@ The prompt is a `const TEMPLATE: &str = "..."` with `{tools}` and `{context_wind
 
 ### 6.5 Tool schemas and tool-call translation — bidirectional
 
-The proto's `Message::ToolCall.tool` oneof at `apis/multi_agent/v1/task.proto:357-880` has ~25 strongly-typed variants (`RunShellCommand`, `ReadFiles`, `Grep`, `ApplyFileDiffs`, `FileGlob`, MCP variants, `UseComputer`, etc.). Each variant has its own structured Rust type with named fields — there is no generic `(name, args_json)` pair anywhere in the wire protocol.
+The proto's `Message::ToolCall.tool` oneof at `apis/multi_agent/v1/task.proto:357-880` has 33 strongly-typed variants today (fields 2-34, including recent additions `AskUserQuestion`, `StartAgentV2`, `UploadFileArtifact`). Each variant has its own structured Rust type with named fields — there is no generic `(name, args_json)` pair anywhere in the wire protocol. v1 covers 5; the remaining ~28 are out of scope and silently absent from local-model tool listings.
 
 Implication: the local-provider adapter must implement TWO mappings, not one:
 
@@ -280,7 +318,7 @@ pub fn tool_definitions(supported: &[ToolType]) -> Vec<OpenAiToolDefinition>;
 pub fn translate_openai_tool_call(call: &OpenAiToolCall) -> Result<task_proto::message::ToolCall, ToolParseError>;
 ```
 
-**v1 ships exactly five `ToolDef`s** (the curated set from product.md): `read_files`, `apply_file_diffs`, `run_shell_command`, `grep`, `file_glob`. Each:
+**v1 ships exactly five `ToolDef`s** (the curated set from product.md): `read_files`, `apply_file_diffs`, `run_shell_command`, `grep`, `file_glob_v2`. Each:
 
 1. Has a literal JSON-schema string ([draft-07](https://json-schema.org/draft-07/schema#) compatible — what every OpenAI-compatible server accepts).
 2. Has a `parse_args` function that takes the OpenAI-emitted `arguments` string (model-produced JSON) and produces the strongly-typed proto variant.
@@ -306,59 +344,94 @@ on stream error → emit ClientActions { RollbackTransaction } → Finished{Othe
 
 This makes partial-failure cleanup automatic, matches server-path semantics, and gives users a clean retry experience without orphaned half-rendered turns.
 
-**`response.rs`** — SSE → `ResponseEvent` adapter. The hard part. Output contract: emit exactly `Init` first, then one or more `ClientActions`, then `Finished`. The state machine:
+**Edge cases to verify against the controller's transaction state machine** (`app/src/ai/blocklist/controller.rs` transaction handling around the conversation auto-resume site at `controller.rs:~2485`):
 
-```
-state = StreamStart
-emit Init { request_id: uuid::new_v4().to_string() }
+- A new local turn must not begin if the controller already has an open transaction from a prior server-path stream (e.g., a crash mid-stream that never emitted Commit/Rollback). The wrapper checks `controller.has_open_transaction()` before dispatching; if true, it emits `RollbackTransaction` first to drain the prior state.
+- Emitting `CommitTransaction` followed by additional `ClientActions` is a controller-state violation; the adapter must order them strictly: incremental updates → Commit OR Rollback → Finished, with no further `ClientActions` between Commit/Rollback and Finished.
+- A user-initiated cancel mid-stream must result in `RollbackTransaction` (not Commit), so that the partial assistant turn is discarded rather than persisted.
+- These ordering invariants are tested in test-plan.md §5.9.
+
+**`response.rs`** — SSE → `ResponseEvent` adapter. The hard part. Output contract: emit exactly one `Init`, then one `ClientActions{BeginTransaction}`, then ≥0 `ClientActions{...}`, then `ClientActions{CommitTransaction}` or `ClientActions{RollbackTransaction}`, then exactly one `Finished`. The state machine in `Rust` pseudocode using the actual proto types:
+
+```rust
+use warp_multi_agent_api::{
+    response_event::{self, stream_finished, StreamInit, StreamFinished, ClientActions},
+    client_action::{self, Action, AddMessagesToTask, AppendToMessageContent,
+                    BeginTransaction, CommitTransaction, RollbackTransaction},
+    message::{self, Message, AgentOutput, AgentReasoning, tool_call},
+    ResponseEvent, ClientAction,
+};
+use uuid::Uuid;
+
+let conversation_id = format!("local:{}", Uuid::new_v4());
+let request_id = Uuid::new_v4().to_string();
+let run_id = Uuid::new_v4().to_string();
+
+emit ResponseEvent { r#type: Some(response_event::Type::Init(StreamInit {
+    conversation_id, request_id, run_id,
+})) };
+emit ResponseEvent { r#type: Some(response_event::Type::ClientActions(ClientActions {
+    actions: vec![ClientAction { action: Some(client_action::Action::BeginTransaction(BeginTransaction {})) }],
+})) };
 
 for chunk in sse_stream {
-    if chunk == "[DONE]" { state = StreamDone; break; }
-    let ChatCompletionChunk { choices: [c], .. } = parse(chunk);
+    if chunk == "[DONE]" { break; }
+    let ChatCompletionChunk { choices, .. } = parse(chunk)?;
+    let Some(c) = choices.first() else { continue };           // empty `choices` is silent
 
     // visible content
-    if let Some(text) = c.delta.content {
-        emit ClientActions { actions: [Action::AppendToMessageContent {
-            message_kind: MessageKind::AgentOutput, content: text,
-        }] };
+    if let Some(text) = c.delta.content.clone() {
+        emit_append_to_message_content(MessageKind::AgentOutput, text);
     }
-    // reasoning content (DeepSeek/Qwen `delta.reasoning_content`,
-    // OpenAI `delta.reasoning`, or inline <think>...</think> tags)
-    if let Some(reasoning) = extract_reasoning(c.delta) {
-        emit ClientActions { actions: [Action::AppendToMessageContent {
-            message_kind: MessageKind::AgentReasoning, content: reasoning,
-        }] };
+    // reasoning content (`delta.reasoning_content` for DeepSeek/Qwen,
+    // `delta.reasoning` for OpenAI, or inline <think>...</think>)
+    if let Some(reasoning) = extract_reasoning(&c.delta) {
+        emit_append_to_message_content(MessageKind::AgentReasoning, reasoning);
     }
-    // tool calls (streamed in fragments — accumulate by index)
-    for tc_delta in c.delta.tool_calls.unwrap_or_default() {
+    // tool calls (fragments accumulated by index)
+    for tc_delta in c.delta.tool_calls.iter().flatten() {
         accumulator.append(tc_delta);
         if accumulator.is_complete(tc_delta.index) {
-            emit ClientActions { actions: [Action::AddMessagesToTask {
-                messages: [ Message::ToolCall(accumulator.take(tc_delta.index)) ]
-            }] };
+            let tool_call: message::ToolCall = tools::translate_openai_tool_call(&accumulator.take(tc_delta.index))?;
+            emit ResponseEvent { r#type: Some(response_event::Type::ClientActions(ClientActions {
+                actions: vec![ClientAction { action: Some(Action::AddMessagesToTask(AddMessagesToTask {
+                    task_id: current_task_id.clone(),
+                    messages: vec![Message { message: Some(message::Message::ToolCall(tool_call)) }],
+                })) }],
+            })) };
         }
     }
-    // finish
-    if let Some(reason) = c.finish_reason {
-        state = StreamDone;
-        let mapped = match reason {
-            "stop" => StreamFinishedReason::Done,
-            "length" => StreamFinishedReason::MaxTokenLimit,
-            "tool_calls" => StreamFinishedReason::Done,
-            "content_filter" => StreamFinishedReason::Other,
-            _ => StreamFinishedReason::Other,
-        };
-        emit Finished { reason: mapped };
+    if let Some(reason) = &c.finish_reason {
+        finish_reason = Some(map_finish_reason(reason));   // see helper below
         break;
     }
 }
 
-if state != StreamDone {
-    emit Finished { reason: StreamFinishedReason::InternalError };
-}
+// Commit or rollback, then Finished
+let (closing_action, finish_inner) = match (state, finish_reason) {
+    (Healthy, Some(reason)) => (CommitTransaction {}, reason),
+    _                       => (RollbackTransaction {}, stream_finished::Reason::Other(stream_finished::Other {})),
+};
+emit ResponseEvent { r#type: Some(response_event::Type::ClientActions(ClientActions {
+    actions: vec![ClientAction { action: Some(closing_action.into()) }],   // .into() picks Commit vs Rollback variant
+})) };
+emit ResponseEvent { r#type: Some(response_event::Type::Finished(StreamFinished {
+    reason: Some(finish_inner),
+    .. Default::default()
+})) };
 ```
 
-The actual proto names (`Action::AppendToMessageContent`, `Message::ToolCall`, etc.) come from the closed-source `warp_multi_agent_api` crate. The adapter relies on those types being public; if any are private we expose a small free-standing builder API in our codebase that constructs them via the public proto methods used by `convert_from.rs:197-299` today.
+`map_finish_reason(&str) -> stream_finished::Reason`:
+- `"stop"`, `"tool_calls"` → `Reason::Done(stream_finished::Done {})`
+- `"length"` → `Reason::MaxTokenLimit(stream_finished::ReachedMaxTokenLimit {})`
+- `"content_filter"`, anything else → `Reason::Other(stream_finished::Other {})`
+- Stream EOF without a `finish_reason` → `Reason::InternalError(stream_finished::InternalError { message: "stream ended without finish_reason".into() })`
+
+`emit_append_to_message_content(kind, text)` constructs an `AppendToMessageContent { task_id, message: Message{...}, mask: FieldMask{ paths: vec!["content"] } }` per `response.proto:266-273` — the FieldMask names the string field on the inner `Message` whose content is appended. For `AgentOutput`, the mask path is `agent_output.content`; for `AgentReasoning`, it's `agent_reasoning.reasoning`. The exact field-mask paths are validated against the controller in test-plan.md §5.9.
+
+The proto types are constructible from outside the crate (resolved risk; see top of file). All variants used here are confirmed against `apis/multi_agent/v1/response.proto:17-211` and `apis/multi_agent/v1/task.proto:164-330`.
+
+Tool-call argument fragments are buffered until either (a) `finish_reason` arrives or (b) a fragment with a higher `index` arrives, signaling the previous index is complete. This matches OpenAI's documented streaming behavior and is what every OpenAI-compatible server emits.
 
 Tool-call fragment accumulation is the one piece of subtle state: OpenAI streams the `function.arguments` JSON as a string of partial deltas keyed by `index`. The accumulator (`response.rs::ToolCallBuffer`) joins them and emits the complete call on first `finish_reason` or first sight of a new index.
 
@@ -382,7 +455,8 @@ Wire into the AI subpage tree: add `AISubpage::CustomProviders` to `app/src/sett
   - JSON parse failure on a chunk → `AIApiError::Deserialization`
   - Mid-stream IO failure → `AIApiError::Stream { stream_type: "local-provider", source }`
   - `serde_json::Error` translating tool-call deltas → `AIApiError::Deserialization` plus a synthesized `Finished { Other }`
-- Retries: the existing controller (`response_stream.rs:274-296`) retries on certain `AIApiError` variants up to 3 times. We piggyback that — by producing the same error variants we get retries for free on the local path. (We may want to opt-out for `ErrorStatus(401)` since retrying a bad key is wasted; that lives in a follow-up.)
+- Retries: the existing controller (`response_stream.rs` retry block, ~lines 269-296) retries on certain `AIApiError` variants up to 3 times, **gated on `is_online` (a global Warp connectivity check) AND `!has_received_client_actions`**. This semantics is wrong for local turns: a `localhost` endpoint is reachable even when the user is offline, and Warp's connectivity check has nothing to say about it. v1 accepts this mismatch (the controller will retry only when *both* warp.dev and the local endpoint look healthy, which over-restricts retry coverage but never produces incorrect behavior). The proper fix is a follow-up that adds a per-provider reachability check; documented in product.md Open Questions / Follow-ups.
+- We may want to opt-out of retries for `ErrorStatus(401)` since retrying a bad key is wasted; that lives in a follow-up.
 
 ### 9. Network audit gates
 
