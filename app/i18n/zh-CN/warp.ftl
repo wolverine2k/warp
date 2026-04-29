@@ -2358,6 +2358,7 @@ slash-cmd-open-file-desc = 在 Warp 代码编辑器中打开文件
 slash-cmd-open-file-hint = <path/to/file[:line[:col]]> 或输入 "@" 搜索
 slash-cmd-rename-tab-desc = 重命名当前标签页
 slash-cmd-rename-tab-hint = <标签页名称>
+slash-cmd-set-tab-color-desc = 设置当前标签页颜色
 slash-cmd-fork-desc = 在新窗格或新标签页中分叉当前对话
 slash-cmd-fork-hint = <可选:在分叉后的对话中发送的提示词>
 slash-cmd-open-code-review-desc = 打开代码评审

@@ -2435,6 +2435,7 @@ slash-cmd-open-file-desc = Open a file in Warp's code editor
 slash-cmd-open-file-hint = <path/to/file[:line[:col]]> or "@" to search
 slash-cmd-rename-tab-desc = Rename the current tab
 slash-cmd-rename-tab-hint = <tab name>
+slash-cmd-set-tab-color-desc = Set the color of the current tab
 slash-cmd-fork-desc = Fork the current conversation in a new pane or a new tab
 slash-cmd-fork-hint = <optional prompt to send in forked conversation>
 slash-cmd-open-code-review-desc = Open code review
