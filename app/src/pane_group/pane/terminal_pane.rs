@@ -370,8 +370,8 @@ impl PaneContent for TerminalPane {
         if view.model.lock().shared_session_status().is_viewer() {
             // We save and restore ambient agent sessions
             // (restoring the shared session if it's still open and the conversation transcript otherwise).
-            let ambient_model = view.ambient_agent_view_model().as_ref(app);
-            if ambient_model.is_ambient_agent() {
+            if let Some(ambient_model) = view.ambient_agent_view_model() {
+                let ambient_model = ambient_model.as_ref(app);
                 let task_id = ambient_model.task_id();
 
                 return LeafContents::AmbientAgent(AmbientAgentPaneSnapshot {

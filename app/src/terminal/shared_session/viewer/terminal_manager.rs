@@ -167,7 +167,7 @@ impl TerminalManager {
         resources: TerminalViewResources,
         initial_size: Vector2F,
         window_id: WindowId,
-        is_deferring_terminal_session_connection: bool,
+        is_cloud_mode: bool,
         ctx: &mut AppContext,
     ) -> Self {
         // Create all the necessary channels we need for communication.
@@ -195,7 +195,7 @@ impl TerminalManager {
         // TODO: use the sharer's size.
         let sizes = compute_block_size(initial_size, ctx);
 
-        let model = if is_deferring_terminal_session_connection {
+        let model = if is_cloud_mode {
             TerminalModel::new_for_cloud_mode_shared_session_viewer(
                 sizes,
                 terminal_colors_list(ctx),
@@ -252,6 +252,7 @@ impl TerminalManager {
                 None, // initial_input_config - not used for viewer
                 None, // no conversation restoration for shared session viewer
                 Some(inactive_pty_reads_rx.clone()),
+                is_cloud_mode,
                 ctx,
             )
         });
@@ -737,11 +738,13 @@ impl TerminalManager {
 
                 view.update(ctx, |terminal_view, ctx| {
                     if let Some(task_id) = ambient_task_id {
-                        terminal_view
-                            .ambient_agent_view_model()
-                            .update(ctx, |model, ctx| {
+                        if let Some(ambient_agent_view_model) =
+                            terminal_view.ambient_agent_view_model()
+                        {
+                            ambient_agent_view_model.update(ctx, |model, ctx| {
                                 model.enter_viewing_existing_session(task_id, ctx);
                             });
+                        }
                     }
 
                     terminal_view.on_session_share_joined(
