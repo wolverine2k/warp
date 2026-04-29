@@ -317,7 +317,8 @@ impl RequestParams {
         // current `LLMContextWindow` instead of trusting whatever was stored
         // last. If the active model isn't configurable or has been removed
         // server-side, drop the override; otherwise clamp it to the model's
-        // current `[min, max]` range.
+        // current `[min, max]` range. This closes the window between an
+        // in-flight model metadata refresh and the next request.
         let context_window_limit = {
             let profile_data = AIExecutionProfilesModel::as_ref(app)
                 .active_profile(terminal_view_id, app)
