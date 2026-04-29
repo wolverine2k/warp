@@ -528,13 +528,15 @@ impl ConversationOrTask<'_> {
     /// Returns the session ID for tasks, if we have one.
     pub fn session_id(&self) -> Option<SessionId> {
         match self {
-            ConversationOrTask::Task(task) => task.session_id.as_ref().and_then(|s| {
-                let session_id = s.parse::<SessionId>();
-                if let Err(ref e) = session_id {
-                    log::warn!("Failed to parse shared session ID: {e}");
-                }
-                session_id.ok()
-            }),
+            ConversationOrTask::Task(task) => {
+                task.active_run_execution().session_id.and_then(|s| {
+                    let session_id = s.parse::<SessionId>();
+                    if let Err(ref e) = session_id {
+                        log::warn!("Failed to parse shared session ID: {e}");
+                    }
+                    session_id.ok()
+                })
+            }
             ConversationOrTask::Conversation(_) => None,
         }
     }
@@ -627,7 +629,8 @@ impl ConversationOrTask<'_> {
     fn link_preference(&self) -> LinkPreference {
         match self {
             ConversationOrTask::Task(task) => {
-                if task.is_sandbox_running
+                let run_execution = task.active_run_execution();
+                if run_execution.is_sandbox_running
                     || self.get_session_status() != Some(SessionStatus::Expired)
                 {
                     LinkPreference::Session
@@ -643,14 +646,16 @@ impl ConversationOrTask<'_> {
     pub fn session_or_conversation_link(&self, app: &AppContext) -> Option<String> {
         match self.link_preference() {
             LinkPreference::Session => match self {
-                ConversationOrTask::Task(task) => task.session_link.clone(),
+                ConversationOrTask::Task(task) => task
+                    .active_run_execution()
+                    .session_link
+                    .map(ToString::to_string),
                 ConversationOrTask::Conversation(_) => None,
             },
             LinkPreference::Conversation => match self {
                 ConversationOrTask::Task(task) => task
-                    .conversation_id
-                    .as_ref()
-                    .map(|id| ServerConversationToken::new(id.clone()).conversation_link()),
+                    .conversation_id()
+                    .map(|id| ServerConversationToken::new(id.to_string()).conversation_link()),
                 ConversationOrTask::Conversation(conversation) => {
                     let history_model = BlocklistAIHistoryModel::as_ref(app);
                     history_model
@@ -672,7 +677,7 @@ impl ConversationOrTask<'_> {
     pub fn get_session_status(&self) -> Option<SessionStatus> {
         match self {
             ConversationOrTask::Task(task) => {
-                if task.session_id.is_some() {
+                if task.active_run_execution().session_id.is_some() {
                     Some(SessionStatus::Available)
                 } else if (Utc::now() - task.created_at) > SESSION_EXPIRATION_TIME {
                     Some(SessionStatus::Expired)
@@ -759,16 +764,16 @@ impl ConversationOrTask<'_> {
                     self.session_id()
                         .map(|session_id| WorkspaceAction::OpenAmbientAgentSession {
                             session_id,
-                            task_id: task.task_id,
+                            task_id: task.run_id(),
                         })
                 }
                 ConversationOrTask::Conversation(_) => None,
             },
             LinkPreference::Conversation => match self {
-                ConversationOrTask::Task(task) => task.conversation_id.as_ref().map(|id| {
+                ConversationOrTask::Task(task) => task.conversation_id().map(|id| {
                     WorkspaceAction::OpenConversationTranscriptViewer {
-                        conversation_id: ServerConversationToken::new(id.clone()),
-                        ambient_agent_task_id: Some(task.task_id),
+                        conversation_id: ServerConversationToken::new(id.to_string()),
+                        ambient_agent_task_id: Some(task.run_id()),
                     }
                 }),
                 ConversationOrTask::Conversation(metadata) => {
@@ -1309,11 +1314,11 @@ impl AgentConversationsModel {
         history_model: &BlocklistAIHistoryModel,
     ) -> Option<AIConversationId> {
         history_model
-            .conversation_id_for_agent_id(&task.task_id.to_string())
+            .conversation_id_for_agent_id(&task.run_id().to_string())
             .or_else(|| {
-                task.conversation_id.as_ref().and_then(|conversation_id| {
+                task.conversation_id().and_then(|conversation_id| {
                     history_model.find_conversation_id_by_server_token(
-                        &ServerConversationToken::new(conversation_id.clone()),
+                        &ServerConversationToken::new(conversation_id.to_string()),
                     )
                 })
             })
