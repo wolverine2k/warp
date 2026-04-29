@@ -54,7 +54,7 @@ use crate::ai::blocklist::agent_view::{
     agent_view_bg_fill, AgentViewController, AgentViewControllerEvent, AgentViewDisplayMode,
     AgentViewEntryBlockParams, AgentViewEntryOrigin, AgentViewHeaderDisabledTheme,
     AgentViewHeaderTheme, AgentViewZeroStateBlock, AgentViewZeroStateEvent, EphemeralMessageModel,
-    ExitAgentViewError, ExitConfirmationTrigger, InlineAgentViewHeader,
+    ExitAgentViewError, ExitConfirmationTrigger, InlineAgentViewHeader, OrchestrationPillBar,
     ENTER_OR_EXIT_CONFIRMATION_WINDOW,
 };
 use crate::ai::conversation_utils;
@@ -2705,6 +2705,10 @@ pub struct TerminalView {
 
     agent_view_controller: ModelHandle<AgentViewController>,
     agent_view_back_button: ViewHandle<ActionButton>,
+    /// Pill bar shown above the agent view header listing the orchestrator and
+    /// child agents. Gated by `FeatureFlag::OrchestrationPillBar`. The view is
+    /// always constructed; render-time guards control whether it draws anything.
+    orchestration_pill_bar: ViewHandle<OrchestrationPillBar>,
     is_using_conversation_for_pane_header_title: bool,
 
     ambient_agent_view_model: Option<ModelHandle<ambient_agent::AmbientAgentViewModel>>,
@@ -3981,6 +3985,10 @@ impl TerminalView {
                 ctx,
             )
         });
+        let orchestration_pill_bar =
+            ctx.add_view(|ctx| OrchestrationPillBar::new(agent_view_controller.clone(), ctx));
+        ctx.subscribe_to_view(&orchestration_pill_bar, |_, _, _, ctx| ctx.notify());
+
         let agent_view_back_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new(
                 crate::t!("terminal-agent-header-for-terminal"),
@@ -4157,6 +4165,7 @@ impl TerminalView {
             use_agent_footer: use_agent_button_bar,
             agent_view_controller,
             agent_view_back_button,
+            orchestration_pill_bar,
             is_using_conversation_for_pane_header_title: false,
             ambient_agent_view_model,
             cloud_mode_details_panel,
@@ -24328,6 +24337,7 @@ impl TypedActionView for TerminalView {
             | ExecuteRewindFromInlineMenu { .. }
             | ToggleUsageFooter
             | RevealChildAgent { .. }
+            | SwitchAgentViewToConversation { .. }
             | OpenCLIAgentRichInput
             | ToggleSessionRecording => Empty,
         }
@@ -25347,6 +25357,14 @@ impl TypedActionView for TerminalView {
                 ctx.emit(Event::RevealChildAgent {
                     conversation_id: *conversation_id,
                 });
+            }
+            SwitchAgentViewToConversation { conversation_id } => {
+                self.enter_agent_view_for_conversation(
+                    None,
+                    AgentViewEntryOrigin::OrchestrationPillBar,
+                    *conversation_id,
+                    ctx,
+                );
             }
             ToggleSessionRecording => {
                 self.pty_recorder.update(ctx, |recorder, ctx| {
