@@ -1,13 +1,20 @@
 # Tech Spec: Custom Local LLM Provider
 
-**Issue:** none yet
-**Companion:** [product.md](./product.md)
+**Issue:** [warpdotdev/warp#9303](https://github.com/warpdotdev/warp/issues/9303)
+**Companion:** [product.md](./product.md), [implementation-plan.md](./implementation-plan.md), [test-plan.md](./test-plan.md)
 
 ## Problem
 
-Every Agent Mode turn is dispatched through `ServerApi::generate_multi_agent_output` (`app/src/server/server_api.rs:1091`), which always POSTs to `{ChannelState::server_root_url()}/ai/multi-agent` and decodes the response as a stream of `warp_multi_agent_api::ResponseEvent` protobuf messages over SSE. The model registry, request schema, and provider list are owned by Warp's closed-source backend and the closed-source proto crate `warp_multi_agent_api` (sourced from `github.com/warpdotdev/warp-proto-apis`).
+Every Agent Mode turn is dispatched through `ServerApi::generate_multi_agent_output` (`app/src/server/server_api.rs:1091`), which always POSTs to `{ChannelState::server_root_url()}/ai/multi-agent` and decodes the response as a stream of `warp_multi_agent_api::ResponseEvent` protobuf messages over SSE. The model registry, request schema, and provider list are owned by Warp's closed-source backend; the wire types are open-source in `github.com/warpdotdev/warp-proto-apis`.
 
-This spec adds a parallel client-side dispatch path that, when a "local" model is selected, talks directly to a user-configured OpenAI-compatible HTTP endpoint and synthesizes `ResponseEvent`s from OpenAI SSE chunks. No backend changes; no proto changes.
+This spec adds a parallel client-side dispatch path that, when a "local" model is selected, talks directly to a user-configured OpenAI-compatible HTTP endpoint and synthesizes `ResponseEvent`s from OpenAI SSE chunks. **No backend changes and no proto changes are required for v1.** The proto crate is built via `prost_reflect_build`, which generates all messages and oneof variants as `pub` Rust types — confirmed by reading `apis/multi_agent/v1/gen/rust/build.rs` and the `.proto` sources directly. The constructibility concern flagged in earlier drafts is therefore obsolete; we can build any `ResponseEvent`/`ClientAction`/`Message` variant from outside the crate.
+
+## Architectural choice
+
+This spec implements **Path 1 (client-owned orchestration)** as defined in product.md §"Architectural choice". The two implications that touch every section below:
+
+1. **We re-author the system prompt.** Warp's backend prepends a system prompt to every turn before sending to the LLM. That prompt is not in the OSS client. We ship a generic agent system prompt in `crates/ai/src/local_provider/prompt.rs`.
+2. **We re-author tool schemas.** Warp's backend translates `Settings.supported_tools: repeated ToolType` into model-specific tool definitions before calling the LLM. That translation isn't in the OSS client either. We ship a JSON-schema table for the curated initial tool set in `crates/ai/src/local_provider/tools.rs`, AND the inverse — translating an OpenAI `tool_call` back into the proto's strongly-typed `Message::ToolCall.tool` oneof variant.
 
 ## Relevant code
 
@@ -225,15 +232,79 @@ Steps:
 5. Wrap the resulting stream in `take_until(cancel_rx)` so cancellation matches the existing behavior.
 6. Map all transport/decode failures into the existing `AIApiError` variants (`Transport`, `Stream`, `ErrorStatus`, `Deserialization`).
 
-**`request.rs`** — request translation. Maps the in-memory `RequestParams` to OpenAI-format JSON.
+**`request.rs`** — request translation. Maps the in-memory `RequestParams` (plus any existing conversation history) to OpenAI-format JSON.
 
 Mapping rules:
 - `model` ← `cfg.model_id` (NOT the synthetic `LLMId`).
-- `messages` ← walk the existing conversation history and prior tool turns. System prompt synthesized from Warp's existing prompt builder (the same builder feeds `metadata.logging_dict` today; we extract it into a reusable `compose_system_prompt(params)`). Roles map: user → `user`, assistant text → `assistant`, tool result → `tool` with `tool_call_id`.
-- `tools` ← only if `cfg.supports_tools`. Translate Warp's `SupportedTools` enum into OpenAI tool definitions. The translation table lives in `request.rs::tool_definitions()` and is unit-tested. Definitions are static (no per-call schema rewrites needed).
+- `messages` ← `[ {role: "system", content: compose_system_prompt(...)} ]` followed by a walk of the existing conversation. Roles map: user query → `user`; `Message::AgentOutput` → `assistant`; `Message::ToolCall` → assistant message with `tool_calls` array; `Message::ToolCallResult` (incoming as `Input.UserInputs.tool_call_result` on continuation turns) → `{role:"tool", tool_call_id, content}`. `Message::AgentReasoning` is intentionally NOT replayed in history (matches OpenAI's `reasoning` behavior — only the final assistant text persists across turns).
+- `tools` ← only if `cfg.supports_tools`. Pulled from `tools::tool_definitions()` (see §6.5 below).
 - `tool_choice` ← `"auto"`.
 - `stream` ← `true`.
 - `temperature`, `max_tokens` ← omitted; let the server decide.
+
+### 6.4 System prompt — authored, not extracted
+
+**Critical:** the comment on issue #9303 from `Aeromix` and the corroborating Opus analysis confirm that Warp's system prompt is constructed server-side and **never reaches the OSS client**. There is no `compose_system_prompt` to extract.
+
+Therefore `crates/ai/src/local_provider/prompt.rs` ships a hand-authored, model-agnostic system prompt with the following constituents:
+
+1. **Role framing** — "You are a coding assistant operating inside the Warp terminal..."
+2. **Available tools** — short prose description of the tools the model can call (must match the schemas in `tools.rs`). Reads from the same registry so prompt and schemas can never drift.
+3. **Output format guidance** — "If the user asks you to take an action that requires a tool, emit a tool call. Otherwise, respond in plain Markdown."
+4. **Diff format** — when `apply_file_diffs` is in the tool set, the prompt includes the literal V4A-style diff format that the proto's `ApplyFileDiffsArgs` expects, so the model produces diffs we can deterministically translate into the typed proto variant.
+5. **Safety guardrails** — "Do not run destructive commands without confirmation"; "When uncertain, ask"; minimal versions of Warp's published guidance.
+6. **Context-window hint** — `"You have approximately N tokens of context"` if `cfg.context_window` is set; omitted otherwise.
+
+The prompt is a `const TEMPLATE: &str = "..."` with `{tools}` and `{context_window}` substitution slots, rendered at request build time. It's checked-in plain text, code-reviewed like any other source file. **It is the single largest reason the quality gap in product.md exists; iterating on it is expected post-launch.**
+
+### 6.5 Tool schemas and tool-call translation — bidirectional
+
+The proto's `Message::ToolCall.tool` oneof at `apis/multi_agent/v1/task.proto:357-880` has ~25 strongly-typed variants (`RunShellCommand`, `ReadFiles`, `Grep`, `ApplyFileDiffs`, `FileGlob`, MCP variants, `UseComputer`, etc.). Each variant has its own structured Rust type with named fields — there is no generic `(name, args_json)` pair anywhere in the wire protocol.
+
+Implication: the local-provider adapter must implement TWO mappings, not one:
+
+- **Outbound (request → OpenAI `tools` field):** Warp tool variant → OpenAI tool definition (`{type:"function", function:{name, description, parameters: <JSON schema>}}`).
+- **Inbound (OpenAI tool_call → proto):** OpenAI's `{name, arguments: <JSON string>}` → the matching `Message::ToolCall.tool::*` Rust enum variant with all its typed fields populated.
+
+Both live in `crates/ai/src/local_provider/tools.rs`:
+
+```rust
+pub struct ToolDef {
+    name: &'static str,
+    description: &'static str,
+    json_schema: &'static str,                                       // raw JSON
+    parse_args: fn(&str) -> Result<task_proto::message::tool_call::Tool, ToolParseError>,
+}
+
+pub fn tool_definitions(supported: &[ToolType]) -> Vec<OpenAiToolDefinition>;
+pub fn translate_openai_tool_call(call: &OpenAiToolCall) -> Result<task_proto::message::ToolCall, ToolParseError>;
+```
+
+**v1 ships exactly five `ToolDef`s** (the curated set from product.md): `read_files`, `apply_file_diffs`, `run_shell_command`, `grep`, `file_glob`. Each:
+
+1. Has a literal JSON-schema string ([draft-07](https://json-schema.org/draft-07/schema#) compatible — what every OpenAI-compatible server accepts).
+2. Has a `parse_args` function that takes the OpenAI-emitted `arguments` string (model-produced JSON) and produces the strongly-typed proto variant.
+3. Is fully unit-tested with both happy-path and malformed-input fixtures (see test-plan.md §1.5).
+
+**Schemas are not auto-generated from the proto** because the proto fields (`run_shell_command_id`, `wait_until_complete_value`, etc.) carry server-side semantics the model shouldn't see. The hand-curated schemas expose the minimal user-friendly surface (`command`, `cwd`, `purpose` for `run_shell_command`) and the `parse_args` step fills server-required defaults.
+
+Tools NOT shipped in v1 (MCP, computer-use, web-search, code-review, todos, etc.) are simply absent from `tool_definitions()`, so the local model never knows they exist. Existing UI code that handles them (which is server-action-driven) won't fire on local turns. No code path requires them to be present.
+
+### 6.6 Transactions
+
+The proto's `ClientAction` oneof includes `BeginTransaction` / `CommitTransaction` / `RollbackTransaction` (`response.proto:284-290`). Warp's existing controller logic uses these on the server path so failed mid-stream actions are atomically rolled back.
+
+The local-provider adapter wraps each turn:
+
+```
+emit Init
+emit ClientActions { BeginTransaction }
+... incremental AppendToMessageContent / AddMessagesToTask events ...
+on success → emit ClientActions { CommitTransaction } → Finished{Done}
+on stream error → emit ClientActions { RollbackTransaction } → Finished{Other}
+```
+
+This makes partial-failure cleanup automatic, matches server-path semantics, and gives users a clean retry experience without orphaned half-rendered turns.
 
 **`response.rs`** — SSE → `ResponseEvent` adapter. The hard part. Output contract: emit exactly `Init` first, then one or more `ClientActions`, then `Finished`. The state machine:
 
@@ -333,8 +404,14 @@ A small unit test in `crates/ai/src/local_provider/mod_tests.rs` constructs a `R
 
 ## Risks and mitigations
 
-**Risk:** `warp_multi_agent_api` proto types (`ResponseEvent`, `Action`, `Message::ToolCall`) might be `pub(crate)` or only constructible via builders that assume server-origin invariants.
-**Mitigation:** First task of phase 1 is to verify constructibility from outside the crate by writing a "build a fake `Init+Finished` stream" smoke test in `crates/ai/src/local_provider/mod_tests.rs`. If a needed type is sealed, file an upstream change in `warp-proto-apis` to expose a builder; until then, the dependent code can land behind `#[cfg(feature = "local_llm")]` rather than the runtime flag.
+**Risk (RESOLVED, kept for traceability):** `warp_multi_agent_api` proto types might be sealed.
+**Resolution:** Verified directly against the proto repo at `/Users/nmehta/Documents/code/github/warp-proto-apis` (HEAD `aa2f9cd`). The Rust crate is generated by `prost_reflect_build` (see `apis/multi_agent/v1/gen/rust/build.rs`); `prost-build` produces all messages, oneof variants, and enums as `pub` Rust types by convention. `ResponseEvent`, `ClientAction`, `Message`, `Message::ToolCall`, etc. are all constructible from outside the crate via direct struct literals and `Default::default()`. No upstream change required.
+
+**Risk (NEW, primary):** Quality of the hand-authored system prompt and tool schemas determines the local-provider experience. A bad prompt/schema combination produces models that emit unparseable tool calls, run away on autonomy, or refuse to call tools at all.
+**Mitigation:** §6.4 commits to checking in the prompt as plain text and code-reviewing iteratively. §6.5 commits to a tight initial tool set (5 tools) so each schema can be exhaustively round-trip-tested against real model output (test-plan.md §5.9). Phase 8 gates promotion on the manual smoke matrix passing for at least three different model families. Quality gap is documented in product.md so user expectations are calibrated.
+
+**Risk (NEW):** OpenAI tool-call argument JSON deserialization into the strongly-typed `Message::ToolCall.tool` oneof can fail in dozens of subtle ways: missing required fields, wrong types, hallucinated extra fields, malformed JSON, mixed-content arguments.
+**Mitigation:** Each `ToolDef::parse_args` returns `Result<_, ToolParseError>`. On parse failure the adapter emits a synthetic assistant text message ("I tried to call `<tool>` but the arguments were malformed: …") instead of dropping the turn, so the user sees the model's intent and the model gets a chance to retry on the next turn. Every `parse_args` has fuzz-style tests with gibberish inputs.
 
 **Risk:** OpenAI tool-call streaming format inconsistencies across servers (Ollama vs vLLM vs LM Studio sometimes emit `function.arguments` whole vs in fragments, or non-string `arguments`).
 **Mitigation:** The accumulator handles both whole-arg and fragment-streamed cases. Add server-specific fixtures in `response_tests.rs` covering Ollama 0.4, LM Studio 0.3, vLLM 0.6, llama.cpp `server`. Document the supported matrix in `product.md`.
@@ -382,5 +459,7 @@ Plus:
 - Anthropic-format wire support for direct Claude calls.
 - Auto-detect running local servers (Ollama/LM Studio default ports).
 - Surface `context_length_exceeded` errors as a "consider /clear" hint.
-- Re-export proto builders from the `warp-proto-apis` repo if the constructibility-risk path requires it.
 - Telemetry counter (`local_provider_turn`, `local_provider_test_connection_*`).
+- Expanded tool-schema set (MCP, computer-use, web-search, code-review, todos) — each new schema needs round-trip parse tests.
+- User-overridable system prompt (advanced setting).
+- **Upstream filing for Path 2 (Inference Delegation):** propose adding a `ClientAction::ExecuteLLMInference` variant to `warp-proto-apis/apis/multi_agent/v1/response.proto`. Server emits the fully-formulated OpenAI payload; client forwards to the user's endpoint and streams response back to the server which continues its existing agent loop. This preserves Warp's tuned prompt + tool schemas and is the only path to true parity. **This is a Warp-team decision** — the upstream issue should describe the proto extension and request green-light before any contributor work. It coexists cleanly with Path 1; both can be present (Path 1 for offline / no-warp.dev users; Path 2 for users who want Warp-quality prompts + local inference).

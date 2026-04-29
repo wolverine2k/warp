@@ -1,11 +1,24 @@
 # Product Spec: Custom Local LLM Provider
 
-**Issue:** none yet (this spec is being authored speculatively; will be linked once an issue exists)
+**Issue:** [warpdotdev/warp#9303](https://github.com/warpdotdev/warp/issues/9303) — *"Custom OpenAI-Compatible Provider Endpoints (BYO Endpoint for Local & Remote LLMs)"* (consolidates #6026, #8708, #4339, #5735, #4687, #3779, #9368)
+**Issue status:** `triaged`, `enhancement`, `duplicate` — **not yet `ready-to-spec`** at time of writing. This spec is staged ahead of the label so it's ready to convert into `specs/GH9303/` immediately on labeling.
 **Figma:** none provided
 
 ## Summary
 
-Let a user point Warp's Agent Mode at their own OpenAI-compatible HTTP endpoint — for example a local Ollama, LM Studio, vLLM, llama.cpp server, NVIDIA NIM deployment, or a third-party gateway like OpenRouter / Together / Groq used directly. The configured endpoint receives the chat request directly from the Warp client; no traffic is sent to `warp.dev` for that turn. Existing Agent Mode features (conversation history, tool calls, reasoning content) work to the extent the user's model supports them.
+Let a user point Warp's Agent Mode at their own OpenAI-compatible HTTP endpoint — Ollama, LM Studio, vLLM, llama.cpp server, NVIDIA NIM, or a third-party gateway like OpenRouter / Together / Groq used directly. The configured endpoint receives the chat request directly from the Warp client; no traffic is sent to `warp.dev` for that turn.
+
+The hard truth, surfaced clearly because the issue thread already proves users will discover it the hard way (see comments from `Aeromix` and the architectural breakdown in `tbitcs`'s reply): **Warp's system prompt and tool JSON schemas live on Warp's backend and are not in the OSS client.** A purely client-side BYO-endpoint integration must therefore re-author both. Visible chat works easily; full agent autonomy (file edits, shell commands, etc.) requires the user's model to be capable of tool calling AND requires us to ship reasonable schemas for every Warp tool we want exposed. This spec commits to delivering both — a reusable generic system prompt and a JSON-schema translation table for the core tool set — and is honest about the quality gap vs. Warp's tuned models.
+
+## Architectural choice (Path 1 of 3 raised in the issue)
+
+The issue thread surfaced three feasible architectures. This spec picks **Path 1**:
+
+- **Path 1 — Client-owned orchestration (this spec).** The OSS client builds the prompt, ships JSON schemas for tools, talks directly to the user's endpoint, parses tool calls, and feeds tool results back on the next turn. Pros: fully contributor-buildable, no backend dependency, works offline. Cons: we re-author Warp's system prompt and tool schemas — quality won't match Warp's tuned models out of the box; agent autonomy depends on the user's model.
+- **Path 2 — Inference Delegation (`tbitcs`'s proposal).** Warp's backend builds the prompt + tool schemas as it does today, but emits a new `ClientAction::ExecuteLLMInference` carrying the fully-formulated OpenAI payload; the client forwards to the user's endpoint and streams the result back to Warp's server, which continues the agent loop. Pros: 100% reuse of Warp's "secret sauce"; the local model only sees inference-time content, not Warp's prompt engineering. Cons: requires Warp backend cooperation (a new `ClientAction` variant in `warp-proto-apis` AND a Warp server implementation); doesn't work offline; metadata still flows to Warp.
+- **Path 3 — Hybrid provider adapters.** Variants of Path 1 with backend assistance for some tools.
+
+Path 1 is in scope here because it's the only path a community contributor can land end-to-end without backend buy-in. Path 2 is the right long-term answer for parity and is enumerated in **Follow-ups** below as a recommended upstream filing for the Warp team. The two paths can coexist; Path 1 doesn't preclude Path 2.
 
 ## Problem
 
@@ -23,9 +36,19 @@ have no path to do so without forking the closed-source backend.
 - A user can configure one custom provider (base URL + model id + optional API key) in settings and select that provider's model from the Agent Mode model picker.
 - When that model is selected, the chat turn is sent **directly** from the client to the user's endpoint over HTTPS/HTTP, bypassing `warp.dev` entirely for the LLM call.
 - Streaming responses (text deltas) render incrementally in the UI, identical to the existing experience.
-- Tool calling works when the user's model supports the OpenAI `tools` field (so file edits, shell commands, etc. continue to function).
+- Tool calling works when the user's model supports the OpenAI `tools` field. The client ships a curated subset of Warp's tool catalog as JSON schemas (initial set: `read_files`, `apply_file_diffs`, `run_shell_command`, `grep`, `file_glob`; expandable later) so file edits, shell commands, and search continue to function.
 - Reasoning/thinking content (when emitted by the model) renders in the existing "thinking" UI region.
+- A reusable, model-agnostic Warp system prompt template ships with the client; users see (and can later override) the prompt that gets prepended to their conversation.
 - The feature is hidden behind a feature flag while it stabilizes; off by default.
+
+## Known limitations users will see (called out up-front)
+
+These are not bugs — they're design consequences of being a client-only contribution.
+
+- **Quality gap vs. Warp's tuned models.** Warp's backend tunes its system prompt and tool schemas continuously against its model lineup. Our re-authored generic prompt won't match that. Smaller / weaker local models will visibly struggle with tool-call formatting, multi-step planning, and diff generation. Settings page documents this; first-run dialog warns users.
+- **Reduced tool coverage in v1.** Out of ~25+ tool variants in `Message.ToolCall.tool`, v1 ships JSON schemas for the 5 listed under Goals. Other tools (MCP, computer-use, file-glob-v2, web-search, code-review, etc.) are not exposed to the local model in v1. The agent gracefully degrades — those features just don't appear as available actions on a local-model turn.
+- **No Warp-side rate limiting / safety filters.** The user's prompt + Warp's tool descriptions go to the user's endpoint as-is. Endpoint trust is the user's responsibility.
+- **Streaming behavior depends on the local server.** Local servers vary in tool-call streaming maturity; we test against the common ones (Ollama, LM Studio, vLLM, llama.cpp, NIM) and document quirks.
 
 ## Non-goals
 
@@ -112,3 +135,6 @@ have no path to do so without forking the closed-source backend.
 5. **Should the "thinking" toggle (if Warp later exposes one) be per-provider or global?** Out of scope for v1 but worth noting.
 6. **Quota / "credits" display.** Warp's UI shows credit cost on each model. For local models this should render blank (not "0 credits", which implies free Warp credits). Confirm copy.
 7. **Telemetry.** Should we log a coarse-grained counter (`local_provider_turn`) so we can see adoption, even though we don't log content? Default proposal: yes, opt-out via existing telemetry settings.
+8. **System prompt visibility & override.** Should users see the full Warp-style system prompt we ship? Should they be allowed to override it for advanced use? Default proposal: show it read-only in the settings page; do not allow override in v1 (avoids debugging "I broke my own prompt" support load); add a follow-up for an opt-in advanced-prompt-override toggle.
+9. **Tool-set coverage.** v1 ships 5 tool schemas. Should we ship more out of the gate (e.g., MCP, web-search) or keep tight and expand iteratively after dogfood? Default proposal: keep tight; each schema needs round-trip tests against the proto's `Message::ToolCall.tool` oneof.
+10. **Should we file `ExecuteLLMInference` (Path 2) as a separate upstream issue against `warp-proto-apis` after Path 1 lands?** Default proposal: yes — Path 2 is the right long-term parity story; getting the proto extension on the Warp team's radar is a community-friendly follow-up.

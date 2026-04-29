@@ -1,5 +1,6 @@
 # Test Plan: Custom Local LLM Provider
 
+**Issue:** [warpdotdev/warp#9303](https://github.com/warpdotdev/warp/issues/9303)
 **Companion:** [product.md](./product.md), [tech.md](./tech.md), [implementation-plan.md](./implementation-plan.md)
 
 ## Pyramid
@@ -92,6 +93,57 @@ Each test is a fixture in (`input_sse_chunks`, `expected_response_events`) form,
 | 3.10 | `synthetic_llm_id_format` | `synthetic_llm_id` is exactly `"local:<model_id>"` for given model id |
 | 3.11 | `synthetic_llm_info_minimal` | produced `LLMInfo` has `provider=Unknown`, `host_configs[Local].enabled=true`, `request_multiplier=0` |
 
+## 3.5. Unit tests — system prompt
+
+**File:** `crates/ai/src/local_provider/prompt_tests.rs`
+
+| # | Test | Asserts |
+|---|---|---|
+| 3.5.1 | `prompt_includes_role_framing` | rendered prompt mentions "Warp", "terminal", "coding" or equivalent role-framing keywords |
+| 3.5.2 | `prompt_lists_only_supported_tools` | given `supported=[ReadFiles, Grep]`, the rendered prompt mentions those two tools and does NOT mention `apply_file_diffs` etc. |
+| 3.5.3 | `prompt_includes_v4a_diff_instructions_iff_apply_diffs` | diff format guidance present iff `ApplyFileDiffs` is in supported set |
+| 3.5.4 | `prompt_includes_context_window_when_set` | `context_window=Some(8192)` ⇒ "approximately 8192 tokens" appears |
+| 3.5.5 | `prompt_omits_context_window_when_none` | `context_window=None` ⇒ no "approximately N tokens" line |
+| 3.5.6 | `prompt_is_stable_across_runs` | same inputs ⇒ identical output (deterministic; no `format!()` of timestamps etc.) |
+| 3.5.7 | `prompt_passes_through_jinja_substitution_safely` | tool names containing `{` and `}` (defensive) don't corrupt the template |
+
+## 3.6. Unit tests — tool definitions & translation
+
+**File:** `crates/ai/src/local_provider/tools_tests.rs`
+
+The hardest-to-get-right area; deserves heavy coverage. Each of the 5 v1 tools (`read_files`, `apply_file_diffs`, `run_shell_command`, `grep`, `file_glob`) gets the same 5-test pattern:
+
+| Pattern test | Asserts |
+|---|---|
+| `<tool>_schema_is_valid_json_schema` | `serde_json::from_str::<Value>(json_schema)` succeeds and root has `type:"object"` and `properties` |
+| `<tool>_schema_describes_required_fields` | each required field listed in `required` array appears in `properties` |
+| `<tool>_parse_args_minimal_valid` | minimum-required JSON parses to the right `Message::ToolCall.tool::*` variant |
+| `<tool>_parse_args_full_valid` | all-fields JSON populates every typed field on the proto variant |
+| `<tool>_parse_args_missing_required` | required field absent ⇒ `ToolParseError::MissingField(<name>)` |
+| `<tool>_parse_args_wrong_type` | string where number expected ⇒ `ToolParseError::TypeMismatch` |
+| `<tool>_parse_args_extra_fields_ignored` | hallucinated extra field ⇒ accepted, ignored, no error (LLMs hallucinate, we tolerate) |
+| `<tool>_parse_args_gibberish_json` | non-JSON string ⇒ `ToolParseError::InvalidJson` |
+
+5 tools × 8 patterns = **40 tests minimum** in this file. Each individual test is small (5–15 lines) so the volume is manageable.
+
+Plus per-tool semantic tests:
+
+| # | Test | Asserts |
+|---|---|---|
+| 3.6.A | `apply_file_diffs_v4a_diff_parses` | a real V4A-format diff string from the prompt gets translated into the typed `ApplyFileDiffsArgs` with each hunk's `search`/`replace` populated |
+| 3.6.B | `run_shell_command_purpose_required` | the user-friendly `purpose` field maps to whichever proto field carries the model's rationale; missing ⇒ defaults to empty string, not error |
+| 3.6.C | `read_files_paths_array` | `paths` JSON array maps to the proto's `repeated string paths` |
+| 3.6.D | `grep_pattern_passes_through_unchanged` | regex-special characters in `pattern` are not escaped/altered |
+| 3.6.E | `file_glob_pattern_relative_path_ok` | both relative (`*.rs`) and absolute (`/abs/**`) globs accepted |
+
+And the round-trip / outbound:
+
+| # | Test | Asserts |
+|---|---|---|
+| 3.6.F | `tool_definitions_filters_by_supported_tools` | `tool_definitions(&[ReadFiles])` returns exactly 1 OpenAI tool def, with `function.name=="read_files"` |
+| 3.6.G | `tool_definitions_empty_when_no_supported` | `tool_definitions(&[])` returns empty Vec |
+| 3.6.H | `tool_definitions_unknown_tool_skipped` | unsupported `ToolType::ComputerUse` is silently omitted (not error) |
+
 ## 4. Unit tests — picker injection
 
 **File:** `app/src/ai/llms_local_injection_tests.rs`
@@ -167,6 +219,21 @@ Configure a local provider, select its model, then disable `local_provider_enabl
 - the local mock receives nothing
 - the next turn is sent to the Warp default model
 - a one-time toast appears saying "Local provider is no longer configured; falling back to <default>"
+
+### 5.9 `local_provider_transaction_lifecycle.rs`
+
+Mock server emits a normal text-only response. Assert the synthesized event stream contains, in order: `Init`, `BeginTransaction`, ≥1 `AppendToMessageContent`, `CommitTransaction`, `Finished{Done}`. Then run a second test where the mock simulates a mid-stream HTTP failure; assert the stream contains `Init`, `BeginTransaction`, ≥0 `AppendToMessageContent`, `RollbackTransaction`, `Finished{Other}`. Both cases assert the conversation state on the controller side after the stream completes — clean turn for commit, no orphaned half-message for rollback.
+
+### 5.10 `local_provider_tool_arg_round_trip.rs`
+
+For each of the 5 v1 tools, drive a full integration scenario: mock server emits a tool call with realistic arguments → tools.rs parses → controller invokes the existing tool runner → tool result feeds back into the next turn → assert the next turn's request body contains a `{role:"tool", tool_call_id, content}` entry with the expected payload. This is the end-to-end proof that the strongly-typed proto translation closes the loop.
+
+### 5.11 `local_provider_malformed_tool_args.rs`
+
+Mock server emits a tool call with malformed JSON arguments (e.g. `{"paths": [`). Assert:
+- the adapter does NOT crash or drop the turn
+- the conversation contains a synthetic assistant text message describing the parse failure (per tech.md §Risks "ToolParseError" mitigation)
+- the user can ask the model to retry without a state reset
 
 ## 6. Network audit (manual but reproducible)
 

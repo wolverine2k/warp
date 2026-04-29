@@ -1,7 +1,17 @@
 # Implementation Plan: Custom Local LLM Provider
 
-**Companion:** [product.md](./product.md), [tech.md](./tech.md)
+**Issue:** [warpdotdev/warp#9303](https://github.com/warpdotdev/warp/issues/9303)
+**Companion:** [product.md](./product.md), [tech.md](./tech.md), [test-plan.md](./test-plan.md)
 **Branch:** `nmehta/local-llm-provider`
+
+## Reality check from issue #9303
+
+Before sequencing work: the comment thread on issue #9303 (16 comments) confirms two things that materially shape this plan:
+
+1. **The system prompt and tool JSON schemas are server-only** in Warp's stack and must be authored fresh in the OSS client. There is no `compose_system_prompt` to extract — `Aeromix`'s LM-Studio attempt and the Opus analysis both confirm this. Adjustments below absorb that reality (new Phase 2.5).
+2. **`prost_reflect_build` produces fully-public Rust types**, verified directly against `apis/multi_agent/v1/gen/rust/build.rs` in the proto repo. The "constructibility probe" called out as the risk gate in earlier drafts is no longer needed; it is replaced by a much smaller "verify Rust struct shapes match proto" check inside Phase 1.
+
+The issue is `triaged` / `enhancement` / `duplicate` but **not yet `ready-to-spec`**. Phase 0 below covers getting the readiness label before any code lands.
 
 ## Sequencing principle
 
@@ -11,11 +21,12 @@ Phases 1–3 are **library-only**; they don't touch any UI or dispatch path. If 
 
 ## Phase 0 — Prep (no code)
 
-- [ ] Confirm with @oss-maintainers that this feature direction is acceptable as a community contribution. The product spec is speculative; landing it without a `ready-to-spec` issue would burn time.
-- [ ] If accepted, file the GitHub issue, get the `ready-to-spec` label, and rename `specs/local-llm-provider/` to `specs/GH<issue-number>/` to match repo convention.
+- [ ] Comment on issue [#9303](https://github.com/warpdotdev/warp/issues/9303) summarizing the Path 1 spec at this branch, requesting the `ready-to-spec` label, and explicitly acknowledging that this is one of the three paths the thread already discussed (so reviewers see we engaged with the architecture conversation).
+- [ ] Wait for `@oss-maintainers` to apply `ready-to-spec`. **Do not start phases 1+ before the label.** Per CONTRIBUTING.md, feature work requires the label.
+- [ ] On labeling: rename `specs/local-llm-provider/` to `specs/GH9303/` to match repo convention; open the spec PR per CONTRIBUTING.md §"Opening a Spec PR".
 - [ ] Add the feature flag entry stub: `FeatureFlag::LocalLlmProvider` in `crates/warp_features/src/lib.rs`. Land this on its own as a **typo-trivial PR** so subsequent phases compile against a real flag.
 
-**Exit criteria:** issue exists, flag exists, branch tracks `master` cleanly.
+**Exit criteria:** issue is `ready-to-spec`, spec PR open, flag exists, branch tracks `master` cleanly.
 
 ## Phase 1 — SSE → ResponseEvent adapter (pure library)
 
@@ -25,9 +36,9 @@ Phases 1–3 are **library-only**; they don't touch any UI or dispatch path. If 
 - New crate module `crates/ai/src/local_provider/` with:
   - `mod.rs` — re-exports.
   - `wire.rs` — `serde` types for the OpenAI Chat Completion streaming envelope (`ChatCompletionChunk`, `ChoiceDelta`, `ToolCallDelta`, `ToolCallFragment`).
-  - `response.rs` — the adapter state machine (`OpenAiSseAdapter`) and `ToolCallBuffer` for fragment accumulation.
+  - `response.rs` — the adapter state machine (`OpenAiSseAdapter`), `ToolCallBuffer` for fragment accumulation, and `BeginTransaction`/`CommitTransaction`/`RollbackTransaction` framing per tech.md §6.6.
   - `response_tests.rs` — fixture-driven tests (see test-plan.md §1).
-- Probe test: construct `Init` and `Finished` events and round-trip them through `bincode`/serde to validate proto types are constructible from outside `warp_multi_agent_api`. **If this probe fails, stop and address the upstream proto exposure issue before continuing.**
+- Shape check (replaces the obsolete constructibility probe): a 20-line smoke test that constructs `ResponseEvent::Type::Init(StreamInit{...})`, `ClientAction::Action::AppendToMessageContent(...)`, and `ResponseEvent::Type::Finished(StreamFinished{...})` from the local crate and asserts they encode/decode via `prost::Message::encode` round-trip. Cheap; protects against future proto field renames.
 
 **Files touched:**
 - `crates/ai/src/local_provider/mod.rs` (new)
@@ -61,9 +72,35 @@ Phases 1–3 are **library-only**; they don't touch any UI or dispatch path. If 
 
 **Tests:** request-translator unit tests (assert system prompt, message order, tools omitted/included, model id is the user's not the synthetic one, Authorization header presence). One integration smoke for the runner.
 
-**Critical caveat:** `compose_system_prompt(params)` needs to be extracted from wherever Warp's server-bound code currently builds it (likely `app/src/ai/agent/api/impl.rs` or one of `convert_conversation.rs:133-211`'s siblings). That extraction is the riskiest sub-task of this phase — if the existing prompt-builder is tightly coupled to the proto request, we may need to refactor it into a free function before reuse. Budget half a day for this alone.
+**Critical correction from earlier draft:** the assumption that `compose_system_prompt` could be extracted from existing code is **wrong** — issue #9303 comments and inspection of the OSS source confirm Warp's system prompt is server-only and never reaches the OSS client. Accordingly, request translation in Phase 2 imports `compose_system_prompt` from the new module produced in Phase 2.5 below. Phase 2 stubs it as `compose_system_prompt(_params) -> String { "TODO: filled in Phase 2.5".to_string() }` so request-shape tests can land independently of prompt content.
 
-**Out of scope this phase:** dispatch routing, picker injection, settings UI, secure storage.
+**Out of scope this phase:** system-prompt content (Phase 2.5), tool schemas (Phase 2.5), dispatch routing (Phase 5), picker injection (Phase 4), settings UI (Phase 6), secure storage (Phase 3).
+
+## Phase 2.5 — System prompt + tool schemas (content authoring)
+
+**Goal:** ship the hand-authored content described in tech.md §6.4 and §6.5. This is the single biggest determinant of user-perceived quality and dwarfs the SSE adapter in calendar-time, even if it's smaller in line count.
+
+**Deliverables:**
+- `crates/ai/src/local_provider/prompt.rs`:
+  - `const TEMPLATE: &str = include_str!("system_prompt.md");` (checked-in plain text, code-reviewed like any source file).
+  - `pub fn compose_system_prompt(supported: &[ToolType], context_window: Option<u32>) -> String` with `{tools}` and `{context_window}` substitution.
+- `crates/ai/src/local_provider/system_prompt.md` — the actual prompt body, sectioned per tech.md §6.4 (role framing, tools, output format, diff format, safety guardrails, context-window hint).
+- `crates/ai/src/local_provider/tools.rs`:
+  - `ToolDef` struct + a static registry of the 5 v1 tools (`read_files`, `apply_file_diffs`, `run_shell_command`, `grep`, `file_glob`).
+  - For each tool: literal JSON-schema string + `parse_args` returning the typed `Message::ToolCall.tool::*` variant.
+  - `pub fn tool_definitions(supported: &[ToolType]) -> Vec<OpenAiToolDefinition>`.
+  - `pub fn translate_openai_tool_call(call: &OpenAiToolCall) -> Result<Message::ToolCall, ToolParseError>`.
+- 5 sets of `parse_args` tests per tool: minimal-valid, all-fields, missing-required, wrong-type, gibberish. ~25 unit tests minimum.
+- Integration test in `crates/integration/tests/local_provider_tools.rs`: feed a fixture of model-emitted JSON for each of the 5 tools and assert the resulting proto variant has the expected fields.
+
+**Files touched:**
+- 4 new files under `crates/ai/src/local_provider/`
+- 1 new integration test file
+- No production wiring yet — Phase 2's `run_chat_turn` upgrades to call into this module
+
+**This phase has the highest content-iteration risk.** Budget time for at least one round of "model emits weird JSON; refine schema and prompt; re-test" per tool. The 5-tool scope is intentionally tight to make this tractable. Add follow-up tools in post-launch PRs.
+
+**Out of scope:** any tool not in the v1 list. Adding MCP, computer-use, web-search, etc. each become separate post-launch PRs once the framework is shaken out.
 
 ## Phase 3 — Settings model (storage only, no UI)
 
@@ -191,13 +228,16 @@ Phases 1–3 are **library-only**; they don't touch any UI or dispatch path. If 
 
 | Phase | Engineer-days (point estimate) | Risk |
 |---|---|---|
-| 0 — Prep | 0.25 | low |
-| 1 — Adapter | 2 | medium (proto constructibility) |
-| 2 — Request + HTTP | 2 | medium (system-prompt extraction) |
+| 0 — Prep | 0.25 | low (calendar-bound on label) |
+| 1 — Adapter | 2 | low (proto constructibility resolved) |
+| 2 — Request + HTTP (with stub prompt) | 1.5 | low |
+| 2.5 — System prompt + tool schemas | 4 | **high** (content iteration; biggest quality lever) |
 | 3 — Settings storage | 1 | low |
 | 4 — Picker injection | 1 | low |
-| 5 — Dispatch fork | 1.5 | high (cross-cutting + reviewer load) |
+| 5 — Dispatch fork | 1.5 | medium (cross-cutting + reviewer load) |
 | 6 — Settings UI | 2 | medium (UX iteration) |
-| 7 — Tool-call cycle | 2 | high (depends on proto + controller assumptions) |
-| 8 — Stabilization | 2+ | low (calendar-bound, not work-bound) |
-| **Total** | **~14 days** plus dogfood window | |
+| 7 — Tool-call cycle | 2 | medium (now that tools.rs ships parsers, this is mostly wiring) |
+| 8 — Stabilization | 2+ | low (calendar-bound) |
+| **Total** | **~17 days** of focused work plus a multi-week dogfood window | |
+
+The `~17 days` is a 95th-percentile estimate for a single engineer working with reviewer round-trips. Realistic calendar time, accounting for label-wait, Oz/SME review cycles, and dogfood feedback loops, is closer to 6–10 weeks end-to-end.
