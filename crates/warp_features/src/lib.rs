@@ -802,6 +802,12 @@ pub enum FeatureFlag {
     /// When enabled, solo users (not on a team) can use BYO API keys.
     SoloUserByok,
 
+    /// Enables the "Custom Local LLM Provider" feature: a user can configure an OpenAI-compatible
+    /// HTTP endpoint (Ollama, LM Studio, vLLM, llama.cpp, NIM, etc.) and chat with their own
+    /// model directly from the client, bypassing warp.dev for the LLM call.
+    /// See specs/GH9303/ for the spec.
+    LocalLlmProvider,
+
     /// Replaces the in-block warpification banner with a warpify footer.
     WarpifyFooter,
 
