@@ -363,6 +363,17 @@ pub static FORK_FROM: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     argument: None,
 });
 
+pub static CONTINUE_LOCALLY: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
+    name: "/continue-locally",
+    description: t_static!("slash-cmd-continue-locally-desc"),
+    icon_path: "bundled/svg/arrow-split.svg",
+    availability: Availability::AGENT_VIEW
+        | Availability::ACTIVE_CONVERSATION
+        | Availability::AI_ENABLED,
+    auto_enter_ai_mode: true,
+    argument: Some(Argument::optional().with_hint_text(t_static!("slash-cmd-fork-hint"))),
+});
+
 pub static REMOTE_CONTROL: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/remote-control",
     description: t_static!("slash-cmd-remote-control-desc"),
@@ -544,7 +555,11 @@ fn all_commands() -> Vec<StaticCommand> {
     }
 
     if !cfg!(target_family = "wasm") {
-        commands.extend([FORK.clone(), FORK_AND_COMPACT.clone()]);
+        commands.extend([
+            FORK.clone(),
+            FORK_AND_COMPACT.clone(),
+            CONTINUE_LOCALLY.clone(),
+        ]);
 
         if FeatureFlag::ForkFromCommand.is_enabled() {
             commands.push(FORK_FROM.clone());
@@ -620,6 +635,34 @@ mod tests {
         assert!(!argument.is_optional);
         assert!(!argument.should_execute_on_selection);
         assert_eq!(argument.hint_text, Some("<tab name>"));
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn continue_locally_command_is_registered() {
+        crate::i18n::init(Some("en"));
+        let command = COMMAND_REGISTRY
+            .get_command_with_name(CONTINUE_LOCALLY.name)
+            .expect("expected /continue-locally to be registered");
+
+        assert_eq!(command.name, "/continue-locally");
+        assert_eq!(command.icon_path, "bundled/svg/arrow-split.svg");
+        assert!(command.auto_enter_ai_mode);
+        assert_eq!(
+            command.availability,
+            Availability::AGENT_VIEW | Availability::ACTIVE_CONVERSATION | Availability::AI_ENABLED
+        );
+
+        let argument = command
+            .argument
+            .as_ref()
+            .expect("expected /continue-locally to declare an argument");
+        assert!(argument.is_optional);
+        assert!(!argument.should_execute_on_selection);
+        assert_eq!(
+            argument.hint_text,
+            Some("<optional prompt to send in forked conversation>")
+        );
     }
 
     #[test]

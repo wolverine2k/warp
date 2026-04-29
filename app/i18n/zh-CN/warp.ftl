@@ -2386,6 +2386,7 @@ slash-cmd-queue-hint = <智能体完成后要发送的提示词>
 slash-cmd-fork-and-compact-desc = 分叉当前对话并在分叉副本中压缩
 slash-cmd-fork-and-compact-hint = <可选:压缩后要发送的提示词>
 slash-cmd-fork-from-desc = 从特定查询处分叉对话
+slash-cmd-continue-locally-desc = 将此云端对话继续到本地
 slash-cmd-remote-control-desc = 为此会话启动远程控制
 slash-cmd-conversations-desc = 打开对话历史
 slash-cmd-prompts-desc = 搜索已保存的提示词

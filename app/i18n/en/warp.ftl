@@ -2463,6 +2463,7 @@ slash-cmd-queue-hint = <prompt to send when agent is done>
 slash-cmd-fork-and-compact-desc = Fork current conversation and compact it in the forked copy
 slash-cmd-fork-and-compact-hint = <optional prompt to send after compaction>
 slash-cmd-fork-from-desc = Fork conversation from a specific query
+slash-cmd-continue-locally-desc = Continue this cloud conversation locally
 slash-cmd-remote-control-desc = Start remote control for this session
 slash-cmd-conversations-desc = Open conversation history
 slash-cmd-prompts-desc = Search saved prompts
