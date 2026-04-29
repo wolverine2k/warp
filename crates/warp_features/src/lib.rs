@@ -918,6 +918,8 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CloudModeSetupV2,
     FeatureFlag::ConfigurableContextWindow,
     FeatureFlag::DragTabsToWindows,
+    #[cfg(not(windows))]
+    FeatureFlag::SshRemoteServer,
 ];
 
 /// Features enabled for feature preview build users (e.g.: Friends of Warp).
@@ -927,9 +929,6 @@ pub const PREVIEW_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::BlocklistMarkdownTableRendering,
     FeatureFlag::MarkdownTables,
     FeatureFlag::OzIdentityFederation,
-    // Remote server binary is not yet supported on Windows.
-    #[cfg(not(windows))]
-    FeatureFlag::SshRemoteServer,
     FeatureFlag::GitOperationsInCodeReview,
 ];
 
@@ -943,6 +942,9 @@ pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     // Marked text is currently only supported on MacOS.
     #[cfg(target_os = "macos")]
     FeatureFlag::ImeMarkedText,
+    // Remote server binary is not yet supported on Windows.
+    #[cfg(not(windows))]
+    FeatureFlag::SshRemoteServer,
 ];
 
 /// Flags that we want to allow to switch at runtime (assuming RuntimeFeatureFlags is set)
