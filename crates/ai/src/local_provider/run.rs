@@ -71,9 +71,16 @@ pub async fn run_chat_turn(
     // The only error eventsource() can return is CannotCloneRequestError, and
     // it can't actually fire on a one-shot builder we just constructed. We
     // surface it as a panic with a clear message so future regressions stand out.
-    let event_source = request_builder
+    let mut event_source = request_builder
         .eventsource()
         .expect("eventsource() on a fresh, single-use RequestBuilder cannot fail");
+    // Disable reqwest_eventsource's built-in exponential-backoff retries.
+    // We surface transient failures as Finished{InternalError} immediately
+    // so the user can act; the controller's higher-level retry policy
+    // decides whether to re-issue the whole turn. Without this, an unreachable
+    // local endpoint would block for ~31s of retries before our adapter
+    // observes the EOF.
+    event_source.set_retry_policy(Box::new(reqwest_eventsource::retry::Never));
 
     let synthesized = synthesize_stream(event_source, cancel_rx).boxed();
     Ok(synthesized)
@@ -82,6 +89,14 @@ pub async fn run_chat_turn(
 /// Drive the SSE event source through `OpenAiSseAdapter` and emit
 /// `ResponseEvent`s. Cancellation is observed via `cancel_rx`; on cancel we
 /// emit a Rollback + Finished{Other} sequence.
+///
+/// The polling loop is an internal `loop` inside `poll_fn` — each invocation
+/// drains as many event_source poll cycles as it can until either it produces
+/// a downstream event, hits Pending on the inner stream (and properly registers
+/// the waker via the standard `cx` propagation), or terminates. Don't try to
+/// trampoline through `wake_by_ref()` — `reqwest_eventsource::EventSource`
+/// handles its own wake-ups when network data arrives, and self-waking only
+/// causes tight-spin behavior that masks legitimate Pending states.
 fn synthesize_stream(
     mut event_source: reqwest_eventsource::EventSource,
     mut cancel_rx: oneshot::Receiver<()>,
@@ -89,60 +104,76 @@ fn synthesize_stream(
     let mut adapter = OpenAiSseAdapter::new();
     let mut pending: std::collections::VecDeque<api::ResponseEvent> = Default::default();
     let mut closed = false;
+    let mut errored: Option<String> = None;
     stream::poll_fn(move |cx| {
         use std::task::Poll;
-        // Drain any pending events first.
-        if let Some(ev) = pending.pop_front() {
-            return Poll::Ready(Some(ev));
-        }
-        if closed {
-            return Poll::Ready(None);
-        }
-
-        // Cancellation check.
-        if let Poll::Ready(Ok(())) = Pin::new(&mut cancel_rx).poll(cx) {
-            for ev in adapter.finish() {
-                pending.push_back(ev);
+        loop {
+            // Drain any pending events first.
+            if let Some(ev) = pending.pop_front() {
+                return Poll::Ready(Some(ev));
             }
-            closed = true;
-            return Poll::Ready(pending.pop_front());
-        }
+            if closed {
+                return Poll::Ready(None);
+            }
 
-        // Drive the SSE source.
-        match Pin::new(&mut event_source).poll_next(cx) {
-            Poll::Pending => Poll::Pending,
-            Poll::Ready(None) => {
-                // Stream end; flush adapter.
+            // Cancellation check. Treat both an explicit `send(())` and a
+            // dropped sender (`Err(Canceled)`) as a cancel — callers that
+            // never plan to cancel still drop the tx side, and we shouldn't
+            // hang on event_source if the upstream cancel channel is gone.
+            if Pin::new(&mut cancel_rx).poll(cx).is_ready() {
                 for ev in adapter.finish() {
                     pending.push_back(ev);
                 }
                 closed = true;
-                Poll::Ready(pending.pop_front())
+                continue;
             }
-            Poll::Ready(Some(Ok(Event::Open))) => {
-                // No-op; keep polling.
-                cx.waker().wake_by_ref();
-                Poll::Pending
-            }
-            Poll::Ready(Some(Ok(Event::Message(msg)))) => {
-                for ev in adapter.feed(&msg.data) {
-                    pending.push_back(ev);
+
+            // Drive the SSE source.
+            match Pin::new(&mut event_source).poll_next(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => {
+                    if let Some(msg) = errored.take() {
+                        log::warn!("local provider stream errored before EOF: {msg}");
+                    }
+                    for ev in adapter.finish() {
+                        pending.push_back(ev);
+                    }
+                    closed = true;
+                    continue;
                 }
-                if let Some(ev) = pending.pop_front() {
-                    Poll::Ready(Some(ev))
-                } else {
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
+                Poll::Ready(Some(Ok(Event::Open))) => {
+                    // SSE handshake complete — connection established. No
+                    // downstream event to emit; loop and try to read messages.
+                    continue;
                 }
-            }
-            Poll::Ready(Some(Err(_e))) => {
-                // Mid-stream IO error; flush as InternalError via adapter's
-                // finish path (state stays Errored if it was Streaming).
-                for ev in adapter.finish() {
-                    pending.push_back(ev);
+                Poll::Ready(Some(Ok(Event::Message(msg)))) => {
+                    for ev in adapter.feed(&msg.data) {
+                        pending.push_back(ev);
+                    }
+                    // If the chunk pushed the adapter into a terminal state
+                    // (e.g. `[DONE]` or a `finish_reason`), flush its closing
+                    // events now and stop pulling from event_source. Some
+                    // OpenAI-compatible servers keep the connection open
+                    // past `[DONE]` for HTTP/2 multiplexing or keepalive,
+                    // and we don't want the response stream hanging on that.
+                    if adapter.is_terminal() {
+                        for ev in adapter.finish() {
+                            pending.push_back(ev);
+                        }
+                        closed = true;
+                    }
+                    continue;
                 }
-                closed = true;
-                Poll::Ready(pending.pop_front())
+                Poll::Ready(Some(Err(e))) => {
+                    // reqwest-eventsource closes the stream after most errors;
+                    // record the message so we can log on EOF, then keep
+                    // polling so we observe Ready(None) and finalize via the
+                    // normal flush path.
+                    errored = Some(e.to_string());
+                    // Some error variants leave the source dead immediately;
+                    // we'll observe Ready(None) on the next iteration.
+                    continue;
+                }
             }
         }
     })

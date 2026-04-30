@@ -128,6 +128,17 @@ impl OpenAiSseAdapter {
         &self.conversation_id
     }
 
+    /// Returns true once the adapter has observed either `[DONE]`, a chunk
+    /// with `finish_reason`, or a fatal error — i.e. the LOGICAL stream has
+    /// ended even if the underlying HTTP body hasn't closed yet. Callers
+    /// driving the adapter from a network source should check this after
+    /// each `feed` and call `finish` immediately when true, so a server that
+    /// keeps the connection open past `[DONE]` doesn't leave the response
+    /// stream hanging.
+    pub fn is_terminal(&self) -> bool {
+        self.state != State::Streaming
+    }
+
     /// Feed one SSE message-data string. Returns the events to emit downstream.
     /// `[DONE]` is treated as a successful end-of-stream.
     pub fn feed(&mut self, data: &str) -> Vec<api::ResponseEvent> {
