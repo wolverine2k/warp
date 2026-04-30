@@ -5968,6 +5968,9 @@ struct ApiKeysWidget {
     openai_api_key_editor: ViewHandle<EditorView>,
     anthropic_api_key_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
+    /// Custom Local LLM Provider API key (specs/GH9303/). Visible only when
+    /// `FeatureFlag::LocalLlmProvider` is on.
+    local_provider_api_key_editor: ViewHandle<EditorView>,
 
     can_use_warp_credits_with_byok: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
@@ -6072,10 +6075,65 @@ impl ApiKeysWidget {
             "AIzaSy..."
         );
 
+        // Custom Local LLM Provider API key (specs/GH9303/). The editor is
+        // constructed unconditionally so the field is always present on the
+        // struct; render visibility is gated on `FeatureFlag::LocalLlmProvider`
+        // at draw time. Independent of BYO state.
+        let local_provider_key: Option<String> = ai::local_provider::LocalProviderKeyManager::as_ref(
+            ctx,
+        )
+        .key()
+        .map(|s| s.to_string());
+        let local_provider_api_key_editor = ctx.add_typed_action_view(move |ctx| {
+            let appearance = Appearance::handle(ctx).as_ref(ctx);
+            let options = SingleLineEditorOptions {
+                is_password: true,
+                text: TextOptions {
+                    font_size_override: Some(appearance.ui_font_size()),
+                    font_family_override: Some(appearance.monospace_font_family()),
+                    text_colors_override: Some(TextColors {
+                        default_color: appearance.theme().active_ui_text_color(),
+                        disabled_color: appearance.theme().disabled_ui_text_color(),
+                        hint_color: appearance.theme().disabled_ui_text_color(),
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut editor = EditorView::single_line(options, ctx);
+            editor.set_placeholder_text("optional bearer token", ctx);
+            if let Some(key) = &local_provider_key {
+                editor.set_buffer_text(key, ctx);
+            }
+            editor
+        });
+        AISettingsPageView::update_editor_interaction_state(
+            local_provider_api_key_editor.clone(),
+            is_any_ai_enabled
+                && warp_core::features::FeatureFlag::LocalLlmProvider.is_enabled(),
+            ctx,
+        );
+        ctx.subscribe_to_view(
+            &local_provider_api_key_editor,
+            |_, editor, event, ctx| {
+                if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                    let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
+                    let key = buffer_text.is_empty().not().then_some(buffer_text);
+                    ai::local_provider::LocalProviderKeyManager::handle(ctx).update(
+                        ctx,
+                        |model, ctx| {
+                            model.set_key(key, ctx);
+                        },
+                    );
+                }
+            },
+        );
+
         Self {
             openai_api_key_editor,
             anthropic_api_key_editor,
             google_api_key_editor,
+            local_provider_api_key_editor,
 
             can_use_warp_credits_with_byok: Default::default(),
             upgrade_highlight_index: Default::default(),
@@ -6165,6 +6223,19 @@ impl ApiKeysWidget {
             is_enabled,
             app,
         ));
+
+        // Custom Local LLM Provider API key field. Visible only when the
+        // feature flag is on. Independent of BYOK gating because the local
+        // provider is a separate channel that bypasses warp.dev entirely.
+        if warp_core::features::FeatureFlag::LocalLlmProvider.is_enabled() {
+            column.add_child(render_api_key_input(
+                appearance,
+                "Local Provider API Key (optional)",
+                self.local_provider_api_key_editor.clone(),
+                is_any_ai_enabled,
+                app,
+            ));
+        }
 
         // Show upgrade CTA if BYOK is not enabled
         if !is_byo_enabled {
