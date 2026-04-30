@@ -1460,6 +1460,75 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.warp_agent.other.agent_attribution_enabled",
         description: "Whether the Warp Agent adds an attribution co-author line to commit messages and pull requests it creates.",
     }
+
+    // ---------------------------------------------------------------------
+    // Custom Local LLM Provider — see specs/GH9303/. Gated by
+    // FeatureFlag::LocalLlmProvider. Settings live here; the API key is
+    // stored separately via LocalProviderKeyManager (secure storage).
+    // ---------------------------------------------------------------------
+
+    local_provider_enabled: LocalProviderEnabled {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.local_provider.enabled",
+        description: "When enabled, exposes a user-configured OpenAI-compatible endpoint as a model in the Agent Mode picker.",
+    }
+
+    local_provider_display_name: LocalProviderDisplayName {
+        type: String,
+        default: "Local".to_string(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.local_provider.display_name",
+        description: "Display name for the local provider in the model picker.",
+    }
+
+    local_provider_base_url: LocalProviderBaseUrl {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.local_provider.base_url",
+        description: "OpenAI-compatible base URL (e.g. http://localhost:11434/v1 for Ollama).",
+    }
+
+    local_provider_model_id: LocalProviderModelId {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.local_provider.model_id",
+        description: "Model id the local endpoint expects (e.g. llama3.1, qwen2.5-coder:7b).",
+    }
+
+    local_provider_supports_tools: LocalProviderSupportsTools {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.local_provider.supports_tools",
+        description: "Whether the local model supports OpenAI-format tool calls. Disable for chat-only models.",
+    }
+
+    // Stored as a String to keep the macro's set of supported field types
+    // tight; parsed to u32 by LocalProviderConfig::from_app(). 0 / empty means
+    // "unset, let the model handle context limits itself".
+    local_provider_context_window: LocalProviderContextWindow {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.local_provider.context_window",
+        description: "Optional context-window hint in tokens (integer). Empty means use model defaults.",
+    }
 ]);
 
 impl AISettings {
