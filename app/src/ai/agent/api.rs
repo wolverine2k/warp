@@ -128,6 +128,12 @@ pub struct RequestParams {
     pub parent_agent_id: Option<String>,
     /// The display name for this agent (e.g. "Agent 1"), assigned by the orchestrator.
     pub agent_name: Option<String>,
+    /// Snapshot of the user's Custom Local LLM Provider configuration, populated at
+    /// `RequestParams::new` time when the feature flag is on and the provider is
+    /// enabled. The dispatch fork in `impl::generate_multi_agent_output` reads
+    /// this to route a `local:*` model id directly to the user's endpoint instead
+    /// of through warp.dev. See `specs/GH9303/`.
+    pub local_provider_config: Option<ai::local_provider::LocalProviderConfig>,
 }
 
 pub type Event = Result<warp_multi_agent_api::ResponseEvent, Arc<AIApiError>>;
@@ -309,6 +315,7 @@ impl RequestParams {
             supported_tools_override: request_input.supported_tools_override.clone(),
             parent_agent_id: None,
             agent_name: None,
+            local_provider_config: crate::ai::local_provider_config::snapshot_from_app(app),
         }
     }
 }

@@ -1,11 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
 use crate::{ai::agent::redaction, terminal::model::session::SessionType};
+use ai::local_provider;
 use futures_util::StreamExt;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
-use crate::server::server_api::ServerApi;
+use crate::server::server_api::{AIApiError, ServerApi};
 
 use super::{convert_to::convert_input, ConvertToAPITypeError, RequestParams, ResponseStream};
 
@@ -14,6 +15,29 @@ pub async fn generate_multi_agent_output(
     mut params: RequestParams,
     cancellation_rx: futures::channel::oneshot::Receiver<()>,
 ) -> Result<ResponseStream, ConvertToAPITypeError> {
+    // ---- Custom Local LLM Provider fork (specs/GH9303/) ----
+    //
+    // If the active model id starts with `local:` AND the snapshot indicates
+    // a configured + enabled local provider, route directly to the user's
+    // endpoint instead of through warp.dev. The snapshot was populated at
+    // `RequestParams::new` time from `&AppContext`; this code path stays
+    // AppContext-free per tech.md §5.
+    if crate::ai::local_provider_config::is_local_llm_id(&params.model) {
+        if let Some(cfg) = params.local_provider_config.take() {
+            return route_to_local_provider(params, cfg, cancellation_rx).await;
+        }
+        // Stale local id but no active config (user disabled the provider but
+        // their saved profile still references it). Surface a one-shot
+        // error stream so the controller's existing toast path fires; the user
+        // can re-select a Warp model.
+        let (tx, rx) = async_channel::unbounded();
+        let err = AIApiError::Other(anyhow::anyhow!(
+            "Local provider is no longer configured. Re-enable it in settings, or pick a Warp model."
+        ));
+        let _ = tx.send(Err(Arc::new(err))).await;
+        return Ok(Box::pin(rx));
+    }
+
     let supported_tools = params
         .supported_tools_override
         .take()
@@ -141,6 +165,61 @@ pub async fn generate_multi_agent_output(
             Ok(Box::pin(rx))
         }
     }
+}
+
+/// Custom Local LLM Provider routing — see `specs/GH9303/`.
+///
+/// Translates the in-memory RequestParams into the local provider's input shape
+/// and invokes `run_chat_turn`. Errors that prevent producing a stream
+/// (config validation, transport setup) are surfaced through the same one-shot
+/// channel pattern the server path uses on `Err(...)`.
+async fn route_to_local_provider(
+    mut params: RequestParams,
+    cfg: ai::local_provider::LocalProviderConfig,
+    cancellation_rx: futures::channel::oneshot::Receiver<()>,
+) -> Result<ResponseStream, ConvertToAPITypeError> {
+    let supported_tools = params
+        .supported_tools_override
+        .take()
+        .unwrap_or_else(|| get_supported_tools(&params));
+
+    let user_query = extract_latest_user_query(&params.input);
+    let tasks = std::mem::take(&mut params.tasks);
+
+    let input = local_provider::request::LocalProviderInput {
+        user_query,
+        tasks,
+        supported_tools,
+    };
+
+    let http = reqwest::Client::new();
+    match local_provider::run_chat_turn(input, cfg, cancellation_rx, http).await {
+        Ok(stream) => {
+            // The local-provider stream yields `ResponseEvent` directly (errors
+            // are encoded as `Finished{InternalError}` events). Wrap each event
+            // in `Ok(...)` so the type matches `ResponseStream`.
+            let wrapped = stream.map(|ev| Ok::<_, Arc<AIApiError>>(ev));
+            Ok(Box::pin(wrapped))
+        }
+        Err(e) => {
+            let (tx, rx) = async_channel::unbounded();
+            let err = AIApiError::Other(anyhow::Error::from(e));
+            let _ = tx.send(Err(Arc::new(err))).await;
+            Ok(Box::pin(rx))
+        }
+    }
+}
+
+/// Walk the AIAgentInput list in reverse and return the most recent UserQuery
+/// query string, if any. Used by the local-provider routing to pick the latest
+/// turn the user typed.
+fn extract_latest_user_query(input: &[crate::ai::agent::AIAgentInput]) -> Option<String> {
+    for entry in input.iter().rev() {
+        if let crate::ai::agent::AIAgentInput::UserQuery { query, .. } = entry {
+            return Some(query.clone());
+        }
+    }
+    None
 }
 
 fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {

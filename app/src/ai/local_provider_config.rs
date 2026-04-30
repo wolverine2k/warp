@@ -21,11 +21,10 @@ use crate::ai::llms::{
 use crate::settings::ai::AISettings;
 
 /// Snapshot the user's local provider config. Returns `None` when:
-#[allow(dead_code)] // Wired up by Phase 4 (picker injection) + Phase 5 (dispatch fork).
 /// - The `LocalLlmProvider` feature flag is off, OR
 /// - `local_provider_enabled` setting is false, OR
 /// - The configured base URL or model id is empty / invalid (validation fails).
-pub fn snapshot_from_app(ctx: &mut AppContext) -> Option<LocalProviderConfig> {
+pub fn snapshot_from_app(ctx: &AppContext) -> Option<LocalProviderConfig> {
     if !FeatureFlag::LocalLlmProvider.is_enabled() {
         return None;
     }
