@@ -63,6 +63,8 @@ repo_metadata.workspace = true
 uuid.workspace = true
 unicode-width.workspace = true
 url.workspace = true
+reqwest.workspace = true
+reqwest-eventsource.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true

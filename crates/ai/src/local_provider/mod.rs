@@ -18,8 +18,11 @@ pub mod config;
 pub mod prompt;
 pub mod request;
 pub mod response;
+pub mod run;
 pub mod tools;
 pub mod wire;
+
+pub use run::{run_chat_turn, LocalResponseStream, LocalRunError};
 
 #[cfg(test)]
 mod response_tests;
