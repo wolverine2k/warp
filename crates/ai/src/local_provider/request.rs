@@ -209,10 +209,139 @@ fn summarize_tool_call(call: &api::message::ToolCall) -> Option<(String, String)
     Some((name, args))
 }
 
-fn summarize_tool_result(_result: &api::message::ToolCallResult) -> String {
-    // Phase 2 placeholder: serialize a compact textual summary. Phase 7 (tool-call
-    // cycle) replaces this with proper text-extraction per result variant.
-    "<tool result>".to_string()
+/// Render a `Message::ToolCallResult` as the `content` string the OpenAI
+/// `tool` role message expects. Each v1 tool variant gets a tailored format:
+/// the model needs to *read* this content to decide its next turn, so the
+/// shape matches what a typical CLI agent would print.
+fn summarize_tool_result(result: &api::message::ToolCallResult) -> String {
+    use api::message::tool_call_result::Result as R;
+    let Some(inner) = result.result.as_ref() else {
+        return "<empty result>".to_string();
+    };
+    match inner {
+        R::RunShellCommand(rsc) => render_run_shell(rsc),
+        R::ReadFiles(rf) => render_read_files(rf),
+        R::ApplyFileDiffs(afd) => render_apply_diffs(afd),
+        R::Grep(g) => render_grep(g),
+        R::FileGlobV2(g) => render_file_glob_v2(g),
+        R::Cancel(_) => "<cancelled by user>".to_string(),
+        // Other variants are server-only or future tools we don't expose.
+        _ => "<result not supported by local provider>".to_string(),
+    }
+}
+
+fn render_run_shell(r: &api::RunShellCommandResult) -> String {
+    use api::run_shell_command_result::Result as R;
+    match r.result.as_ref() {
+        Some(R::CommandFinished(f)) => {
+            format!(
+                "$ {}\n{}\n[exit {}]",
+                if r.command.is_empty() { "<command>" } else { &r.command },
+                f.output,
+                f.exit_code
+            )
+        }
+        Some(R::LongRunningCommandSnapshot(_)) => {
+            format!("$ {}\n<command still running>", r.command)
+        }
+        Some(R::PermissionDenied(_)) => {
+            format!("$ {}\n<permission denied>", r.command)
+        }
+        None => "<empty shell result>".to_string(),
+    }
+}
+
+fn render_read_files(r: &api::ReadFilesResult) -> String {
+    use api::read_files_result::Result as R;
+    match r.result.as_ref() {
+        Some(R::TextFilesSuccess(s)) => {
+            let mut out = String::new();
+            for f in &s.files {
+                out.push_str(&format!("\n--- {} ---\n{}\n", f.file_path, f.content));
+            }
+            if out.is_empty() {
+                "<no files read>".to_string()
+            } else {
+                out
+            }
+        }
+        Some(R::AnyFilesSuccess(_)) => {
+            "<files read (binary; not rendered for the local model)>".to_string()
+        }
+        Some(R::Error(e)) => format!("<read failed: {}>", e.message),
+        None => "<empty read result>".to_string(),
+    }
+}
+
+fn render_apply_diffs(r: &api::ApplyFileDiffsResult) -> String {
+    use api::apply_file_diffs_result::Result as R;
+    match r.result.as_ref() {
+        Some(R::Success(s)) => {
+            let updated: Vec<&str> = s
+                .updated_files_v2
+                .iter()
+                .filter_map(|u| u.file.as_ref())
+                .map(|f| f.file_path.as_str())
+                .collect();
+            let deleted: Vec<&str> = s.deleted_files.iter().map(|d| d.file_path.as_str()).collect();
+            let mut bits = Vec::new();
+            if !updated.is_empty() {
+                bits.push(format!("updated: {}", updated.join(", ")));
+            }
+            if !deleted.is_empty() {
+                bits.push(format!("deleted: {}", deleted.join(", ")));
+            }
+            if bits.is_empty() {
+                "<diffs applied (no files changed)>".to_string()
+            } else {
+                bits.join("; ")
+            }
+        }
+        Some(R::Error(e)) => format!("<apply diffs failed: {}>", e.message),
+        None => "<empty apply diffs result>".to_string(),
+    }
+}
+
+fn render_grep(r: &api::GrepResult) -> String {
+    use api::grep_result::Result as R;
+    match r.result.as_ref() {
+        Some(R::Success(s)) => {
+            if s.matched_files.is_empty() {
+                return "<no matches>".to_string();
+            }
+            let mut out = String::new();
+            for fm in &s.matched_files {
+                let lines: Vec<String> =
+                    fm.matched_lines.iter().map(|m| m.line_number.to_string()).collect();
+                out.push_str(&format!("{}: lines {}\n", fm.file_path, lines.join(",")));
+            }
+            out
+        }
+        Some(R::Error(e)) => format!("<grep failed: {}>", e.message),
+        None => "<empty grep result>".to_string(),
+    }
+}
+
+fn render_file_glob_v2(r: &api::FileGlobV2Result) -> String {
+    use api::file_glob_v2_result::Result as R;
+    match r.result.as_ref() {
+        Some(R::Success(s)) => {
+            if s.matched_files.is_empty() {
+                return "<no files matched>".to_string();
+            }
+            let mut out = String::new();
+            for f in &s.matched_files {
+                out.push_str(&f.file_path);
+                out.push('\n');
+            }
+            if !s.warnings.is_empty() {
+                out.push_str(&format!("\n[warnings: {}]", s.warnings));
+            }
+            out
+        }
+        Some(R::Error(e)) => format!("<glob failed: {}>", e.message),
+        None => "<empty glob result>".to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -418,5 +547,197 @@ mod tests {
         let req = compose_chat_completion_request(&empty_input(), &config);
         let sys_content = req.messages[0].content.as_deref().unwrap();
         assert!(sys_content.contains("4096"));
+    }
+
+    // ---- summarize_tool_result ----
+
+    fn tool_result(
+        inner: api::message::tool_call_result::Result,
+    ) -> api::message::ToolCallResult {
+        api::message::ToolCallResult {
+            tool_call_id: "tc_1".into(),
+            result: Some(inner),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn run_shell_command_finished_renders_command_output_and_exit() {
+        let r = tool_result(api::message::tool_call_result::Result::RunShellCommand(
+            api::RunShellCommandResult {
+                command: "ls -la".into(),
+                result: Some(api::run_shell_command_result::Result::CommandFinished(
+                    api::ShellCommandFinished {
+                        output: "total 0\ndrwx 1 user 0 .\n".into(),
+                        exit_code: 0,
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            },
+        ));
+        let s = summarize_tool_result(&r);
+        assert!(s.contains("$ ls -la"));
+        assert!(s.contains("total 0"));
+        assert!(s.contains("[exit 0]"));
+    }
+
+    #[test]
+    fn read_files_text_success_renders_each_file() {
+        let r = tool_result(api::message::tool_call_result::Result::ReadFiles(
+            api::ReadFilesResult {
+                result: Some(api::read_files_result::Result::TextFilesSuccess(
+                    api::read_files_result::TextFilesSuccess {
+                        files: vec![
+                            api::FileContent {
+                                file_path: "src/main.rs".into(),
+                                content: "fn main() {}".into(),
+                                ..Default::default()
+                            },
+                            api::FileContent {
+                                file_path: "Cargo.toml".into(),
+                                content: "[package]\nname = \"foo\"".into(),
+                                ..Default::default()
+                            },
+                        ],
+                    },
+                )),
+                ..Default::default()
+            },
+        ));
+        let s = summarize_tool_result(&r);
+        assert!(s.contains("--- src/main.rs ---"));
+        assert!(s.contains("fn main() {}"));
+        assert!(s.contains("--- Cargo.toml ---"));
+    }
+
+    #[test]
+    fn read_files_error_renders_message() {
+        let r = tool_result(api::message::tool_call_result::Result::ReadFiles(
+            api::ReadFilesResult {
+                result: Some(api::read_files_result::Result::Error(
+                    api::read_files_result::Error {
+                        message: "permission denied".into(),
+                    },
+                )),
+                ..Default::default()
+            },
+        ));
+        let s = summarize_tool_result(&r);
+        assert!(s.contains("read failed"));
+        assert!(s.contains("permission denied"));
+    }
+
+    #[test]
+    fn grep_success_with_matches_renders_paths_and_lines() {
+        let r = tool_result(api::message::tool_call_result::Result::Grep(
+            api::GrepResult {
+                result: Some(api::grep_result::Result::Success(
+                    api::grep_result::Success {
+                        matched_files: vec![api::grep_result::success::GrepFileMatch {
+                            file_path: "src/lib.rs".into(),
+                            matched_lines: vec![
+                                api::grep_result::success::grep_file_match::GrepLineMatch {
+                                    line_number: 12,
+                                },
+                                api::grep_result::success::grep_file_match::GrepLineMatch {
+                                    line_number: 47,
+                                },
+                            ],
+                        }],
+                    },
+                )),
+                ..Default::default()
+            },
+        ));
+        let s = summarize_tool_result(&r);
+        assert!(s.contains("src/lib.rs"));
+        assert!(s.contains("12"));
+        assert!(s.contains("47"));
+    }
+
+    #[test]
+    fn grep_no_matches_says_no_matches() {
+        let r = tool_result(api::message::tool_call_result::Result::Grep(
+            api::GrepResult {
+                result: Some(api::grep_result::Result::Success(
+                    api::grep_result::Success { matched_files: vec![] },
+                )),
+                ..Default::default()
+            },
+        ));
+        assert_eq!(summarize_tool_result(&r), "<no matches>");
+    }
+
+    #[test]
+    fn file_glob_v2_renders_paths() {
+        let r = tool_result(api::message::tool_call_result::Result::FileGlobV2(
+            api::FileGlobV2Result {
+                result: Some(api::file_glob_v2_result::Result::Success(
+                    api::file_glob_v2_result::Success {
+                        matched_files: vec![
+                            api::file_glob_v2_result::success::FileGlobMatch {
+                                file_path: "a.rs".into(),
+                            },
+                            api::file_glob_v2_result::success::FileGlobMatch {
+                                file_path: "b.rs".into(),
+                            },
+                        ],
+                        warnings: String::new(),
+                    },
+                )),
+                ..Default::default()
+            },
+        ));
+        let s = summarize_tool_result(&r);
+        assert!(s.contains("a.rs"));
+        assert!(s.contains("b.rs"));
+    }
+
+    #[test]
+    fn apply_file_diffs_success_lists_updates_and_deletes() {
+        let r = tool_result(api::message::tool_call_result::Result::ApplyFileDiffs(
+            api::ApplyFileDiffsResult {
+                result: Some(api::apply_file_diffs_result::Result::Success(
+                    api::apply_file_diffs_result::Success {
+                        updated_files_v2: vec![
+                            api::apply_file_diffs_result::success::UpdatedFileContent {
+                                file: Some(api::FileContent {
+                                    file_path: "edited.rs".into(),
+                                    ..Default::default()
+                                }),
+                                was_edited_by_user: false,
+                            },
+                        ],
+                        deleted_files: vec![api::apply_file_diffs_result::success::DeletedFile {
+                            file_path: "removed.rs".into(),
+                        }],
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            },
+        ));
+        let s = summarize_tool_result(&r);
+        assert!(s.contains("updated: edited.rs"));
+        assert!(s.contains("deleted: removed.rs"));
+    }
+
+    #[test]
+    fn cancel_result_renders_clearly() {
+        let r = tool_result(api::message::tool_call_result::Result::Cancel(()));
+        let s = summarize_tool_result(&r);
+        assert!(s.to_lowercase().contains("cancel"));
+    }
+
+    #[test]
+    fn empty_result_is_handled_safely() {
+        let r = api::message::ToolCallResult {
+            tool_call_id: "tc_x".into(),
+            result: None,
+            ..Default::default()
+        };
+        let s = summarize_tool_result(&r);
+        assert!(s.contains("empty"));
     }
 }
