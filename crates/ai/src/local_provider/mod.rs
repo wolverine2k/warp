@@ -16,6 +16,7 @@
 
 pub mod config;
 pub mod prompt;
+pub mod request;
 pub mod response;
 pub mod tools;
 pub mod wire;
