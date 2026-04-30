@@ -407,18 +407,47 @@ fn build_kind_message(message_id: &str, kind: MessageKind, text: &str) -> api::M
 fn build_tool_call_event(task_id: &str, buf: &ToolBuffer) -> Option<api::ResponseEvent> {
     let id = buf.id.clone()?;
     let name = buf.name.clone()?;
-    // For Phase 1 we ship a *placeholder* tool variant; the real translation
-    // (OpenAI tool_call -> typed Message::ToolCall.tool::* variant) lives
-    // in `tools::translate_openai_tool_call` and is wired in Phase 2.5.
-    // Here we package the call as best we can so the proto type is well-formed
-    // and downstream tests can verify the shape.
-    let tool_call = api::message::ToolCall {
-        tool_call_id: id,
-        // Omitting the typed `tool` oneof for Phase 1; tools.rs will fill this in.
-        ..Default::default()
+    // Translate the OpenAI tool_call into the proto's strongly-typed
+    // Message::ToolCall.tool::* variant via tools.rs. Failures (unknown tool
+    // name, malformed args, etc.) produce a synthetic assistant text message
+    // instead of dropping the turn — see tech.md §Risks.
+    let tool_call = match crate::local_provider::tools::translate_openai_tool_call(
+        &id,
+        &name,
+        &buf.arguments,
+    ) {
+        Ok(tc) => tc,
+        Err(e) => {
+            // Surface the parse error as visible assistant text. This event
+            // type still uses AddMessagesToTask but with an AgentOutput
+            // explaining the failure, so the user sees the model's intent.
+            let body = format!(
+                "I tried to call `{name}` but its arguments were unusable: {e}\n\nRaw args: {}",
+                buf.arguments
+            );
+            let err_message = api::Message {
+                id: Uuid::new_v4().to_string(),
+                message: Some(api::message::Message::AgentOutput(api::message::AgentOutput {
+                    text: body,
+                })),
+                ..Default::default()
+            };
+            return Some(api::ResponseEvent {
+                r#type: Some(api::response_event::Type::ClientActions(
+                    api::response_event::ClientActions {
+                        actions: vec![api::ClientAction {
+                            action: Some(api::client_action::Action::AddMessagesToTask(
+                                api::client_action::AddMessagesToTask {
+                                    task_id: task_id.to_string(),
+                                    messages: vec![err_message],
+                                },
+                            )),
+                        }],
+                    },
+                )),
+            });
+        }
     };
-    let _ = name; // tools.rs will use this to dispatch translation
-    let _ = &buf.arguments;
 
     let message = api::Message {
         id: Uuid::new_v4().to_string(),

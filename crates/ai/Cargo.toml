@@ -83,6 +83,11 @@ filetime = "0.2.25"
 tempfile.workspace = true
 virtual-fs.workspace = true
 warp_core = { workspace = true, features = ["test-util"] }
+# Phase 7 / Phase 8 integration tests + smoke binary need a multi-threaded
+# tokio runtime, the test macro, and the rustls crypto provider used by reqwest.
+rustls.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "net"] }
+clap = { workspace = true }
 
 [build-dependencies]
 anyhow.workspace = true

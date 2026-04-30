@@ -518,7 +518,14 @@ pub struct LLMPreferences {
 
 impl LLMPreferences {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        let models_by_feature = get_cached_models(ctx).unwrap_or_default();
+        let mut models_by_feature = get_cached_models(ctx).unwrap_or_default();
+        // Inject the user's Custom Local LLM Provider entry on startup so the
+        // picker shows it immediately, without waiting for a server refresh.
+        // See specs/GH9303/.
+        crate::ai::local_provider_config::inject_local_provider_choice(
+            &mut models_by_feature,
+            ctx,
+        );
 
         ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, event, ctx| {
             if let NetworkStatusEvent::NetworkStatusChanged {
