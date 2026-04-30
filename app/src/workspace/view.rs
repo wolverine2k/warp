@@ -375,6 +375,7 @@ use std::time::Duration;
 #[cfg(target_os = "macos")]
 use std::time::{SystemTime, UNIX_EPOCH};
 use warp_core::context_flag::ContextFlag;
+use warp_core::execution_mode::AppExecutionMode;
 use warp_core::semantic_selection::SemanticSelection;
 use warp_util::path::{user_friendly_path, LineAndColumnArg};
 use warpui::fonts::Weight;
@@ -6738,6 +6739,12 @@ impl Workspace {
     }
 
     fn should_trigger_get_started_onboarding(&self, ctx: &mut ViewContext<Self>) -> bool {
+        // Onboarding requires a real user to interact with it; suppress when
+        // running in a headless mode like the SDK/CLI.
+        if !AppExecutionMode::as_ref(ctx).can_show_onboarding() {
+            return false;
+        }
+
         if !FeatureFlag::GetStartedTab.is_enabled() {
             return false;
         }
