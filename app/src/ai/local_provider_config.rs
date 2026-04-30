@@ -8,10 +8,16 @@
 //! to produce an `Option<LocalProviderConfig>`, store it on `RequestParams`,
 //! and the AppContext-free dispatch router consumes it.
 
+use std::collections::HashMap;
+
 use ai::local_provider::{LocalProviderConfig, LocalProviderKeyManager};
+use ai::LLMId;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
+use crate::ai::llms::{
+    LLMInfo, LLMModelHost, LLMProvider, LLMUsageMetadata, RoutingHostConfig,
+};
 use crate::settings::ai::AISettings;
 
 /// Snapshot the user's local provider config. Returns `None` when:
@@ -52,4 +58,44 @@ pub fn snapshot_from_app(ctx: &mut AppContext) -> Option<LocalProviderConfig> {
     // dispatch / picker injection cleanly skip.
     cfg.validate().ok()?;
     Some(cfg)
+}
+
+/// Build a synthetic `LLMInfo` for the local provider so it appears in the
+/// model picker alongside server-provided models. The synthetic LLMId carries
+/// the `local:` prefix the dispatch router checks (per tech.md §5).
+#[allow(dead_code)] // Wired up by Phase 5 dispatch fork / Phase 4 injection site.
+pub fn synthetic_llm_info(cfg: &LocalProviderConfig) -> LLMInfo {
+    let synthetic_id: LLMId = cfg.synthetic_llm_id().into();
+    let mut host_configs = HashMap::new();
+    host_configs.insert(
+        LLMModelHost::Local,
+        RoutingHostConfig {
+            enabled: true,
+            model_routing_host: LLMModelHost::Local,
+        },
+    );
+    LLMInfo {
+        display_name: format!("{}: {}", cfg.display_name, cfg.model_id),
+        base_model_name: cfg.model_id.clone(),
+        id: synthetic_id,
+        reasoning_level: None,
+        usage_metadata: LLMUsageMetadata {
+            request_multiplier: 0,
+            credit_multiplier: None,
+        },
+        description: Some("Custom local provider".to_string()),
+        disable_reason: None,
+        vision_supported: false,
+        spec: None,
+        provider: LLMProvider::Unknown,
+        host_configs,
+        discount_percentage: None,
+    }
+}
+
+/// Returns true when the given LLMId belongs to a custom local provider.
+/// The dispatch router uses this to decide between server and local paths.
+#[allow(dead_code)] // Wired up by Phase 5 dispatch fork.
+pub fn is_local_llm_id(id: &LLMId) -> bool {
+    id.as_str().starts_with("local:")
 }

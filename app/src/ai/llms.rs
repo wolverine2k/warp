@@ -110,6 +110,10 @@ impl LLMProvider {
 pub enum LLMModelHost {
     DirectApi,
     AwsBedrock,
+    /// User-configured OpenAI-compatible HTTP endpoint (Ollama, LM Studio, vLLM, etc.).
+    /// See `specs/GH9303/`. Variants is appended *before* `Unknown` so the existing
+    /// `#[serde(other)]` arm continues to absorb anything from the future.
+    Local,
     #[serde(other)]
     Unknown,
 }
