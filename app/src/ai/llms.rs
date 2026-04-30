@@ -340,6 +340,13 @@ impl AvailableLLMs {
         self.choices.iter().find(|info| info.id == *id)
     }
 
+    /// Mutable access to the choices list. Used by `local_provider_config`
+    /// to inject the synthetic local-provider entry after a server fetch
+    /// or cache load. Internal-only; not exposed for general mutation.
+    pub(crate) fn choices_mut(&mut self) -> &mut Vec<LLMInfo> {
+        &mut self.choices
+    }
+
     fn default_llm_info(&self) -> &LLMInfo {
         self.info_for_id(&self.default_id)
             .expect("Default LLM ID must be present in choices")
@@ -913,6 +920,13 @@ impl LLMPreferences {
         let has_existing_persisted_config = get_cached_models(ctx).is_some();
 
         let old = std::mem::replace(&mut self.models_by_feature, update);
+
+        // Inject the user's Custom Local LLM Provider entry (if configured) so
+        // the picker shows it alongside server-provided models. See specs/GH9303/.
+        crate::ai::local_provider_config::inject_local_provider_choice(
+            &mut self.models_by_feature,
+            ctx,
+        );
 
         match serde_json::to_string(&self.models_by_feature) {
             Ok(serialized_update) => {

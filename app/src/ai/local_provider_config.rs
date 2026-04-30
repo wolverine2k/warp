@@ -94,7 +94,40 @@ pub fn synthetic_llm_info(cfg: &LocalProviderConfig) -> LLMInfo {
 
 /// Returns true when the given LLMId belongs to a custom local provider.
 /// The dispatch router uses this to decide between server and local paths.
-#[allow(dead_code)] // Wired up by Phase 5 dispatch fork.
 pub fn is_local_llm_id(id: &LLMId) -> bool {
     id.as_str().starts_with("local:")
+}
+
+/// Inject (or refresh) the synthetic local-provider entry across every feature
+/// list in `ModelsByFeature`. Called after a model-list refresh so the picker
+/// shows the local model alongside server-provided ones. Idempotent: any prior
+/// `local:*` entries are removed before the new one is added, so calling this
+/// after the user changes their local-provider config produces the latest
+/// state without duplicate entries accumulating.
+pub fn inject_local_provider_choice(
+    models: &mut crate::ai::llms::ModelsByFeature,
+    ctx: &AppContext,
+) {
+    fn purge_local(choices: &mut Vec<LLMInfo>) {
+        choices.retain(|info| !is_local_llm_id(&info.id));
+    }
+    purge_local(models.agent_mode.choices_mut());
+    purge_local(models.coding.choices_mut());
+    if let Some(cli) = models.cli_agent.as_mut() {
+        purge_local(cli.choices_mut());
+    }
+    if let Some(cu) = models.computer_use.as_mut() {
+        purge_local(cu.choices_mut());
+    }
+
+    let Some(cfg) = snapshot_from_app(ctx) else {
+        return;
+    };
+    let info = synthetic_llm_info(&cfg);
+    // Append to agent_mode and coding (the two features we expect a local
+    // model to participate in). cli_agent and computer_use stay server-only
+    // because the local provider's tool catalog (5 v1 tools) doesn't include
+    // long-running shell or computer-use variants.
+    models.agent_mode.choices_mut().push(info.clone());
+    models.coding.choices_mut().push(info);
 }
