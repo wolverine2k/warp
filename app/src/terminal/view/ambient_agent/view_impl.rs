@@ -33,6 +33,7 @@ use super::loading_screen::{
 use super::{
     is_cloud_agent_pre_first_exchange, AmbientAgentEntryBlock, AmbientAgentViewModelEvent,
 };
+use crate::terminal::view::Event as TerminalViewEvent;
 const CHILD_AGENT_GITHUB_AUTH_REQUIRED_BLOCKED_ACTION: &str =
     "GitHub authentication required before starting the child agent.";
 
@@ -117,11 +118,13 @@ impl TerminalView {
             AmbientAgentViewModelEvent::EnteredSetupState => {
                 // Re-render to show the setup view.
                 self.update_pane_configuration(ctx);
+                ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
                 ctx.notify();
             }
             AmbientAgentViewModelEvent::EnteredComposingState => {
                 // Update pane configuration to show cloud indicator.
                 self.update_pane_configuration(ctx);
+                ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
             }
             AmbientAgentViewModelEvent::DispatchedAgent => {
                 // Pane chrome (e.g. cloud indicator, task id) must update on viewer surfaces
@@ -187,6 +190,7 @@ impl TerminalView {
                     });
                 }
                 // Re-render to show loading state.
+                ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
                 ctx.notify();
             }
             AmbientAgentViewModelEvent::FollowupDispatched => {
@@ -202,6 +206,7 @@ impl TerminalView {
                 // Auto-open details panel for local cloud mode once the session is ready.
                 self.maybe_auto_open_cloud_mode_details_panel(ctx);
                 // Re-render to hide the loading screen now that the session is ready.
+                ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
                 ctx.notify();
             }
             AmbientAgentViewModelEvent::EnvironmentSelected => {}
@@ -217,6 +222,7 @@ impl TerminalView {
                 });
                 // Update pane header to reflect any changes (e.g., task_id being set)
                 self.update_pane_configuration(ctx);
+                ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
                 ctx.notify();
             }
             AmbientAgentViewModelEvent::Failed { error_message } => {
@@ -230,6 +236,7 @@ impl TerminalView {
                     self.fetch_and_update_cloud_mode_details_panel(ctx);
                 }
                 // Re-render to show the error state in the footer.
+                ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
                 ctx.notify();
             }
             AmbientAgentViewModelEvent::ShowAICreditModal => {
@@ -254,6 +261,7 @@ impl TerminalView {
                     );
                 }
                 // Re-render to show the GitHub auth required state in the footer.
+                ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
                 ctx.notify();
             }
             AmbientAgentViewModelEvent::Cancelled => {
@@ -267,10 +275,12 @@ impl TerminalView {
                     self.fetch_and_update_cloud_mode_details_panel(ctx);
                 }
                 // Re-render to show the cancelled state in the footer.
+                ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
                 ctx.notify();
             }
             AmbientAgentViewModelEvent::HarnessSelected => {
                 self.maybe_enter_agent_view_for_shared_third_party_viewer(ctx);
+                ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
                 ctx.notify();
             }
             AmbientAgentViewModelEvent::HostSelected => {}
@@ -298,6 +308,7 @@ impl TerminalView {
                 // the claude TUI) starts at our terminal's actual dimensions instead of
                 // whatever the sandbox PTY was sized to during setup.
                 self.force_report_viewer_terminal_size(ctx);
+                ctx.emit(TerminalViewEvent::TerminalViewStateChanged);
                 ctx.notify();
             }
             AmbientAgentViewModelEvent::UpdatedSetupCommandVisibility => (),
