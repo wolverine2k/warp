@@ -1771,6 +1771,8 @@ impl UpdateEnvironmentForm {
                     .cloned()
                     .unwrap_or_default(),
                 on_remove_action: UpdateEnvironmentFormAction::RemoveSetupCommand(index),
+                is_disabled: false,
+                tooltip_mouse_state: None,
             });
 
         let helper_text = Text::new(
@@ -1791,7 +1793,7 @@ impl UpdateEnvironmentForm {
             .with_child(helper_text)
             .finish();
 
-        let list_items = render_input_list(None, items, None, false, appearance);
+        let list_items = render_input_list(None, items, None, appearance);
 
         let list = Flex::column()
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
