@@ -2343,7 +2343,7 @@ menu-attach-as-agent-context = 附加为 agent 上下文
 # 斜杠命令面板的描述与参数提示
 # (app/src/search/slash_command_menu/static_commands/commands.rs)
 slash-cmd-agent-desc = 开始新对话
-slash-cmd-add-mcp-desc = 添加新的 MCP 服务器
+slash-cmd-add-mcp-desc = 通过 MCP 设置页添加新的 MCP 服务器
 slash-cmd-pr-comments-desc = 拉取 GitHub PR 评审评论
 slash-cmd-create-environment-desc = 通过引导式流程创建 Oz 环境(Docker 镜像 + 仓库)
 slash-cmd-create-environment-hint = <可选:仓库路径或 GitHub URL>

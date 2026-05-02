@@ -2420,7 +2420,7 @@ menu-attach-as-agent-context = Attach as agent context
 # Slash command palette descriptions and argument hints
 # (app/src/search/slash_command_menu/static_commands/commands.rs)
 slash-cmd-agent-desc = Start a new conversation
-slash-cmd-add-mcp-desc = Add new MCP server
+slash-cmd-add-mcp-desc = Add a new MCP server via the MCP settings page
 slash-cmd-pr-comments-desc = Pull GitHub PR review comments
 slash-cmd-create-environment-desc = Create an Oz environment (Docker image + repos) via guided setup
 slash-cmd-create-environment-hint = <optional repo paths or GitHub URLs>
