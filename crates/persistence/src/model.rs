@@ -1006,6 +1006,10 @@ impl<'de> Deserialize<'de> for PersistedAutoexecuteMode {
         })
     }
 }
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 // Serializes to `conversation_data` column in `agent_conversations`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AgentConversationData {
@@ -1030,6 +1034,10 @@ pub struct AgentConversationData {
     /// The local conversation ID of the parent conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_conversation_id: Option<String>,
+    /// True when this conversation is a parent-side placeholder for a child
+    /// agent executing on a remote worker.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_remote_child: bool,
     /// The server-assigned run identifier (`ai_tasks.id`) for v2 orchestration.
     /// For local agents this arrives via StreamInit; for cloud agents it will
     /// come from SpawnAgentResponse once the local→cloud spawn path is wired.
@@ -1348,6 +1356,7 @@ mod tests {
             parent_agent_id: None,
             agent_name: None,
             parent_conversation_id: None,
+            is_remote_child: false,
             run_id: None,
             autoexecute_override: None,
             last_event_sequence: Some(42),
@@ -1358,6 +1367,27 @@ mod tests {
     }
 
     #[test]
+    fn agent_conversation_data_roundtrips_remote_child_marker() {
+        let data = AgentConversationData {
+            server_conversation_token: None,
+            conversation_usage_metadata: None,
+            reverted_action_ids: None,
+            forked_from_server_conversation_token: None,
+            artifacts_json: None,
+            parent_agent_id: None,
+            agent_name: None,
+            parent_conversation_id: None,
+            is_remote_child: true,
+            run_id: None,
+            autoexecute_override: None,
+            last_event_sequence: None,
+        };
+        let json = serde_json::to_string(&data).expect("serialize");
+        let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
+        assert!(roundtripped.is_remote_child);
+    }
+
+    #[test]
     fn agent_conversation_data_deserializes_legacy_payload_without_last_event_sequence() {
         // Legacy rows persisted before this feature landed omit the field
         // entirely. `#[serde(default)]` must accept them as `None`.
@@ -1365,6 +1395,7 @@ mod tests {
         let data: AgentConversationData =
             serde_json::from_str(legacy_json).expect("legacy rows must deserialize");
         assert_eq!(data.last_event_sequence, None);
+        assert!(!data.is_remote_child);
     }
 
     #[test]
@@ -1378,6 +1409,7 @@ mod tests {
             parent_agent_id: None,
             agent_name: None,
             parent_conversation_id: None,
+            is_remote_child: false,
             run_id: None,
             autoexecute_override: None,
             last_event_sequence: None,

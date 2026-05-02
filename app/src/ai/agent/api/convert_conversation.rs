@@ -78,6 +78,7 @@ pub fn convert_conversation_data_to_ai_conversation(
             parent_agent_id: None,
             agent_name: None,
             parent_conversation_id: None,
+            is_remote_child: false,
             run_id: None,
             autoexecute_override: None,
             last_event_sequence: None,
@@ -93,6 +94,7 @@ pub fn convert_conversation_data_to_ai_conversation(
             parent_agent_id: None,
             agent_name: None,
             parent_conversation_id: None,
+            is_remote_child: false,
             // TODO: Populate run_id from server metadata once it is exposed
             // in ServerAIConversationMetadata. For cloud conversations that
             // were spawned via the server API, the run_id is created at task
