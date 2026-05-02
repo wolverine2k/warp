@@ -15544,7 +15544,11 @@ impl TerminalView {
 
                             if ChannelState::channel().is_dogfood() {
                                 items.push(
+<<<<<<< HEAD
                                     MenuItemFields::new(crate::t!("menu-ai-block-fork-from-here"))
+=======
+                                    MenuItemFields::new("Fork from here (dev only)")
+>>>>>>> a5fde8f1 (Rename "Fork from here" to "Fork from here (dev only)" (#9941))
                                         .with_on_select_action(TerminalAction::ContextMenu(
                                             ContextMenuAction::ForkAIConversationFromExactExchange {
                                                 ai_block_view_id: *rich_content_view_id,
