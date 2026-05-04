@@ -15,9 +15,7 @@ use ai::LLMId;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
-use crate::ai::llms::{
-    LLMInfo, LLMModelHost, LLMProvider, LLMUsageMetadata, RoutingHostConfig,
-};
+use crate::ai::llms::{LLMInfo, LLMModelHost, LLMProvider, LLMUsageMetadata, RoutingHostConfig};
 use crate::settings::ai::AISettings;
 
 /// Snapshot the user's local provider config. Returns `None` when:
@@ -37,7 +35,11 @@ pub fn snapshot_from_app(ctx: &AppContext) -> Option<LocalProviderConfig> {
     let model_id = ai_settings.local_provider_model_id.to_string();
     let supports_tools = *ai_settings.local_provider_supports_tools;
     let context_window_str = ai_settings.local_provider_context_window.to_string();
-    let context_window = context_window_str.trim().parse::<u32>().ok().filter(|n| *n > 0);
+    let context_window = context_window_str
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|n| *n > 0);
 
     // Capture the key from the singleton manager.
     let api_key = LocalProviderKeyManager::as_ref(ctx)

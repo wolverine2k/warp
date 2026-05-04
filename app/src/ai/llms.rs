@@ -522,10 +522,7 @@ impl LLMPreferences {
         // Inject the user's Custom Local LLM Provider entry on startup so the
         // picker shows it immediately, without waiting for a server refresh.
         // See specs/GH9303/.
-        crate::ai::local_provider_config::inject_local_provider_choice(
-            &mut models_by_feature,
-            ctx,
-        );
+        crate::ai::local_provider_config::inject_local_provider_choice(&mut models_by_feature, ctx);
 
         ctx.subscribe_to_model(&NetworkStatus::handle(ctx), |me, event, ctx| {
             if let NetworkStatusEvent::NetworkStatusChanged {
@@ -911,6 +908,34 @@ impl LLMPreferences {
         } else {
             self.refresh_public_models(ctx);
         }
+    }
+
+    /// Re-runs `inject_local_provider_choice` against the current cached
+    /// `models_by_feature` so the picker reflects mutations to any
+    /// `agents.local_provider.*` AISetting (display name, base URL, model id,
+    /// enabled, supports-tools, context window) without waiting for a server
+    /// model-list refresh. Mirrors the inject + cache + emit tail of
+    /// [`Self::on_server_update`] but skips the profile-cleanup pass because
+    /// only the local entry can possibly change here.
+    pub fn refresh_local_provider_entry(&mut self, ctx: &mut ModelContext<Self>) {
+        crate::ai::local_provider_config::inject_local_provider_choice(
+            &mut self.models_by_feature,
+            ctx,
+        );
+        match serde_json::to_string(&self.models_by_feature) {
+            Ok(serialized) => {
+                if let Err(e) = ctx
+                    .private_user_preferences()
+                    .write_value(MODELS_BY_FEATURE_CACHE_KEY, serialized)
+                {
+                    log::error!("Failed to cache LLMs after local-provider refresh: {e}");
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to serialize LLMs for local-provider cache: {e}");
+            }
+        }
+        ctx.emit(LLMPreferencesEvent::UpdatedAvailableLLMs);
     }
 
     pub fn update_feature_model_choices(

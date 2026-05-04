@@ -28,7 +28,9 @@ use crate::settings::{
     AgentModeCommandExecutionPredicate, AgentModeQuerySuggestionsEnabled, AwsBedrockAutoLogin,
     AwsBedrockCredentialsEnabled, CanUseWarpCreditsWithByok, CodeSettings, CodebaseContextEnabled,
     FileBasedMcpEnabled, GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory,
-    IntelligentAutosuggestionsEnabled, MemoryEnabled, NLDInTerminalEnabled,
+    IntelligentAutosuggestionsEnabled, LocalProviderBaseUrl, LocalProviderContextWindow,
+    LocalProviderDisplayName, LocalProviderEnabled, LocalProviderModelId,
+    LocalProviderSupportsTools, MemoryEnabled, NLDInTerminalEnabled,
     NaturalLanguageAutosuggestionsEnabled, OrchestrationEnabled, RuleSuggestionsEnabled,
     SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
     ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
@@ -1468,6 +1470,7 @@ impl AISettingsPageView {
                 }
                 widgets.push(Box::new(CLIAgentWidget::default()));
                 widgets.push(Box::new(ApiKeysWidget::new(ctx)));
+                widgets.push(Box::new(LocalProviderWidget::new(ctx)));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
@@ -1508,6 +1511,7 @@ impl AISettingsPageView {
                     widgets.push(Box::new(VoiceWidget::default()));
                 }
                 widgets.push(Box::new(ApiKeysWidget::new(ctx)));
+                widgets.push(Box::new(LocalProviderWidget::new(ctx)));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
@@ -2125,6 +2129,13 @@ pub enum AISettingsPageAction {
         pattern: String,
         agent: Option<CLIAgent>,
     },
+    // ----- Custom Local LLM Provider (specs/GH9303/) -----
+    ToggleLocalProviderEnabled,
+    SetLocalProviderDisplayName(String),
+    SetLocalProviderBaseUrl(String),
+    SetLocalProviderModelId(String),
+    ToggleLocalProviderSupportsTools,
+    SetLocalProviderContextWindow(String),
 }
 
 impl From<&AISettingsPageAction> for LoginGatedFeature {
@@ -2837,6 +2848,67 @@ impl TypedActionView for AISettingsPageView {
                     report_if_error!(settings
                         .agent_attribution_enabled
                         .toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            // ----- Custom Local LLM Provider (specs/GH9303/) -----
+            AISettingsPageAction::ToggleLocalProviderEnabled => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.local_provider_enabled.toggle_and_save_value(ctx));
+                });
+                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                    prefs.refresh_local_provider_entry(ctx);
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::SetLocalProviderDisplayName(name) => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .local_provider_display_name
+                        .set_value(name.clone(), ctx));
+                });
+                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                    prefs.refresh_local_provider_entry(ctx);
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::SetLocalProviderBaseUrl(url) => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.local_provider_base_url.set_value(url.clone(), ctx));
+                });
+                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                    prefs.refresh_local_provider_entry(ctx);
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::SetLocalProviderModelId(id) => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.local_provider_model_id.set_value(id.clone(), ctx));
+                });
+                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                    prefs.refresh_local_provider_entry(ctx);
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ToggleLocalProviderSupportsTools => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .local_provider_supports_tools
+                        .toggle_and_save_value(ctx));
+                });
+                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                    prefs.refresh_local_provider_entry(ctx);
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::SetLocalProviderContextWindow(value) => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .local_provider_context_window
+                        .set_value(value.clone(), ctx));
+                });
+                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                    prefs.refresh_local_provider_entry(ctx);
                 });
                 ctx.notify();
             }
@@ -5968,9 +6040,6 @@ struct ApiKeysWidget {
     openai_api_key_editor: ViewHandle<EditorView>,
     anthropic_api_key_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
-    /// Custom Local LLM Provider API key (specs/GH9303/). Visible only when
-    /// `FeatureFlag::LocalLlmProvider` is on.
-    local_provider_api_key_editor: ViewHandle<EditorView>,
 
     can_use_warp_credits_with_byok: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
@@ -6075,65 +6144,10 @@ impl ApiKeysWidget {
             "AIzaSy..."
         );
 
-        // Custom Local LLM Provider API key (specs/GH9303/). The editor is
-        // constructed unconditionally so the field is always present on the
-        // struct; render visibility is gated on `FeatureFlag::LocalLlmProvider`
-        // at draw time. Independent of BYO state.
-        let local_provider_key: Option<String> = ai::local_provider::LocalProviderKeyManager::as_ref(
-            ctx,
-        )
-        .key()
-        .map(|s| s.to_string());
-        let local_provider_api_key_editor = ctx.add_typed_action_view(move |ctx| {
-            let appearance = Appearance::handle(ctx).as_ref(ctx);
-            let options = SingleLineEditorOptions {
-                is_password: true,
-                text: TextOptions {
-                    font_size_override: Some(appearance.ui_font_size()),
-                    font_family_override: Some(appearance.monospace_font_family()),
-                    text_colors_override: Some(TextColors {
-                        default_color: appearance.theme().active_ui_text_color(),
-                        disabled_color: appearance.theme().disabled_ui_text_color(),
-                        hint_color: appearance.theme().disabled_ui_text_color(),
-                    }),
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("optional bearer token", ctx);
-            if let Some(key) = &local_provider_key {
-                editor.set_buffer_text(key, ctx);
-            }
-            editor
-        });
-        AISettingsPageView::update_editor_interaction_state(
-            local_provider_api_key_editor.clone(),
-            is_any_ai_enabled
-                && warp_core::features::FeatureFlag::LocalLlmProvider.is_enabled(),
-            ctx,
-        );
-        ctx.subscribe_to_view(
-            &local_provider_api_key_editor,
-            |_, editor, event, ctx| {
-                if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
-                    let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                    let key = buffer_text.is_empty().not().then_some(buffer_text);
-                    ai::local_provider::LocalProviderKeyManager::handle(ctx).update(
-                        ctx,
-                        |model, ctx| {
-                            model.set_key(key, ctx);
-                        },
-                    );
-                }
-            },
-        );
-
         Self {
             openai_api_key_editor,
             anthropic_api_key_editor,
             google_api_key_editor,
-            local_provider_api_key_editor,
 
             can_use_warp_credits_with_byok: Default::default(),
             upgrade_highlight_index: Default::default(),
@@ -6223,19 +6237,6 @@ impl ApiKeysWidget {
             is_enabled,
             app,
         ));
-
-        // Custom Local LLM Provider API key field. Visible only when the
-        // feature flag is on. Independent of BYOK gating because the local
-        // provider is a separate channel that bypasses warp.dev entirely.
-        if warp_core::features::FeatureFlag::LocalLlmProvider.is_enabled() {
-            column.add_child(render_api_key_input(
-                appearance,
-                "Local Provider API Key (optional)",
-                self.local_provider_api_key_editor.clone(),
-                is_any_ai_enabled,
-                app,
-            ));
-        }
 
         // Show upgrade CTA if BYOK is not enabled
         if !is_byo_enabled {
@@ -6365,6 +6366,384 @@ impl SettingsWidget for ApiKeysWidget {
                     .finish(),
             );
         }
+
+        Container::new(column.finish())
+            .with_margin_bottom(HEADER_PADDING)
+            .finish()
+    }
+}
+
+/// Custom Local LLM Provider settings (specs/GH9303/). Renders one cohesive
+/// section under Settings → AI when `FeatureFlag::LocalLlmProvider` is on:
+/// enable toggle, display name, base URL, model id, optional API key,
+/// supports-tools toggle, and an optional context-window hint.
+///
+/// The API key is stored separately via `LocalProviderKeyManager` (OS secure
+/// storage). All other fields are AISettings entries persisted to the user's
+/// settings TOML.
+struct LocalProviderWidget {
+    enabled_toggle: SwitchStateHandle,
+    display_name_editor: ViewHandle<EditorView>,
+    base_url_editor: ViewHandle<EditorView>,
+    model_id_editor: ViewHandle<EditorView>,
+    api_key_editor: ViewHandle<EditorView>,
+    supports_tools_toggle: SwitchStateHandle,
+    context_window_editor: ViewHandle<EditorView>,
+}
+
+impl LocalProviderWidget {
+    fn new(ctx: &mut ViewContext<<Self as SettingsWidget>::View>) -> Self {
+        let ai_settings = AISettings::as_ref(ctx);
+        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(ctx);
+
+        let display_name_initial = ai_settings.local_provider_display_name.value().clone();
+        let base_url_initial = ai_settings.local_provider_base_url.value().clone();
+        let model_id_initial = ai_settings.local_provider_model_id.value().clone();
+        let context_window_initial = ai_settings.local_provider_context_window.value().clone();
+        let api_key_initial: String = ::ai::local_provider::LocalProviderKeyManager::as_ref(ctx)
+            .key()
+            .map(str::to_string)
+            .unwrap_or_default();
+
+        // Build a single-line editor with the standard AI-settings styling.
+        // Mirrors the AwsBedrockWidget pattern; factored as a closure to keep
+        // the per-field setup terse.
+        let make_editor = |ctx: &mut ViewContext<AISettingsPageView>,
+                           placeholder: &'static str,
+                           initial: String,
+                           is_password: bool|
+         -> ViewHandle<EditorView> {
+            ctx.add_typed_action_view(move |ctx| {
+                let appearance = Appearance::handle(ctx).as_ref(ctx);
+                let options = SingleLineEditorOptions {
+                    is_password,
+                    text: TextOptions {
+                        font_size_override: Some(appearance.ui_font_size()),
+                        font_family_override: Some(appearance.monospace_font_family()),
+                        text_colors_override: Some(TextColors {
+                            default_color: appearance.theme().active_ui_text_color(),
+                            disabled_color: appearance.theme().disabled_ui_text_color(),
+                            hint_color: appearance.theme().disabled_ui_text_color(),
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+                let mut editor = EditorView::single_line(options, ctx);
+                editor.set_placeholder_text(placeholder, ctx);
+                if !initial.is_empty() {
+                    editor.set_buffer_text(&initial, ctx);
+                }
+                editor
+            })
+        };
+
+        let display_name_editor = make_editor(ctx, "Local", display_name_initial, false);
+        AISettingsPageView::update_editor_interaction_state(
+            display_name_editor.clone(),
+            is_any_ai_enabled,
+            ctx,
+        );
+        ctx.subscribe_to_view(&display_name_editor, |_, editor, event, ctx| {
+            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
+                ctx.dispatch_typed_action(&AISettingsPageAction::SetLocalProviderDisplayName(
+                    buffer_text,
+                ));
+            }
+        });
+
+        let base_url_editor =
+            make_editor(ctx, "http://localhost:11434/v1", base_url_initial, false);
+        AISettingsPageView::update_editor_interaction_state(
+            base_url_editor.clone(),
+            is_any_ai_enabled,
+            ctx,
+        );
+        ctx.subscribe_to_view(&base_url_editor, |_, editor, event, ctx| {
+            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
+                ctx.dispatch_typed_action(&AISettingsPageAction::SetLocalProviderBaseUrl(
+                    buffer_text,
+                ));
+            }
+        });
+
+        let model_id_editor = make_editor(ctx, "llama3.1:8b", model_id_initial, false);
+        AISettingsPageView::update_editor_interaction_state(
+            model_id_editor.clone(),
+            is_any_ai_enabled,
+            ctx,
+        );
+        ctx.subscribe_to_view(&model_id_editor, |_, editor, event, ctx| {
+            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
+                ctx.dispatch_typed_action(&AISettingsPageAction::SetLocalProviderModelId(
+                    buffer_text,
+                ));
+            }
+        });
+
+        let api_key_editor = make_editor(ctx, "optional bearer token", api_key_initial, true);
+        AISettingsPageView::update_editor_interaction_state(
+            api_key_editor.clone(),
+            is_any_ai_enabled,
+            ctx,
+        );
+        ctx.subscribe_to_view(&api_key_editor, |_, editor, event, ctx| {
+            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
+                let key = buffer_text.is_empty().not().then_some(buffer_text);
+                ::ai::local_provider::LocalProviderKeyManager::handle(ctx).update(
+                    ctx,
+                    |model, ctx| {
+                        model.set_key(key, ctx);
+                    },
+                );
+            }
+        });
+
+        let context_window_editor =
+            make_editor(ctx, "32768 (optional)", context_window_initial, false);
+        AISettingsPageView::update_editor_interaction_state(
+            context_window_editor.clone(),
+            is_any_ai_enabled,
+            ctx,
+        );
+        ctx.subscribe_to_view(&context_window_editor, |_, editor, event, ctx| {
+            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
+                ctx.dispatch_typed_action(&AISettingsPageAction::SetLocalProviderContextWindow(
+                    buffer_text,
+                ));
+            }
+        });
+
+        Self {
+            enabled_toggle: Default::default(),
+            display_name_editor,
+            base_url_editor,
+            model_id_editor,
+            api_key_editor,
+            supports_tools_toggle: Default::default(),
+            context_window_editor,
+        }
+    }
+
+    /// Render a `<label> + <text input>` row mirroring `render_api_key_input`,
+    /// but with a `Setting`-typed label so the local-only icon shows when the
+    /// underlying setting is `SyncToCloud::Never`.
+    fn render_setting_input<S: Setting>(
+        appearance: &Appearance,
+        label: &'static str,
+        editor: ViewHandle<EditorView>,
+        is_enabled: bool,
+        tooltip_states: &RefCell<HashMap<String, MouseStateHandle>>,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let label_element = render_body_item_label::<AISettingsPageAction>(
+            label.to_string(),
+            Some(styles::header_font_color(is_enabled, app)),
+            None,
+            LocalOnlyIconState::for_setting(
+                S::storage_key(),
+                S::sync_to_cloud(),
+                &mut tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+        );
+
+        let editor_style = UiComponentStyles {
+            padding: Some(Coords {
+                top: 10.,
+                bottom: 10.,
+                left: 16.,
+                right: 16.,
+            }),
+            background: Some(appearance.theme().surface_2().into()),
+            ..Default::default()
+        };
+        let input = appearance
+            .ui_builder()
+            .text_input(editor)
+            .with_style(editor_style)
+            .build()
+            .finish();
+
+        Flex::column()
+            .with_spacing(8.)
+            .with_child(label_element)
+            .with_child(input)
+            .finish()
+    }
+
+    /// Render a `<label> + <text input>` row for the API key, which is stored
+    /// in `LocalProviderKeyManager` (not an AISetting), so it has no
+    /// sync-to-cloud icon.
+    fn render_api_key_input(
+        appearance: &Appearance,
+        label: &'static str,
+        editor: ViewHandle<EditorView>,
+        is_enabled: bool,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let label_text = Text::new_inline(label, appearance.ui_font_family(), CONTENT_FONT_SIZE)
+            .with_color(styles::header_font_color(is_enabled, app).into())
+            .finish();
+        let editor_style = UiComponentStyles {
+            padding: Some(Coords {
+                top: 10.,
+                bottom: 10.,
+                left: 16.,
+                right: 16.,
+            }),
+            background: Some(appearance.theme().surface_2().into()),
+            ..Default::default()
+        };
+        let input = appearance
+            .ui_builder()
+            .text_input(editor)
+            .with_style(editor_style)
+            .build()
+            .finish();
+        Flex::column()
+            .with_spacing(8.)
+            .with_child(label_text)
+            .with_child(input)
+            .finish()
+    }
+}
+
+impl SettingsWidget for LocalProviderWidget {
+    type View = AISettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "local llm provider custom ollama lm studio vllm openai compatible api key bearer token endpoint"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::LocalLlmProvider.is_enabled()
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ai_settings = AISettings::as_ref(app);
+        let is_any_ai_enabled = ai_settings.is_any_ai_enabled(app);
+
+        let mut column = Flex::column()
+            .with_child(render_separator(appearance))
+            .with_child(
+                build_sub_header(
+                    appearance,
+                    "Custom Local LLM Provider",
+                    Some(styles::header_font_color(is_any_ai_enabled, app)),
+                )
+                .with_padding_bottom(HEADER_PADDING)
+                .finish(),
+            )
+            .with_child(
+                Container::new(render_ai_setting_description(
+                    "Configure an OpenAI-compatible HTTP endpoint (Ollama, LM Studio, vLLM, llama.cpp, NIM, etc.) so its model appears in the Agent Mode picker. Requests to this provider bypass warp.dev for the LLM call.",
+                    is_any_ai_enabled,
+                    app,
+                ))
+                .with_margin_bottom(-styles::DESCRIPTION_MARGIN_BOTTOM)
+                .finish(),
+            );
+
+        column.add_child(render_ai_setting_toggle::<LocalProviderEnabled>(
+            "Enable local provider",
+            AISettingsPageAction::ToggleLocalProviderEnabled,
+            *ai_settings.local_provider_enabled,
+            is_any_ai_enabled,
+            self.enabled_toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        ));
+
+        column.add_child(
+            Container::new(Self::render_setting_input::<LocalProviderDisplayName>(
+                appearance,
+                "Display name",
+                self.display_name_editor.clone(),
+                is_any_ai_enabled,
+                &view.local_only_icon_tooltip_states,
+                app,
+            ))
+            .with_margin_top(16.)
+            .finish(),
+        );
+
+        column.add_child(
+            Container::new(Self::render_setting_input::<LocalProviderBaseUrl>(
+                appearance,
+                "Base URL",
+                self.base_url_editor.clone(),
+                is_any_ai_enabled,
+                &view.local_only_icon_tooltip_states,
+                app,
+            ))
+            .with_margin_top(16.)
+            .finish(),
+        );
+
+        column.add_child(
+            Container::new(Self::render_setting_input::<LocalProviderModelId>(
+                appearance,
+                "Model ID",
+                self.model_id_editor.clone(),
+                is_any_ai_enabled,
+                &view.local_only_icon_tooltip_states,
+                app,
+            ))
+            .with_margin_top(16.)
+            .finish(),
+        );
+
+        column.add_child(
+            Container::new(Self::render_api_key_input(
+                appearance,
+                "API key (optional)",
+                self.api_key_editor.clone(),
+                is_any_ai_enabled,
+                app,
+            ))
+            .with_margin_top(16.)
+            .finish(),
+        );
+
+        column.add_child(
+            Container::new(render_ai_setting_toggle::<LocalProviderSupportsTools>(
+                "Supports tool calls",
+                AISettingsPageAction::ToggleLocalProviderSupportsTools,
+                *ai_settings.local_provider_supports_tools,
+                is_any_ai_enabled,
+                self.supports_tools_toggle.clone(),
+                &view.local_only_icon_tooltip_states,
+                app,
+            ))
+            .with_margin_top(16.)
+            .finish(),
+        );
+
+        column.add_child(
+            Container::new(Self::render_setting_input::<LocalProviderContextWindow>(
+                appearance,
+                "Context window (tokens, optional)",
+                self.context_window_editor.clone(),
+                is_any_ai_enabled,
+                &view.local_only_icon_tooltip_states,
+                app,
+            ))
+            .with_margin_top(16.)
+            .finish(),
+        );
 
         Container::new(column.finish())
             .with_margin_bottom(HEADER_PADDING)
