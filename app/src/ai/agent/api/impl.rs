@@ -198,7 +198,7 @@ async fn route_to_local_provider(
             // The local-provider stream yields `ResponseEvent` directly (errors
             // are encoded as `Finished{InternalError}` events). Wrap each event
             // in `Ok(...)` so the type matches `ResponseStream`.
-            let wrapped = stream.map(|ev| Ok::<_, Arc<AIApiError>>(ev));
+            let wrapped = stream.map(Ok::<_, Arc<AIApiError>>);
             Ok(Box::pin(wrapped))
         }
         Err(e) => {

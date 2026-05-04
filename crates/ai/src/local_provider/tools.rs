@@ -108,7 +108,6 @@ pub fn translate_openai_tool_call(
     Ok(api::message::ToolCall {
         tool_call_id: tool_call_id.to_string(),
         tool: Some(inner),
-        ..Default::default()
     })
 }
 

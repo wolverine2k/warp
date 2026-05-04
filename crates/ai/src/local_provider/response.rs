@@ -88,6 +88,12 @@ struct ToolBuffer {
     emitted: bool,
 }
 
+impl Default for OpenAiSseAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OpenAiSseAdapter {
     pub fn new() -> Self {
         Self::with_ids(
