@@ -217,12 +217,12 @@ use crate::ai::{
         AIBlock, AIBlockEvent, BlocklistAIActionEvent, BlocklistAIActionModel,
         BlocklistAIContextEvent, BlocklistAIContextModel, BlocklistAIController,
         BlocklistAIControllerEvent, BlocklistAIHistoryEvent, BlocklistAIHistoryModel,
-        BlocklistAIInputEvent, BlocklistAIInputModel, InputConfig, InputType,
-        LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel, MaaPassiveSuggestionsEvent,
-        MaaPassiveSuggestionsModel, PassiveSuggestionsModels, PendingQueryState,
-        PromptSuggestionExecutor, PromptSuggestionExecutorEvent, RequestFileEditsFormatKind,
-        ShellCommandExecutor, ShellCommandExecutorEvent, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT,
-        PRE_REWIND_PREFIX,
+        BlocklistAIInputEvent, BlocklistAIInputModel, ConversationStatusUpdate, InputConfig,
+        InputType, LegacyPassiveSuggestionsEvent, LegacyPassiveSuggestionsModel,
+        MaaPassiveSuggestionsEvent, MaaPassiveSuggestionsModel, PassiveSuggestionsModels,
+        PendingQueryState, PromptSuggestionExecutor, PromptSuggestionExecutorEvent,
+        RequestFileEditsFormatKind, ShellCommandExecutor, ShellCommandExecutorEvent,
+        ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, PRE_REWIND_PREFIX,
     },
     execution_profiles::profiles::{AIExecutionProfilesModel, ClientProfileId},
     get_relevant_files::controller::GetRelevantFilesController,
@@ -3487,7 +3487,7 @@ impl TerminalView {
                     event,
                     AgentConversationsModelEvent::TasksUpdated
                         | AgentConversationsModelEvent::NewTasksReceived
-                        | AgentConversationsModelEvent::ConversationUpdated
+                        | AgentConversationsModelEvent::ConversationUpdated { .. }
                         | AgentConversationsModelEvent::ConversationArtifactsUpdated { .. }
                 );
                 // Only refresh panel if it's currently open (avoids unnecessary work)
@@ -5333,7 +5333,7 @@ impl TerminalView {
             }
             BlocklistAIHistoryEvent::UpdatedConversationStatus {
                 conversation_id,
-                is_restored,
+                update,
                 ..
             } => {
                 // When the conversation state changes or a new conversation
@@ -5342,7 +5342,7 @@ impl TerminalView {
 
                 // Don't send notifications or insert ambient agent session ended tombstone
                 // if we're restoring this conversation on startup.
-                if *is_restored {
+                if matches!(update, ConversationStatusUpdate::Restored) {
                     return;
                 }
 
@@ -15561,11 +15561,7 @@ impl TerminalView {
 
                             if ChannelState::channel().is_dogfood() {
                                 items.push(
-<<<<<<< HEAD
                                     MenuItemFields::new(crate::t!("menu-ai-block-fork-from-here"))
-=======
-                                    MenuItemFields::new("Fork from here (dev only)")
->>>>>>> a5fde8f1 (Rename "Fork from here" to "Fork from here (dev only)" (#9941))
                                         .with_on_select_action(TerminalAction::ContextMenu(
                                             ContextMenuAction::ForkAIConversationFromExactExchange {
                                                 ai_block_view_id: *rich_content_view_id,
