@@ -572,6 +572,7 @@ default = [
     "cloud_mode_from_local_session",
     "cloud_mode_image_context",
     "agent_mode_computer_use",
+    "local_llm_provider",
     "oz_platform_skills",
     "sync_ambient_plans",
     "conversation_artifacts",
@@ -698,6 +699,7 @@ list_skills = []
 # include dependencies that should only exist in such environments.
 local_tty = []
 local_computer_use = []
+local_llm_provider = []
 # This feature is enabled in build.rs when compiling for platforms which
 # have APIs for interacting with a local filesystem.  It can be used to
 # conditionally include dependencies that should only exist in such

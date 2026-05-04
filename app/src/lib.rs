@@ -2667,6 +2667,8 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::AgentModeComputerUse,
         #[cfg(feature = "local_computer_use")]
         FeatureFlag::LocalComputerUse,
+        #[cfg(feature = "local_llm_provider")]
+        FeatureFlag::LocalLlmProvider,
         #[cfg(feature = "team_api_keys")]
         FeatureFlag::TeamApiKeys,
         #[cfg(feature = "cloud_conversations")]
