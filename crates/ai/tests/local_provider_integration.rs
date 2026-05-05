@@ -122,6 +122,7 @@ fn empty_input() -> LocalProviderInput {
         user_query: Some("hi".into()),
         tasks: vec![],
         supported_tools: vec![],
+        ..Default::default()
     }
 }
 

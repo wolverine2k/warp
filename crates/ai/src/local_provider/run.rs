@@ -57,6 +57,23 @@ pub async fn run_chat_turn(
     let body = compose_chat_completion_request(&input, &cfg);
     let body_json = serde_json::to_string(&body)?;
 
+    // Construct the SSE adapter with the conversation's actual ids when the
+    // caller plumbed them through (real agent flow). Without this, the
+    // adapter's randomly-generated `local:<uuid>` task id never matches the
+    // task the controller is driving, every emitted event triggers
+    // `UpdateConversationError::TaskNotFound`, and the user sees no output.
+    // Falls back to fresh ids when the caller didn't provide any (test paths
+    // that drive the adapter in isolation, where matching isn't required).
+    let adapter = match (input.conversation_id.as_deref(), input.task_id.as_deref()) {
+        (Some(conversation_id), Some(task_id)) => OpenAiSseAdapter::with_ids(
+            conversation_id.to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+            task_id.to_string(),
+        ),
+        _ => OpenAiSseAdapter::new(),
+    };
+
     let mut request_builder = http
         .post(url)
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -82,7 +99,7 @@ pub async fn run_chat_turn(
     // observes the EOF.
     event_source.set_retry_policy(Box::new(reqwest_eventsource::retry::Never));
 
-    let synthesized = synthesize_stream(event_source, cancel_rx).boxed();
+    let synthesized = synthesize_stream(adapter, event_source, cancel_rx).boxed();
     Ok(synthesized)
 }
 
@@ -110,10 +127,10 @@ type BodyReadFuture =
     Pin<Box<dyn Future<Output = Result<String, reqwest::Error>> + Send + 'static>>;
 
 fn synthesize_stream(
+    mut adapter: OpenAiSseAdapter,
     mut event_source: reqwest_eventsource::EventSource,
     mut cancel_rx: oneshot::Receiver<()>,
 ) -> impl futures::Stream<Item = api::ResponseEvent> + Send {
-    let mut adapter = OpenAiSseAdapter::new();
     let mut pending: std::collections::VecDeque<api::ResponseEvent> = Default::default();
     let mut closed = false;
     let mut errored: Option<String> = None;

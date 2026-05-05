@@ -22,7 +22,7 @@ use crate::local_provider::{
 
 /// Minimal projection of `RequestParams` plus history that the request
 /// translator needs. The dispatch fork builds this; the translator consumes it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LocalProviderInput {
     /// The new turn's user query, when there is one. `None` for variants like
     /// `ResumeConversation` where history alone drives the next request.
@@ -34,6 +34,17 @@ pub struct LocalProviderInput {
     /// only those `LocalTool::from_name` recognizes; unsupported entries
     /// are silently dropped (they wouldn't have schemas anyway).
     pub supported_tools: Vec<api::ToolType>,
+    /// Conversation token from the calling controller. When `Some`, the SSE
+    /// adapter emits StreamInit/AddMessages with this id so the controller
+    /// can match the resulting events to its existing AIConversation. When
+    /// `None`, the adapter generates a fresh `local:<uuid>` (legacy/test
+    /// path; produces `Conversation(TaskNotFound)` when wired into the real
+    /// agent flow because the controller has no matching task).
+    pub conversation_id: Option<String>,
+    /// The id of the active task this turn writes into. Same matching
+    /// reason as `conversation_id`. Should be the id of the most recent
+    /// entry in `tasks` — the one the controller is actively driving.
+    pub task_id: Option<String>,
 }
 
 /// Build the OpenAI request body for a single turn.
@@ -364,6 +375,7 @@ mod tests {
             user_query: None,
             tasks: vec![],
             supported_tools: vec![],
+            ..Default::default()
         }
     }
 
@@ -464,6 +476,7 @@ mod tests {
             user_query: None,
             tasks: vec![task],
             supported_tools: vec![],
+            ..Default::default()
         };
         let req = compose_chat_completion_request(&input, &cfg());
         // system + 3 history messages
@@ -497,6 +510,7 @@ mod tests {
             user_query: None,
             tasks: vec![task],
             supported_tools: vec![],
+            ..Default::default()
         };
         let req = compose_chat_completion_request(&input, &cfg());
         assert_eq!(req.messages.len(), 1, "only system; reasoning is dropped");
@@ -526,6 +540,7 @@ mod tests {
             user_query: None,
             tasks: vec![task],
             supported_tools: vec![],
+            ..Default::default()
         };
         let req = compose_chat_completion_request(&input, &cfg());
         assert_eq!(req.messages.len(), 2);

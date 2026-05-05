@@ -130,6 +130,7 @@ async fn main() -> ExitCode {
         user_query: Some(args.query.clone()),
         tasks: vec![],
         supported_tools,
+        ..Default::default()
     };
 
     let (cancel_tx, cancel_rx) = futures::channel::oneshot::channel();

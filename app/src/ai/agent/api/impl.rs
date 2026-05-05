@@ -186,10 +186,27 @@ async fn route_to_local_provider(
     let user_query = extract_latest_user_query(&params.input);
     let tasks = std::mem::take(&mut params.tasks);
 
+    // Plumb the controller's existing conversation + task ids through to
+    // the SSE adapter so emitted events match the AIConversation the
+    // controller is driving. Without this, OpenAiSseAdapter generates
+    // fresh `local:<uuid>` ids that don't exist in the conversation, every
+    // event triggers `UpdateConversationError::TaskNotFound`, and the user
+    // sees no output. The conversation token may be absent on the very
+    // first turn (before the server-side conversation token is assigned);
+    // the task id must come from the latest task in `tasks` because that's
+    // the one the controller is actively writing into.
+    let conversation_id = params
+        .conversation_token
+        .as_ref()
+        .map(|token| token.as_str().to_string());
+    let task_id = tasks.last().map(|t| t.id.clone());
+
     let input = local_provider::request::LocalProviderInput {
         user_query,
         tasks,
         supported_tools,
+        conversation_id,
+        task_id,
     };
 
     let http = reqwest::Client::new();
