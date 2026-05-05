@@ -517,7 +517,6 @@ mod tests {
                 message: Some(api::message::Message::ToolCall(api::message::ToolCall {
                     tool_call_id: "call_xyz".into(),
                     tool: Some(tool),
-                    ..Default::default()
                 })),
                 ..Default::default()
             }],
@@ -602,7 +601,6 @@ mod tests {
                         ],
                     },
                 )),
-                ..Default::default()
             },
         ));
         let s = summarize_tool_result(&r);
@@ -620,7 +618,6 @@ mod tests {
                         message: "permission denied".into(),
                     },
                 )),
-                ..Default::default()
             },
         ));
         let s = summarize_tool_result(&r);
@@ -647,7 +644,6 @@ mod tests {
                         }],
                     },
                 )),
-                ..Default::default()
             },
         ));
         let s = summarize_tool_result(&r);
@@ -663,7 +659,6 @@ mod tests {
                 result: Some(api::grep_result::Result::Success(
                     api::grep_result::Success { matched_files: vec![] },
                 )),
-                ..Default::default()
             },
         ));
         assert_eq!(summarize_tool_result(&r), "<no matches>");
@@ -686,7 +681,6 @@ mod tests {
                         warnings: String::new(),
                     },
                 )),
-                ..Default::default()
             },
         ));
         let s = summarize_tool_result(&r);
@@ -715,7 +709,6 @@ mod tests {
                         ..Default::default()
                     },
                 )),
-                ..Default::default()
             },
         ));
         let s = summarize_tool_result(&r);
