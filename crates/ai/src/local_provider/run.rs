@@ -97,6 +97,18 @@ pub async fn run_chat_turn(
 /// trampoline through `wake_by_ref()` — `reqwest_eventsource::EventSource`
 /// handles its own wake-ups when network data arrives, and self-waking only
 /// causes tight-spin behavior that masks legitimate Pending states.
+/// How many characters of the upstream HTTP error body to surface in the
+/// `Finished{InternalError}` reason. 500 is enough to fit OpenAI's
+/// `{"error":{"message":"..."}}` envelopes, including the rate-limit
+/// "exceeded your current quota" copy, without flooding the chat UI.
+const ERROR_BODY_EXCERPT_CHARS: usize = 500;
+
+/// Boxed async body-read future for an HTTP error response. Stored in the
+/// poll_fn closure so subsequent polls can drive it to completion without
+/// blocking the stream.
+type BodyReadFuture =
+    Pin<Box<dyn Future<Output = Result<String, reqwest::Error>> + Send + 'static>>;
+
 fn synthesize_stream(
     mut event_source: reqwest_eventsource::EventSource,
     mut cancel_rx: oneshot::Receiver<()>,
@@ -105,6 +117,12 @@ fn synthesize_stream(
     let mut pending: std::collections::VecDeque<api::ResponseEvent> = Default::default();
     let mut closed = false;
     let mut errored: Option<String> = None;
+    // Holds a (prefix, body-read-future) pair when the upstream returned an
+    // HTTP error response that still has a readable body. The prefix is the
+    // user-visible status / content-type string; once the future resolves we
+    // splice in the body excerpt and feed the combined message to
+    // `adapter.record_upstream_error` before flushing.
+    let mut body_read: Option<(String, BodyReadFuture)> = None;
     stream::poll_fn(move |cx| {
         use std::task::Poll;
         loop {
@@ -114,6 +132,35 @@ fn synthesize_stream(
             }
             if closed {
                 return Poll::Ready(None);
+            }
+
+            // If we kicked off a body-read for an HTTP error response, drive
+            // it to completion before anything else. The event_source has
+            // already errored out, so polling it further would just churn.
+            if let Some((prefix, fut)) = body_read.as_mut() {
+                match fut.as_mut().poll(cx) {
+                    Poll::Pending => return Poll::Pending,
+                    Poll::Ready(result) => {
+                        let body = result
+                            .unwrap_or_else(|e| format!("(failed to read body: {e})"));
+                        let trimmed = body.trim();
+                        let excerpt: String =
+                            trimmed.chars().take(ERROR_BODY_EXCERPT_CHARS).collect();
+                        let msg = if excerpt.is_empty() {
+                            prefix.clone()
+                        } else {
+                            format!("{prefix}: {excerpt}")
+                        };
+                        log::warn!("local provider stream errored before EOF: {msg}");
+                        adapter.record_upstream_error(msg);
+                        for ev in adapter.finish() {
+                            pending.push_back(ev);
+                        }
+                        closed = true;
+                        body_read = None;
+                        continue;
+                    }
+                }
             }
 
             // Cancellation check. Treat both an explicit `send(())` and a
@@ -171,13 +218,39 @@ fn synthesize_stream(
                     continue;
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    // reqwest-eventsource closes the stream after most errors;
-                    // record the message so we can log on EOF, then keep
-                    // polling so we observe Ready(None) and finalize via the
-                    // normal flush path.
-                    errored = Some(e.to_string());
+                    // For HTTP error responses (4xx/5xx, wrong content-type)
+                    // the response is still in the error variant and its body
+                    // is unread — that body usually contains the actionable
+                    // message (e.g. OpenAI's quota / model / auth JSON
+                    // envelope). Take ownership and kick off an async read;
+                    // the next poll will drive it to completion. For other
+                    // variants (transport, parser, utf8) the status line is
+                    // all we have, so fall back to `e.to_string()`.
+                    use reqwest_eventsource::Error;
+                    match e {
+                        Error::InvalidStatusCode(status, response) => {
+                            let prefix = format!(
+                                "HTTP {} {}",
+                                status.as_u16(),
+                                status.canonical_reason().unwrap_or("")
+                            );
+                            body_read = Some((prefix, Box::pin(response.text())));
+                        }
+                        Error::InvalidContentType(content_type, response) => {
+                            let prefix = format!(
+                                "Server returned non-SSE content-type {content_type:?} \
+                                 (expected text/event-stream — check Base URL is OpenAI \
+                                 Chat Completions compatible)"
+                            );
+                            body_read = Some((prefix, Box::pin(response.text())));
+                        }
+                        other => {
+                            errored = Some(other.to_string());
+                        }
+                    }
                     // Some error variants leave the source dead immediately;
-                    // we'll observe Ready(None) on the next iteration.
+                    // we'll observe Ready(None) on the next iteration (or
+                    // resolve `body_read` first, whichever comes earlier).
                     continue;
                 }
             }
