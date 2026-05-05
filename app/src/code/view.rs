@@ -92,8 +92,6 @@ const TAB_PADDING: f32 = 2.;
 
 // Keybinding constants - exported so AI document view can reuse
 pub const SAVE_FILE_BINDING_NAME: &str = "code_view:save";
-pub const SAVE_FILE_BINDING_DESCRIPTION: &str = "Save file";
-
 pub fn init(app: &mut AppContext) {
     super::editor::view::init(app);
     super::local_code_editor::init(app);
@@ -102,28 +100,28 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             SAVE_FILE_BINDING_NAME,
-            SAVE_FILE_BINDING_DESCRIPTION,
+            crate::t!("keybinding-desc-save-file"),
             CodeViewAction::SaveFile,
         )
         .with_context_predicate(text_entry.clone())
         .with_key_binding("cmdorctrl-s"),
         EditableBinding::new(
             "code_view:save_as",
-            "Save file as",
+            crate::t!("keybinding-desc-code-save-as"),
             CodeViewAction::SaveFileAs,
         )
         .with_context_predicate(text_entry.clone())
         .with_key_binding("cmdorctrl-shift-S"),
         EditableBinding::new(
             "code_view:close_all_tabs",
-            "Close all tabs",
+            crate::t!("keybinding-desc-code-close-all-tabs"),
             CodeViewAction::CloseAll,
         )
         .with_context_predicate(id!("CodeEditorView"))
         .with_key_binding("cmdorctrl-r w"),
         EditableBinding::new(
             "code_view:close_saved_tabs",
-            "Close saved tabs",
+            crate::t!("keybinding-desc-code-close-saved-tabs"),
             CodeViewAction::CloseSaved,
         )
         .with_context_predicate(id!("CodeEditorView"))
@@ -1955,14 +1953,14 @@ impl CodeView {
         if let Some(path) = self.local_path(ctx) {
             items.extend([
                 MenuItem::Separator,
-                MenuItemFields::new("Copy file path")
+                MenuItemFields::new(crate::t!("code-copy-file-path"))
                     .with_on_select_action(CodeViewAction::CopyFilePath)
                     .into_item(),
             ]);
 
             if is_markdown_file(&path) {
                 items.push(
-                    MenuItemFields::new("View Markdown preview")
+                    MenuItemFields::new(crate::t!("code-view-markdown-preview"))
                         .with_on_select_action(CodeViewAction::RenderMarkdown)
                         .into_item(),
                 );

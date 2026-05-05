@@ -140,6 +140,11 @@ pub enum LeafContents {
     },
     /// A new first-time user experience which prioritizes choosing a coding repository.
     GetStarted,
+    /// SSH 服务器编辑器 pane(openWarp 独有)。引用 `ssh_servers.node_id` 主键
+    /// 加载/保存。**不持久化** — 重启后用户从左侧 SSH 管理器树重新打开。
+    SshServer {
+        node_id: String,
+    },
 }
 
 #[cfg(feature = "local_fs")]
@@ -161,7 +166,10 @@ impl LeafContents {
             LeafContents::NetworkLog
             // Environment management panes are opened on-demand via workspace
             // actions and have no persistable state.
-            | LeafContents::EnvironmentManagement(_) => false,
+            | LeafContents::EnvironmentManagement(_)
+            // SSH server editor:数据(host/user/...)持久化在 ssh_servers 表里,
+            // pane 本身只是 view,关掉再打开没差别。
+            | LeafContents::SshServer { .. } => false,
             LeafContents::Terminal(_)
             | LeafContents::Notebook(_)
             | LeafContents::AIDocument(_)
@@ -301,6 +309,7 @@ pub enum LeftPanelDisplayedTab {
     GlobalSearch,
     WarpDrive,
     ConversationListView,
+    SshManager,
 }
 
 impl From<ToolPanelView> for LeftPanelDisplayedTab {
@@ -310,6 +319,7 @@ impl From<ToolPanelView> for LeftPanelDisplayedTab {
             ToolPanelView::GlobalSearch { .. } => LeftPanelDisplayedTab::GlobalSearch,
             ToolPanelView::WarpDrive => LeftPanelDisplayedTab::WarpDrive,
             ToolPanelView::ConversationListView => LeftPanelDisplayedTab::ConversationListView,
+            ToolPanelView::SshManager => LeftPanelDisplayedTab::SshManager,
         }
     }
 }

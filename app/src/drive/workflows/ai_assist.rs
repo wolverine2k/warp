@@ -3,15 +3,13 @@ use serde::{Deserialize, Serialize};
 use warp_graphql::mutations::generate_metadata_for_command::{
     GenerateMetadataForCommandFailureType, GenerateMetadataForCommandSuccess,
 };
-use warpui::{SingletonEntity, ViewContext};
+use warpui::ViewContext;
 
 use crate::{
-    ai::AIRequestUsageModel,
-    auth::AuthStateProvider,
+    ai::agent_providers::active_ai::workflow_metadata,
     send_telemetry_from_ctx,
     server::telemetry::TelemetryEvent,
     workflows::workflow::{Argument, Workflow},
-    workspaces::user_workspaces::UserWorkspaces,
 };
 
 use super::{
@@ -69,14 +67,11 @@ pub enum GeneratedCommandMetadataError {
 impl GeneratedCommandMetadataError {
     pub fn user_facing_message(&self) -> String {
         match self {
-            Self::BadCommand => {
-                "Failed to generate metadata. Please try again with a different command."
-            }
-            Self::AiProviderError => "Something went wrong. Please try again.",
-            Self::RateLimited => "Looks like you're out of AI credits. Please try again later.",
-            Self::Other => "Something went wrong. Please try again.",
+            Self::BadCommand => crate::t!("workflow-ai-assist-error-bad-command"),
+            Self::AiProviderError => crate::t!("workflow-ai-assist-error-generic"),
+            Self::RateLimited => crate::t!("workflow-ai-assist-error-rate-limited"),
+            Self::Other => crate::t!("workflow-ai-assist-error-generic"),
         }
-        .to_string()
     }
 }
 
@@ -92,93 +87,79 @@ impl From<GenerateMetadataForCommandFailureType> for GeneratedCommandMetadataErr
 }
 
 impl WorkflowModal {
-    /// Send request to generate metadata for the command in command editor.
+    /// 通过 BYOP one-shot completion 为命令生成 metadata,并把 AI 反馈
+    /// 直接落到 modal 编辑器对应字段。无 BYOP 配置 → 直接 emit 错误事件。
     pub(super) fn issue_request(&mut self, ctx: &mut ViewContext<Self>) {
-        let ai_client = self.ai_client.clone();
         let content = self.content_editor.as_ref(ctx).buffer_text(ctx);
         let raw_request = content.trim().to_string();
 
+        let Some(rendered) = workflow_metadata::dispatch(
+            ctx,
+            None,
+            workflow_metadata::Input {
+                command: raw_request,
+            },
+        ) else {
+            ctx.emit(WorkflowModalEvent::AiAssistError(crate::t!(
+                "workflow-ai-assist-error-byop-required"
+            )));
+            return;
+        };
+
         ctx.spawn(
-            async move { ai_client.generate_metadata_for_command(raw_request).await },
-            move |modal, response, ctx| {
-                match response {
-                    Ok(metadata) => {
-                        modal.ai_metadata_assist_state = AiAssistState::Generated;
-                        modal.enable_editors(ctx);
+            async move { workflow_metadata::run(rendered).await },
+            move |modal, response, ctx| match response {
+                Some(metadata) => {
+                    modal.ai_metadata_assist_state = AiAssistState::Generated;
+                    modal.enable_editors(ctx);
 
-                        let arguments = metadata
-                            .arguments
-                            .into_iter()
-                            .map(|parameter| Argument {
-                                name: parameter.name,
-                                description: Some(parameter.description),
-                                default_value: Some(parameter.default_value),
-                                arg_type: Default::default()
-                            })
-                            .collect_vec();
+                    let arguments = metadata
+                        .arguments
+                        .into_iter()
+                        .map(|parameter| Argument {
+                            name: parameter.name,
+                            description: Some(parameter.description),
+                            default_value: Some(parameter.default_value),
+                            arg_type: Default::default(),
+                        })
+                        .collect_vec();
 
-                        let workflow = Workflow::Command {
-                            name: metadata.title,
-                            description: Some(metadata.description),
-                            command: metadata.command,
-                            arguments,
-                            tags: vec![],
-                            source_url: None,
-                            author: None,
-                            author_url: None,
-                            shells: vec![],
-                            environment_variables: None,
-                        };
+                    let workflow = Workflow::Command {
+                        name: metadata.title,
+                        description: Some(metadata.description),
+                        command: metadata.command,
+                        arguments,
+                        tags: vec![],
+                        source_url: None,
+                        author: None,
+                        author_url: None,
+                        shells: vec![],
+                        environment_variables: None,
+                    };
 
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::AutoGenerateMetadataSuccess,
-                            ctx
-                        );
+                    send_telemetry_from_ctx!(TelemetryEvent::AutoGenerateMetadataSuccess, ctx);
 
-                        modal.populate_missing_field_with_suggestion(workflow, ctx);
-                        ctx.notify();
-                    }
-                    Err(err) => {
-                        let message = err.user_facing_message();
-                        if let GeneratedCommandMetadataError::RateLimited = err {
-                            let auth_state = AuthStateProvider::as_ref(ctx).get();
-                            let current_user_id = auth_state.user_id().unwrap_or_default();
-                            if let Some(team) = UserWorkspaces::as_ref(ctx).current_team() {
-                                let current_user_email =
-                                    auth_state.user_email().unwrap_or_default();
-                                let has_admin_permissions = team.has_admin_permissions(&current_user_email);
-                                if team.billing_metadata.can_upgrade_to_higher_tier_plan() {
-                                    if has_admin_permissions {
-                                        ctx.emit(WorkflowModalEvent::AiAssistUpgradeError(Some(team.uid), current_user_id));
-                                    } else {
-                                        ctx.emit(WorkflowModalEvent::AiAssistError("Looks like you're out of AI credits. Contact a team admin to upgrade for more credits.".to_string()));
-                                    }
-                                } else {
-                                    ctx.emit(WorkflowModalEvent::AiAssistError(message.clone()));
-                                }
-                            } else {
-                                ctx.emit(WorkflowModalEvent::AiAssistUpgradeError(None, current_user_id));
-                            }
-                        } else {
-                            ctx.emit(WorkflowModalEvent::AiAssistError(message.clone()));
-                        }
-
-                        send_telemetry_from_ctx!(
-                            TelemetryEvent::AutoGenerateMetadataError {
-                                error_payload: serde_json::json!(err)
-                            },
-                            ctx
-                        );
-
-                        modal.ai_metadata_assist_state = AiAssistState::PreRequest;
-                        modal.enable_editors(ctx);
-                        ctx.notify();
-                    }
+                    modal.populate_missing_field_with_suggestion(workflow, ctx);
+                    ctx.notify();
                 }
-                AIRequestUsageModel::handle(ctx).update(ctx, |request_usage_model, ctx| {
-                    request_usage_model.refresh_request_usage_async(ctx);
-                });
-            }
+                None => {
+                    let message = GeneratedCommandMetadataError::BadCommand.user_facing_message();
+                    ctx.emit(WorkflowModalEvent::AiAssistError(message));
+
+                    send_telemetry_from_ctx!(
+                        TelemetryEvent::AutoGenerateMetadataError {
+                            error_payload: serde_json::json!(
+                                GeneratedCommandMetadataError::BadCommand
+                            )
+                        },
+                        ctx
+                    );
+
+                    modal.ai_metadata_assist_state = AiAssistState::PreRequest;
+                    modal.enable_editors(ctx);
+                    ctx.notify();
+                }
+            },
         );
 
         self.ai_metadata_assist_state = AiAssistState::RequestInFlight;

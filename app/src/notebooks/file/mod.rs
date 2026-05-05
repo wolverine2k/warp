@@ -219,14 +219,14 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "notebookview:focus_terminal_input",
-            "Focus Terminal Input from File",
+            crate::t!("keybinding-desc-notebook-focus-terminal-input-from-file"),
             FileNotebookAction::FocusTerminalInput,
         )
         .with_context_predicate(id!("FileNotebookView"))
         .with_key_binding(cmd_or_ctrl_shift("l")),
         EditableBinding::new(
             "notebookview:reload_file",
-            "Reload file",
+            crate::t!("keybinding-desc-notebook-reload-file"),
             FileNotebookAction::ReloadFile,
         )
         .with_context_predicate(id!("FileNotebookView")),
@@ -945,7 +945,7 @@ impl BackingView for FileNotebookView {
         }) = self.file_state.source()
         {
             actions.push(
-                MenuItemFields::new("Refresh file")
+                MenuItemFields::new(crate::t!("notebook-refresh-file"))
                     .with_on_select_action(FileNotebookAction::ReloadFile)
                     .into_item(),
             );
@@ -955,13 +955,13 @@ impl BackingView for FileNotebookView {
                 // The markdown rendered/raw toggle is always visible in the pane header, so we don't
                 // duplicate it in the overflow menu. Keep "Open in editor" available for local files.
                 actions.push(
-                    MenuItemFields::new("Open in editor")
+                    MenuItemFields::new(crate::t!("notebook-open-in-editor"))
                         .with_on_select_action(FileNotebookAction::OpenInEditor)
                         .into_item(),
                 );
                 actions.extend([
                     MenuItem::Separator,
-                    MenuItemFields::new("Copy file path")
+                    MenuItemFields::new(crate::t!("code-copy-file-path"))
                         .with_on_select_action(FileNotebookAction::CopyFilePath)
                         .into_item(),
                 ]);

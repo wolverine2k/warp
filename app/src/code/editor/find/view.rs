@@ -108,7 +108,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "find:find_next_occurrence",
-            "Find the next occurrence of your search query",
+            crate::t!("keybinding-desc-find-next-occurrence"),
             FindAction::CmdG,
         )
         .with_context_predicate(id!("CodeEditorFind"))
@@ -118,7 +118,7 @@ pub fn init(app: &mut AppContext) {
         .with_linux_or_windows_key_binding("f3"),
         EditableBinding::new(
             "find:find_prev_occurrence",
-            "Find the previous occurrence of your search query",
+            crate::t!("keybinding-desc-find-prev-occurrence"),
             FindAction::CmdShiftG,
         )
         .with_context_predicate(id!("CodeEditorFind"))
@@ -174,7 +174,7 @@ impl CodeEditorFind {
         let editor_height = line_height + (2. * FIND_EDITOR_PADDING) + 5.;
 
         let select_all_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Select all", SecondaryTheme)
+            ActionButton::new(crate::t!("code-select-all"), SecondaryTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(FindAction::SelectAll);
                 })
@@ -184,7 +184,7 @@ impl CodeEditorFind {
         });
 
         let replace_all_button = ctx.add_typed_action_view(|ctx| {
-            let mut button = ActionButton::new("Replace all", SecondaryTheme)
+            let mut button = ActionButton::new(crate::t!("code-replace-all"), SecondaryTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(FindAction::ReplaceAll);
                 })

@@ -89,6 +89,13 @@ impl PtyRecorder {
         self.recording_handle.is_some()
     }
 
+    /// Returns a clone of the inactive PTY-reads broadcast receiver,
+    /// for non-recording listeners(SSH manager 的 SecretInjector 用)。
+    /// Wasm / no-local_fs 版本永远是 `None`。
+    pub fn inactive_pty_reads_rx(&self) -> Option<InactiveReceiver<Arc<Vec<u8>>>> {
+        self.pty_reads_rx.clone()
+    }
+
     /// Toggle per-session recording and update the recording state.
     pub fn toggle_recording(&mut self, ctx: &mut ModelContext<Self>) {
         self.is_per_session_recording_enabled = !self.is_per_session_recording_enabled;

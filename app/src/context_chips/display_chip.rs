@@ -1023,7 +1023,7 @@ impl DisplayChip {
             if state.is_hovered() && is_interactive && !menu_open {
                 let tool_tip = appearance
                     .ui_builder()
-                    .tool_tip("Change git branch".to_string())
+                    .tool_tip(crate::t!("context-chip-change-git-branch"))
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());
@@ -1090,7 +1090,7 @@ impl DisplayChip {
             if state.is_hovered() {
                 let tool_tip = appearance
                     .ui_builder()
-                    .tool_tip("View pull request".to_string())
+                    .tool_tip(crate::t!("context-chip-view-pull-request"))
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());
@@ -1263,7 +1263,7 @@ impl DisplayChip {
                 if state.is_hovered() {
                     let tool_tip = appearance
                         .ui_builder()
-                        .tool_tip("Change working directory".to_string())
+                        .tool_tip(crate::t!("context-chip-change-working-directory"))
                         .build()
                         .finish();
 
@@ -1310,7 +1310,7 @@ impl DisplayChip {
                 if state.is_hovered() && !is_cli_agent_active {
                     let tool_tip = appearance
                         .ui_builder()
-                        .tool_tip("Working directory".to_string())
+                        .tool_tip(crate::t!("context-chip-working-directory"))
                         .build()
                         .finish();
 

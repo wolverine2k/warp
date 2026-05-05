@@ -203,11 +203,14 @@ impl CommentListView {
         let menu = ctx.add_view(|_| Menu::new());
 
         let comments_button = ctx.add_view(|_| {
-            ActionButton::new("1 Comment", CustomSecondaryActionTheme)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(CommentListAction::ToggleCollapsed);
-                })
+            ActionButton::new(
+                crate::t!("code-review-one-comment"),
+                CustomSecondaryActionTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(CommentListAction::ToggleCollapsed);
+            })
         });
 
         ctx.subscribe_to_view(&menu, |me, _, event, ctx| match event {
@@ -1069,19 +1072,19 @@ impl CommentListView {
         html_url: Option<&str>,
         appearance: &Appearance,
     ) -> Vec<MenuItem<CommentListAction>> {
-        let mut items = vec![MenuItemFields::new("Copy text")
+        let mut items = vec![MenuItemFields::new(crate::t!("code-review-copy-text"))
             .with_icon(Icon::Copy)
             .with_on_select_action(CommentListAction::CopyCommentText)
             .into_item()];
 
-        let mut edit_item = MenuItemFields::new("Edit")
+        let mut edit_item = MenuItemFields::new(crate::t!("common-edit"))
             .with_icon(Icon::Pencil)
             .with_on_select_action(CommentListAction::EditComment);
         if is_file_level || is_outdated {
             let tooltip_text = if is_file_level {
-                "File-level comments currently can't be edited."
+                crate::t_static!("code-review-file-level-comment-cannot-edit")
             } else {
-                "Outdated comments can't be edited."
+                crate::t_static!("code-review-outdated-comment-cannot-edit")
             };
             edit_item = edit_item.with_disabled(true).with_tooltip(tooltip_text);
         }
@@ -1089,7 +1092,7 @@ impl CommentListView {
 
         if let Some(url) = html_url {
             items.push(
-                MenuItemFields::new("View in GitHub")
+                MenuItemFields::new(crate::t!("code-review-view-in-github"))
                     .with_icon(Icon::Github)
                     .with_on_select_action(CommentListAction::ViewInGitHub {
                         url: url.to_string(),
@@ -1099,7 +1102,7 @@ impl CommentListView {
         }
 
         items.push(
-            MenuItemFields::new("Remove")
+            MenuItemFields::new(crate::t!("common-remove"))
                 .with_icon(Icon::Trash)
                 .with_override_text_color(Fill::Solid(appearance.theme().ansi_fg_red()))
                 .with_override_icon_color(Fill::Solid(appearance.theme().ansi_fg_red()))

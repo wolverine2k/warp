@@ -982,9 +982,9 @@ fn exit_confirmation_message(
                 ..Default::default()
             },
             if should_stop_and_exit {
-                "again to stop and exit"
+                crate::t!("agent-message-bar-again-stop-exit")
             } else {
-                "again to exit"
+                crate::t!("agent-message-bar-again-exit")
             },
         ),
         ExitConfirmationTrigger::CtrlC => (
@@ -993,7 +993,7 @@ fn exit_confirmation_message(
                 ctrl: true,
                 ..Default::default()
             },
-            "again to exit",
+            crate::t!("agent-message-bar-again-exit"),
         ),
     };
 
@@ -1011,7 +1011,7 @@ fn new_conversation_keybinding_confirmation_message(
     let appearance = Appearance::handle(app).as_ref(app);
     Message::new(vec![
         MessageItem::keystroke(keystroke),
-        MessageItem::text("again to start new conversation"),
+        MessageItem::text(crate::t!("agent-message-bar-again-start-new-conversation")),
     ])
     .with_text_color(appearance.theme().ansi_fg_magenta())
 }

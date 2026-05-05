@@ -5,7 +5,6 @@ pub mod web_intent_parser;
 #[cfg(target_family = "wasm")]
 pub mod browser_url_handler;
 
-use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
 use crate::ai::agent::api::ServerConversationToken;
 use crate::drive::OpenWarpDriveObjectSettings;
 use crate::launch_configs::launch_config::LaunchConfig;
@@ -16,10 +15,10 @@ use crate::server::telemetry::{LaunchConfigUiLocation, TelemetryEvent};
 use crate::util::openable_file_type::{
     is_file_openable_in_warp, is_markdown_file, is_runnable_shell_script, starts_with_shebang,
 };
+use crate::workspace::active_terminal_in_window;
 use crate::workspace::{Workspace, WorkspaceAction, WorkspaceRegistry};
 use crate::{cloud_object::ObjectType, workspace::ToastStack};
 use crate::{drive::OpenWarpDriveObjectArgs, view_components::DismissibleToast};
-use crate::{features::FeatureFlag, workspace::active_terminal_in_window};
 
 use crate::ai::ambient_agents::github_auth_notifier::GitHubAuthNotifier;
 use crate::settings_view::{OpenTeamsSettingsModalArgs, SettingsSection};
@@ -91,9 +90,8 @@ impl FromStr for UriHost {
             "team" => Ok(Self::Team),
             "action" => Ok(Self::Action),
             "launch" => Ok(Self::Launch),
-            "shared_session" if FeatureFlag::ViewingSharedSessions.is_enabled() => {
-                Ok(Self::SharedSession)
-            }
+            // OpenWarp:删除 shared_session:// deep link(云端 shared session)
+            "shared_session" if false => Ok(Self::SharedSession),
             "conversation" => Ok(Self::Conversation),
             "drive" => Ok(Self::Drive),
             "settings" => Ok(Self::Settings),
@@ -320,7 +318,6 @@ impl UriHost {
             UriHost::Settings => {
                 // We support opening different settings pages through URI:
                 // - warp://settings/teams?invite={email} - opens team settings with invite modal
-                // - warp://settings/billing_and_usage - opens billing and usage settings page
                 // - warp://settings/environments - opens environments settings page
                 // - warp://settings/mcp - opens MCP servers settings page
                 // - warp://settings/platform - opens platform settings page
@@ -343,15 +340,6 @@ impl UriHost {
                                 "root_view:open_team_settings_with_email_invite_in_existing_window",
                                 "root_view:open_team_settings_with_email_invite_in_new_window",
                                 &args,
-                                ctx,
-                            );
-                        }
-                        "billing_and_usage" => {
-                            dispatch_action_in_new_or_existing_window(
-                                primary_window_id,
-                                "root_view:open_settings_page_in_existing_window",
-                                "root_view:open_settings_page_in_new_window",
-                                &SettingsSection::BillingAndUsage,
                                 ctx,
                             );
                         }
@@ -672,11 +660,8 @@ enum Action {
     NewWindow,
     Docker,
     OpenRepo,
-    CloudAgentSetup,
-    NewCloudAgentConversation,
     NewAgentConversation,
     CreateEnvironment { repos: Vec<String> },
-    FocusCloudMode,
 }
 
 impl Action {
@@ -686,8 +671,6 @@ impl Action {
             "/new_window" => Ok(Self::NewWindow),
             "/docker/open_subshell" => Ok(Self::Docker),
             "/open-repo" => Ok(Self::OpenRepo),
-            "/cloud_agent_setup" => Ok(Self::CloudAgentSetup),
-            "/new_cloud_agent_conversation" => Ok(Self::NewCloudAgentConversation),
             "/new_agent_conversation" => Ok(Self::NewAgentConversation),
             "/create_environment" => {
                 let repos = url
@@ -697,7 +680,6 @@ impl Action {
 
                 Ok(Self::CreateEnvironment { repos })
             }
-            "/focus_cloud_mode" => Ok(Self::FocusCloudMode),
             _ => Err(anyhow!(
                 "Received \"action\" intent with unexpected action: {}",
                 url.path()
@@ -726,7 +708,7 @@ impl Action {
                     if let Some(window_id) = primary_window_id {
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             let toast =
-                                DismissibleToast::error("Custom URI is invalid.".to_owned());
+                                DismissibleToast::error(crate::t!("uri-custom-uri-invalid"));
                             toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                         });
                     }
@@ -755,60 +737,6 @@ impl Action {
                     });
                 } else {
                     log::warn!("no workspace views in window {window_id} for open repo action");
-                }
-            }
-            Action::CloudAgentSetup => {
-                let window_id =
-                    primary_window_id.or_else(|| Some(open_new_window_get_handles(None, ctx).0));
-
-                let Some(window_id) = window_id else {
-                    log::warn!("unable to determine window for cloud agent setup action");
-                    return;
-                };
-
-                let Some(mut workspaces) = ctx.views_of_type::<Workspace>(window_id) else {
-                    log::warn!(
-                        "no workspace found in window {window_id} for cloud agent setup action"
-                    );
-                    return;
-                };
-
-                if let Some(workspace) = workspaces.pop() {
-                    workspace.update(ctx, |workspace, ctx| {
-                        workspace.handle_action(&WorkspaceAction::OpenCloudAgentSetupGuide, ctx);
-                    });
-                } else {
-                    log::warn!(
-                        "no workspace views in window {window_id} for cloud agent setup action"
-                    );
-                }
-            }
-            Action::NewCloudAgentConversation => {
-                let window_id =
-                    primary_window_id.or_else(|| Some(open_new_window_get_handles(None, ctx).0));
-
-                let Some(window_id) = window_id else {
-                    log::warn!(
-                        "unable to determine window for new cloud agent conversation action"
-                    );
-                    return;
-                };
-
-                let Some(mut workspaces) = ctx.views_of_type::<Workspace>(window_id) else {
-                    log::warn!(
-                        "no workspace found in window {window_id} for new cloud agent conversation action"
-                    );
-                    return;
-                };
-
-                if let Some(workspace) = workspaces.pop() {
-                    workspace.update(ctx, |workspace, ctx| {
-                        workspace.handle_action(&WorkspaceAction::AddAmbientAgentTab, ctx);
-                    });
-                } else {
-                    log::warn!(
-                        "no workspace views in window {window_id} for new cloud agent conversation action"
-                    );
                 }
             }
             Action::NewAgentConversation => {
@@ -855,59 +783,6 @@ impl Action {
                     ctx.dispatch_global_action("root_view:create_environment", &arg);
                 }
             }
-            Action::FocusCloudMode => {
-                // Notify that GitHub auth completed so views can refresh
-                GitHubAuthNotifier::handle(ctx).update(ctx, |notifier, ctx| {
-                    notifier.notify_auth_completed(ctx);
-                });
-
-                let active_agent_views = ActiveAgentViewsModel::as_ref(ctx);
-                let focused_conversation = primary_window_id
-                    .and_then(|wid| active_agent_views.get_focused_conversation(wid));
-                let mut terminal_view_id = match focused_conversation {
-                    Some(ConversationOrTaskId::TaskId(task_id)) => {
-                        active_agent_views.get_terminal_view_id_for_ambient_task(task_id)
-                    }
-                    Some(ConversationOrTaskId::ConversationId(conversation_id)) => {
-                        active_agent_views
-                            .get_terminal_view_id_for_conversation(conversation_id, ctx)
-                    }
-                    None => None,
-                };
-                if terminal_view_id.is_none() {
-                    terminal_view_id = find_cloud_mode_terminal_view_id(primary_window_id, ctx);
-                }
-                if terminal_view_id.is_none() {
-                    terminal_view_id = active_agent_views.get_last_focused_terminal_id();
-                }
-                if terminal_view_id.is_none() {
-                    terminal_view_id = primary_window_id
-                        .and_then(|window_id| active_terminal_view_id_in_window(window_id, ctx));
-                }
-
-                if let Some(terminal_view_id) = terminal_view_id {
-                    if let Some((window_id, workspace)) =
-                        find_workspace_for_terminal_view(terminal_view_id, ctx)
-                    {
-                        ctx.windows().show_window_and_focus_app(window_id);
-                        workspace.update(ctx, |workspace, ctx| {
-                            workspace.handle_action(
-                                &WorkspaceAction::FocusTerminalViewInWorkspace { terminal_view_id },
-                                ctx,
-                            );
-                        });
-                        return;
-                    }
-                }
-
-                dispatch_action_in_new_or_existing_window(
-                    primary_window_id,
-                    "root_view:open_settings_page_in_existing_window",
-                    "root_view:open_settings_page_in_new_window",
-                    &SettingsSection::CloudEnvironments,
-                    ctx,
-                );
-            }
         }
     }
 
@@ -919,10 +794,7 @@ impl Action {
             Self::Docker
             | Self::CreateEnvironment { .. }
             | Self::OpenRepo
-            | Self::CloudAgentSetup
-            | Self::NewCloudAgentConversation
-            | Self::NewAgentConversation
-            | Self::FocusCloudMode => W::default(),
+            | Self::NewAgentConversation => W::default(),
             Self::NewTab => W::ShowPrimaryWindow(WindowActivationFallbackBehavior::Notify {
                 title: "New tab created".to_owned(),
                 description: "Go to Warp to see your new tab.".to_owned(),
@@ -1376,7 +1248,3 @@ fn safe_url_log_fields(url: &Url) -> String {
         url.path(),
     )
 }
-
-#[cfg(test)]
-#[path = "uri_test.rs"]
-mod tests;

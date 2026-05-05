@@ -22,7 +22,7 @@ impl std::fmt::Display for OnboardingIntention {
     }
 }
 
-pub use callout::{OnboardingCalloutView, OnboardingKeybindings};
+pub use callout::{set_localizer, OnboardingCalloutView, OnboardingKeybindings};
 
 /// User-facing names of the AI features enabled when the agent intention is selected.
 /// Shared by the intention slide's agent card checklist and the login slide's

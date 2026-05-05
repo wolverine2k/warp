@@ -77,14 +77,14 @@ impl NodeVersionPopupView {
         ctx: &mut ViewContext<Self>,
     ) -> Self {
         let install_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Install nvm", SecondaryTheme)
+            ActionButton::new(crate::t!("context-node-install-nvm"), SecondaryTheme)
                 .with_icon(icons::Icon::Terminal)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(NodeVersionPopupAction::InstallNvm);
                 })
         });
         let install_latest_node_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("nvm install node", SecondaryTheme)
+            ActionButton::new(crate::t!("context-node-install-node"), SecondaryTheme)
                 .with_icon(icons::Icon::Terminal)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(NodeVersionPopupAction::InstallLatestNodeVersion);
@@ -286,10 +286,14 @@ impl NodeVersionPopupView {
 
         col.add_child(
             Container::new(
-                Text::new("Installed", styles.ui_font_family, styles.detail_font_size)
-                    .with_style(Properties::default())
-                    .with_color(styles.secondary_text_color)
-                    .finish(),
+                Text::new(
+                    crate::t!("context-node-installed"),
+                    styles.ui_font_family,
+                    styles.detail_font_size,
+                )
+                .with_style(Properties::default())
+                .with_color(styles.secondary_text_color)
+                .finish(),
             )
             .with_horizontal_padding(12.)
             .finish(),

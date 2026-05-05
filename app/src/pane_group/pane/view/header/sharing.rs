@@ -169,10 +169,7 @@ impl<P: BackingView> PaneHeader<P> {
             return;
         }
 
-        let is_unsharable_conversation = self
-            .sharing_dialog()
-            .as_ref(app)
-            .is_unsharable_conversation(app);
+        let is_unsharable_conversation = false;
         let editability = self.sharing_dialog().as_ref(app).editability(app);
 
         let (primary_button_icon, primary_button_active, primary_tooltip_text) =

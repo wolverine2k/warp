@@ -5,10 +5,7 @@ use super::{
     },
     SettingsSection,
 };
-use crate::{
-    appearance::Appearance, channel::ChannelState, themes::theme::ColorScheme,
-    workspace::WorkspaceAction,
-};
+use crate::{appearance::Appearance, channel::ChannelState, workspace::WorkspaceAction};
 use warpui::{
     assets::asset_cache::AssetSource,
     elements::{
@@ -63,16 +60,13 @@ impl SettingsWidget for AboutPageWidget {
         appearance: &Appearance,
         _app: &AppContext,
     ) -> Box<dyn Element> {
-        let theme = appearance.theme();
         let ui_builder = appearance.ui_builder();
 
-        let image_path = if theme.inferred_color_scheme() == ColorScheme::LightOnDark {
-            "bundled/svg/warp-logo-with-light-title.svg"
-        } else {
-            "bundled/svg/warp-logo-with-dark-title.svg"
-        };
+        // 始终用纯图标 logo,品牌名以独立文本 "OpenWarp" 呈现,不再依赖带 "warp" 字样的 svg
+        let image_path = "bundled/svg/warp-logo-light.svg";
 
-        let version = ChannelState::app_version().unwrap_or("v#.##.###");
+        // GIT_RELEASE_TAG 注入 → 显示 tag;否则进入 Dev 开发模式
+        let version = ChannelState::app_version().unwrap_or("Dev");
 
         let version_text = ui_builder
             .span(version.to_string())
@@ -115,10 +109,17 @@ impl SettingsWidget for AboutPageWidget {
                     .with_max_width(350.)
                     .finish(),
                 )
+                .with_child(
+                    ui_builder
+                        .span("OpenWarp")
+                        .build()
+                        .with_margin_top(12.)
+                        .finish(),
+                )
                 .with_child(version_row.finish())
                 .with_child(
                     ui_builder
-                        .span("Copyright 2026 Warp")
+                        .span(crate::t!("settings-about-copyright"))
                         .build()
                         .with_margin_top(16.)
                         .finish(),

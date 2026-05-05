@@ -3,11 +3,12 @@ use pathfinder_geometry::{
     vector::{vec2f, Vector2F},
 };
 
+#[cfg(debug_assertions)]
+use crate::elements::new_scrollable::ScrollableAxis;
 use crate::{
     elements::{
-        new_scrollable::{util::child_constraint_for_axis, ScrollableAxis},
-        Axis, ClippedScrollStateHandle, ScrollData, ScrollStateHandle, SelectableElement,
-        Vector2FExt,
+        new_scrollable::util::child_constraint_for_axis, Axis, ClippedScrollStateHandle,
+        ScrollData, ScrollStateHandle, SelectableElement, Vector2FExt,
     },
     event::DispatchedEvent,
     units::{IntoPixels, Pixels},

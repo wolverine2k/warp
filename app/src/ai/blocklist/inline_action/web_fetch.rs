@@ -1,13 +1,14 @@
 use warp_core::ui::appearance::Appearance;
+use warpui::elements::shimmering_text::ShimmeringTextStateHandle;
 use warpui::elements::{Container, CrossAxisAlignment, Element, Flex, ParentElement, Text};
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::search_results_common::{
     render_collapsible_search_results, CollapsibleSearchResultsState,
 };
-use crate::ai::agent::icons::yellow_running_icon;
 use crate::ai::agent::WebFetchStatus;
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
+use crate::ui_components::spinner::SpinnerStateHandle;
 
 pub enum WebFetchViewEvent {}
 
@@ -19,6 +20,9 @@ pub enum WebFetchViewAction {
 pub struct WebFetchView {
     pub status: WebFetchStatus,
     pub collapsible: CollapsibleSearchResultsState,
+    /// 双动画 state — 必须 view 持久化。详见 search_results_common 注释。
+    shimmer_handle: ShimmeringTextStateHandle,
+    spinner_handle: SpinnerStateHandle,
 }
 
 impl WebFetchView {
@@ -26,6 +30,8 @@ impl WebFetchView {
         Self {
             status: WebFetchStatus::Fetching { urls },
             collapsible: CollapsibleSearchResultsState::new(),
+            shimmer_handle: ShimmeringTextStateHandle::new(),
+            spinner_handle: SpinnerStateHandle::new(),
         }
     }
 
@@ -34,12 +40,20 @@ impl WebFetchView {
     }
 
     fn render_loading(&self, urls: &[String], app: &AppContext) -> Box<dyn Element> {
-        let appearance = Appearance::as_ref(app);
-        let loading_icon = yellow_running_icon(appearance);
+        let _ = Appearance::as_ref(app);
+        // 个性化进行时,对齐 opencode "Fetching from the web..."。
+        let text = if urls.len() == 1 {
+            "Fetching from the web...".to_string()
+        } else {
+            format!("Fetching {} web pages...", urls.len())
+        };
 
-        let text = format!("Fetching {} web pages...", urls.len());
-
-        super::search_results_common::render_loading_header(text, loading_icon, app)
+        super::search_results_common::render_loading_header_animated(
+            text,
+            self.spinner_handle.clone(),
+            self.shimmer_handle.clone(),
+            app,
+        )
     }
 
     fn render_success(

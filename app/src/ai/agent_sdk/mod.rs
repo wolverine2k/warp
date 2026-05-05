@@ -7,10 +7,6 @@ use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::ai::agent::api::convert_conversation::{
-    convert_conversation_data_to_ai_conversation, RestorationMode,
-};
-use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_sdk::driver::harness::{harness_kind, HarnessKind};
 use crate::ai::agent_sdk::driver::{AgentDriverOptions, AgentRunPrompt, Task};
@@ -57,7 +53,6 @@ use crate::{
         ids::{ServerId, SyncId},
         server_api::{ai::AgentConfigSnapshot, ServerApiProvider},
     },
-    terminal::view::ConversationRestorationInNewPaneType,
 };
 use driver::AgentDriverError;
 use warp_graphql::object_permissions::OwnerType;
@@ -245,7 +240,7 @@ fn run_agent(
             if args.environment.is_some() && !FeatureFlag::CloudEnvironments.is_enabled() {
                 return Err(anyhow::anyhow!("unexpected argument '--environment' found"));
             }
-            if args.conversation.is_some() && !FeatureFlag::CloudConversations.is_enabled() {
+            if args.conversation.is_some() {
                 return Err(anyhow::anyhow!(
                     "unexpected argument '--conversation' found"
                 ));
@@ -292,7 +287,7 @@ fn run_agent(
             {
                 return Err(anyhow::anyhow!("unexpected argument '--environment' found"));
             }
-            if args.conversation.is_some() && !FeatureFlag::CloudConversations.is_enabled() {
+            if args.conversation.is_some() {
                 return Err(anyhow::anyhow!(
                     "unexpected argument '--conversation' found"
                 ));
@@ -1126,37 +1121,11 @@ impl AgentDriverRunner {
     ) -> Result<Option<driver::ResumeOptions>, AgentDriverError> {
         match harness {
             HarnessKind::Oz => {
-                let server_api = foreground
-                    .spawn(|_, ctx| {
-                        ServerApiProvider::handle(ctx)
-                            .as_ref(ctx)
-                            .get_ai_client()
-                            .clone()
-                    })
-                    .await?;
-                let token = ServerConversationToken::new(conversation_id.clone());
-                let (conversation_data, metadata) = server_api
-                    .get_ai_conversation(token)
-                    .await
-                    .map_err(|err| AgentDriverError::ConversationLoadFailed(format!("{err}")))?;
-                let conversation = convert_conversation_data_to_ai_conversation(
-                    AIConversationId::default(),
-                    &conversation_data,
-                    metadata,
-                    RestorationMode::Continue,
-                )
-                .ok_or_else(|| {
-                    AgentDriverError::ConversationLoadFailed(
-                        "Failed to convert conversation data to AIConversation".into(),
-                    )
-                })?;
-                Ok(Some(driver::ResumeOptions::Oz(Box::new(
-                    ConversationRestorationInNewPaneType::Historical {
-                        conversation,
-                        should_use_live_appearance: false,
-                        ambient_agent_task_id: None,
-                    },
-                ))))
+                // CloudConversations was removed in OpenWarp; we can no longer
+                // resume an Oz conversation from a server-stored token.
+                Err(AgentDriverError::ConversationLoadFailed(format!(
+                    "Conversation {conversation_id} cannot be resumed: cloud conversations are disabled in OpenWarp"
+                )))
             }
             HarnessKind::ThirdParty(h) => {
                 let harness_support_client = foreground

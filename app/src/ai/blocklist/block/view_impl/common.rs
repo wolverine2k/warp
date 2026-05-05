@@ -134,7 +134,6 @@ pub const LOAD_OUTPUT_MESSAGE: &str = "Warping...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_ADJUSTING: &str = "Adjusting tasks...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_PASSIVE_CODE_GEN: &str = "Generating fix...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_CREATING_DIFF: &str = "Creating diff...";
-pub const LOAD_OUTPUT_MESSAGE_FOR_RUN_AGENTS: &str = "Spawning agents...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_PREPARING_QUESTION: &str = "Preparing question...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_GENERATING_PLAN: &str = "Generating plan...";
 pub const LOAD_OUTPUT_MESSAGE_FOR_UPDATING_PLAN: &str = "Updating plan...";
@@ -247,19 +246,6 @@ pub fn render_warping_indicator<V: View>(
         })
     });
 
-    let is_last_message_run_agents = output_to_render.as_ref().is_some_and(|output| {
-        let output = output.get();
-        output.messages.last().is_some_and(|m| {
-            matches!(
-                m.message,
-                AIAgentOutputMessageType::Action(AIAgentAction {
-                    action: AIAgentActionType::RunAgents(_),
-                    ..
-                })
-            )
-        })
-    });
-
     let is_last_message_asking_user_question = output_to_render.as_ref().is_some_and(|output| {
         let output = output.get();
         output.messages.last().is_some_and(|m| {
@@ -345,8 +331,6 @@ pub fn render_warping_indicator<V: View>(
         LOAD_OUTPUT_MESSAGE_FOR_PASSIVE_CODE_GEN.to_string()
     } else if is_last_message_requesting_file_edits {
         LOAD_OUTPUT_MESSAGE_FOR_CREATING_DIFF.to_string()
-    } else if is_last_message_run_agents && FeatureFlag::RunAgentsTool.is_enabled() {
-        LOAD_OUTPUT_MESSAGE_FOR_RUN_AGENTS.to_string()
     } else if is_last_message_asking_user_question {
         LOAD_OUTPUT_MESSAGE_FOR_PREPARING_QUESTION.to_string()
     } else if is_searching_web {
@@ -970,7 +954,7 @@ fn render_force_refresh_inline(
         // Mirror `render_output_status_text` exactly: same `Text` configuration plus
         // the `Container::with_margin_top(1.)` wrapper so this sits on the same
         // baseline as the adjacent `Last seen by agent ...` text.
-        let text = Text::new(" · Check now".to_string(), font_family, font_size)
+        let text = Text::new(crate::t!("ai-block-check-now"), font_family, font_size)
             .with_color(color)
             .with_style(Properties::default())
             .with_clip(ClipConfig::end())
@@ -984,7 +968,7 @@ fn render_force_refresh_inline(
         let mut stack = Stack::new().with_child(text_with_margin);
         if state.is_hovered() {
             let tool_tip = ui_builder
-                .tool_tip("Ask the agent to check this command now, skipping its timer.".to_owned())
+                .tool_tip(crate::t!("ai-block-check-now-tooltip"))
                 .build()
                 .finish();
             stack.add_positioned_overlay_child(
@@ -2994,10 +2978,16 @@ pub fn render_failed_output(props: FailedOutputProps, app: &AppContext) -> Box<d
             if *will_attempt_resume {
                 if *waiting_for_network {
                     format!(
-                        "{error_message}\n\nWill resume conversation when network connectivity is restored..."
+                        "{}\n\n{}",
+                        error_message,
+                        crate::t!("agent-error-will-resume-when-network-restored")
                     )
                 } else {
-                    format!("{error_message}\n\nAttempting to resume conversation...")
+                    format!(
+                        "{}\n\n{}",
+                        error_message,
+                        crate::t!("agent-error-attempting-resume-conversation")
+                    )
                 }
             } else {
                 format!("{ERROR_APOLOGY_TEXT}\n\n{error_message}")
@@ -3363,13 +3353,17 @@ pub(crate) fn render_debug_footer<V: View>(
     );
     debug_row.add_child(copy_button_with_tooltip);
 
+    // OpenWarp: 不再用 `Expanded` —— alt-screen / 长命令 take-over 场景下,父容器
+    // 沿主轴是 infinite constraint(BYOP error block 渲染路径),`Flex + Expanded`
+    // 直接 panic `flex contains flexible children but has an infinite constraint`。
+    // debug_row 本身宽度由内部 Shrinkable 控制,不需要主动撑满父级。
     if let Some(submit_button) = stacked_submit_button {
         let mut column = Flex::column();
-        column.add_child(Expanded::new(1.0, debug_row.finish()).finish());
+        column.add_child(debug_row.finish());
         column.add_child(Container::new(submit_button).with_margin_top(8.).finish());
         column.finish()
     } else {
-        Container::new(Expanded::new(1.0, debug_row.finish()).finish()).finish()
+        Container::new(debug_row.finish()).finish()
     }
 }
 

@@ -28,9 +28,6 @@ use super::{is_delete_allowed, style, AIFact, CloudAIFact, CloudAIFactModel};
 use crate::ai::facts::AIMemory;
 use crate::ui_components::icons::Icon;
 
-const RULE_NAME_PLACEHOLDER_TEXT: &str = "e.g. Rust rules";
-const RULE_DESCRIPTION_PLACEHOLDER_TEXT: &str = "e.g. Never use unwrap in Rust";
-
 #[derive(Debug, Clone, Copy)]
 enum EditorType {
     Name,
@@ -99,7 +96,7 @@ impl RuleEditorView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text(RULE_NAME_PLACEHOLDER_TEXT, ctx);
+            editor.set_placeholder_text(crate::t!("rules-name-placeholder"), ctx);
             editor
         });
         ctx.subscribe_to_view(&name_editor, |me, _editor, event, ctx| {
@@ -126,7 +123,7 @@ impl RuleEditorView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text(RULE_DESCRIPTION_PLACEHOLDER_TEXT, ctx);
+            editor.set_placeholder_text(crate::t!("rules-description-placeholder"), ctx);
             editor
         });
         ctx.subscribe_to_view(&content_editor, |me, _editor, event, ctx| {
@@ -134,7 +131,7 @@ impl RuleEditorView {
         });
 
         let save_button = ctx.add_typed_action_view(|ctx| {
-            let mut button = ActionButton::new("Save", PrimaryTheme)
+            let mut button = ActionButton::new(crate::t!("common-save"), PrimaryTheme)
                 .with_icon(Icon::Check)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(RuleEditorViewAction::Save);
@@ -145,7 +142,7 @@ impl RuleEditorView {
         });
 
         let delete_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Delete rule", DangerSecondaryTheme)
+            ActionButton::new(crate::t!("ai-rule-delete-rule"), DangerSecondaryTheme)
                 .with_icon(Icon::Trash)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(RuleEditorViewAction::Delete);

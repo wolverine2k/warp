@@ -9,14 +9,14 @@ use super::telemetry::{
 use crate::ai::agent::{
     conversation::{AIConversationId, ConversationStatus},
     task::TaskId,
-    AIAgentExchangeId, AIAgentInput, AIAgentOutputMessageType, LifecycleEventType,
-    ReceivedMessageInput,
+    AIAgentExchangeId, AIAgentInput, AIAgentOutputMessageType, ReceivedMessageInput,
 };
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 use warp_core::features::FeatureFlag;
 use warp_core::send_telemetry_from_ctx;
 use warp_multi_agent_api as api;
+use warp_multi_agent_api::LifecycleEventType;
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 const MAX_RETRY_ATTEMPTS: i32 = 3;

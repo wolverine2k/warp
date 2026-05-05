@@ -211,7 +211,7 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         EDIT_REQUESTED_EDIT_NAME,
-        "Edit Code Diff",
+        crate::t!("keybinding-desc-edit-code-diff"),
         CodeDiffViewAction::Edit,
     )
     .with_context_predicate(id!(CodeDiffView::ui_name()) & !id!(DISPATCHED_REQUESTED_EDIT_EXPANDED))
@@ -889,7 +889,7 @@ impl CodeDiffView {
         let code_review_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", NakedTheme)
                 .with_icon(Icon::Diff)
-                .with_tooltip("Review changes")
+                .with_tooltip(crate::t!("ai-inline-code-diff-review-changes"))
                 .with_width(icon_size(ctx))
                 .with_height(icon_size(ctx))
                 .on_click(|ctx| {
@@ -901,7 +901,7 @@ impl CodeDiffView {
         let expansion_button_collapsed = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", NakedTheme)
                 .with_icon(Icon::ChevronRight)
-                .with_tooltip("Expand")
+                .with_tooltip(crate::t!("common-view"))
                 .with_width(icon_size(ctx))
                 .with_height(icon_size(ctx))
                 .on_click(|ctx| {
@@ -912,7 +912,7 @@ impl CodeDiffView {
         let expansion_button_expanded = ctx.add_typed_action_view(|ctx| {
             ActionButton::new("", NakedTheme)
                 .with_icon(Icon::ChevronDown)
-                .with_tooltip("Collapse")
+                .with_tooltip(crate::t!("common-none"))
                 .with_width(icon_size(ctx))
                 .with_height(icon_size(ctx))
                 .on_click(|ctx| {
@@ -3146,7 +3146,7 @@ impl BackingView for CodeDiffView {
         // Code diffs should show "Requested Edit" as the title and hide the close button
         // since they are closed via accept/reject actions.
         view::HeaderContent::Standard(view::StandardHeader {
-            title: "Requested Edit".to_string(),
+            title: crate::t!("ai-code-diff-requested-edit-title"),
             title_secondary: None,
             title_style: None,
             title_clip_config: warpui::text_layout::ClipConfig::start(),

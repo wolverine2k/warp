@@ -112,13 +112,17 @@ pub fn render_open_settings_file_button(
             .with_height(FOOTER_ICON_SIZE)
             .finish();
 
-        let label = Text::new_inline("Open settings file", ui_font_family, FOOTER_FONT_SIZE)
-            .with_color(text_color)
-            .with_style(Properties {
-                weight: Weight::Semibold,
-                ..Default::default()
-            })
-            .finish();
+        let label = Text::new_inline(
+            crate::t!("settings-footer-open-file"),
+            ui_font_family,
+            FOOTER_FONT_SIZE,
+        )
+        .with_color(text_color)
+        .with_style(Properties {
+            weight: Weight::Semibold,
+            ..Default::default()
+        })
+        .finish();
 
         // Use `MainAxisSize::Max` so the row (and its surrounding bordered
         // container) expands to fill the full sidebar width. The icon + text
@@ -227,7 +231,7 @@ pub fn render_settings_error_alert(
         ui_font_family,
         text_color,
         mouse_states.alert_open_file_button.clone(),
-        "Open file",
+        crate::t!("settings-footer-alert-open-file"),
         /*icon=*/ None,
         /*bordered=*/ true,
         WorkspaceAction::OpenSettingsFile,
@@ -249,7 +253,7 @@ pub fn render_settings_error_alert(
             ui_font_family,
             text_color,
             mouse_states.alert_fix_with_oz_button.clone(),
-            "Fix with Oz",
+            crate::t!("settings-footer-alert-fix-with-oz"),
             Some(Icon::Oz),
             /*bordered=*/ false,
             WorkspaceAction::FixSettingsWithOz { error_description },
@@ -319,7 +323,7 @@ fn render_alert_action_button(
     ui_font_family: FamilyId,
     text_color: ColorU,
     mouse_state: MouseStateHandle,
-    text: &'static str,
+    text: String,
     icon: Option<Icon>,
     bordered: bool,
     action: WorkspaceAction,
@@ -342,7 +346,7 @@ fn render_alert_action_button(
             );
         }
         row.add_child(
-            Text::new_inline(text.to_owned(), ui_font_family, FOOTER_FONT_SIZE)
+            Text::new_inline(text.clone(), ui_font_family, FOOTER_FONT_SIZE)
                 .with_color(text_color)
                 .with_style(Properties {
                     weight: Weight::Semibold,

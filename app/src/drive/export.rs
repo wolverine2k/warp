@@ -250,7 +250,7 @@ impl ExportManager {
                         .with_onclick_action(WorkspaceAction::OpenInExplorer { path: root_dir });
                 }
                 toast_stack.add_ephemeral_toast(
-                    DismissibleToast::success("Finished exporting objects".to_string())
+                    DismissibleToast::success(crate::t!("drive-toast-finished-exporting"))
                         .with_link(toast_link),
                     window_id,
                     ctx,
@@ -322,7 +322,7 @@ impl ExportManager {
         };
 
         let name = if name.is_empty() {
-            "Untitled".to_string()
+            crate::t!("common-untitled")
         } else {
             safe_filename(&name)
         };
@@ -457,7 +457,7 @@ impl ExportId {
             .map(|object| {
                 let mut name = object.display_name();
                 if name.is_empty() {
-                    name.push_str("Untitled")
+                    name.push_str(&crate::t!("common-untitled"))
                 }
                 name
             })
@@ -508,7 +508,7 @@ async fn write_object(
             }
             Err(err) => {
                 return Err(anyhow::Error::new(err)
-                    .context(format!("could not create {}", current_path.display())))
+                    .context(format!("could not create {}", current_path.display())));
             }
         }
     }

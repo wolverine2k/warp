@@ -28,7 +28,7 @@ use crate::{
     server::server_api::AIApiError,
 };
 
-use super::{AIAgentInput, MCPContext, MCPServer, RequestMetadata, Suggestions};
+use super::{AIAgentInput, MCPContext, MCPServer, RequestMetadata, RunningCommand, Suggestions};
 use crate::ai::blocklist::{BlocklistAIPermissions, RequestInput};
 use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::ai::mcp::templatable_manager::TemplatableMCPServerInfo;
@@ -130,6 +130,28 @@ pub struct RequestParams {
     pub parent_agent_id: Option<String>,
     /// The display name for this agent (e.g. "Agent 1"), assigned by the orchestrator.
     pub agent_name: Option<String>,
+    /// OpenWarp BYOP 专用:发起本请求时,关联的 LRC(Long Running Command)block id。
+    /// tag-in 首轮和已进入 agent control 的 CLI subagent 后续轮都会填充,用于
+    /// 让 BYOP prompt / tools 继续绑定到当前 PTY,避免模型另起 shell 操作同一个 TUI。
+    pub lrc_command_id: Option<String>,
+    /// OpenWarp BYOP 专用:LRC 当前快照。`UserQuery.running_command` 只覆盖用户输入轮,
+    /// auto-resume / tool result 后续轮需要通过这里继续携带最新 PTY 内容。
+    pub lrc_running_command: Option<RunningCommand>,
+    /// OpenWarp BYOP 本地会话压缩 sidecar 快照(controller 把 conversation.compaction_state.clone() 塞进来)。
+    /// `chat_stream::build_chat_request` 据此:
+    ///   1. 过滤 [`crate::ai::byop_compaction::state::CompactionState::hidden_message_ids`] 里的 messages
+    ///   2. 在被隐去区间的位置插入"摘要 user/assistant 对"
+    ///   3. 把 `tool_output_compacted_at` 不为空的 ToolCallResult 替换为占位符
+    ///   4. 在 `AIAgentInput::SummarizeConversation` 路径切 head + 拼 SUMMARY_TEMPLATE 作 user message
+    ///
+    /// 默认 `None` = 兼容路径(无压缩)。
+    pub compaction_state: Option<crate::ai::byop_compaction::state::CompactionState>,
+    /// OpenWarp BYOP 专用:本轮是否需要模拟上游 CreateTask 流程来升级 optimistic CLI subtask。
+    /// 只有用户刚 tag-in 的首轮需要;已存在 CLI subagent 的后续轮只复用 task,不能重复 spawn。
+    pub lrc_should_spawn_subagent: bool,
+    /// OpenWarp BYOP 专用:本轮响应应该写入的 task。普通对话是 root task;
+    /// CLI subagent 后续轮则是对应 subtask。
+    pub byop_target_task_id: Option<String>,
 }
 
 pub type Event = Result<warp_multi_agent_api::ResponseEvent, Arc<AIApiError>>;
@@ -281,6 +303,16 @@ impl RequestParams {
                 .as_ref()
                 .is_none_or(|t| matches!(t, crate::terminal::model::session::SessionType::Local));
 
+        let byop_target_task_id = if request_input.input_messages.len() == 1 {
+            request_input
+                .input_messages
+                .keys()
+                .next()
+                .map(ToString::to_string)
+        } else {
+            None
+        };
+
         // Reconcile the persisted override against the active base model's
         // current `LLMContextWindow` instead of trusting whatever was stored
         // last. If the active model isn't configurable or has been removed
@@ -332,6 +364,13 @@ impl RequestParams {
             supported_tools_override: request_input.supported_tools_override.clone(),
             parent_agent_id: None,
             agent_name: None,
+            lrc_command_id: None,
+            lrc_running_command: None,
+            lrc_should_spawn_subagent: false,
+            byop_target_task_id,
+            // BYOP-only:由 controller 在 dispatch 到 BYOP exec 前回填(setter 风格,
+            // 避免穿过 ConversationRequestData / 非 BYOP 路径)。
+            compaction_state: None,
         }
     }
 }

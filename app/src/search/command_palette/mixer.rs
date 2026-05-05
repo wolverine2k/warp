@@ -74,6 +74,12 @@ pub enum CommandPaletteItemAction {
     },
     /// Start a new AI conversation
     NewConversation,
+    /// 打开 SSH 服务器(openWarp 独有)→ 路由到 WorkspaceAction::OpenSshTerminal
+    /// 走 SecretInjector + 新 tab。
+    OpenSshServer {
+        node_id: String,
+        server: warp_ssh_manager::SshServerInfo,
+    },
     /// No-op action (used for non-interactable separator items that don't do anything on click).
     NoOp,
 }
@@ -136,6 +142,9 @@ impl CommandPaletteItemAction {
                 ItemSummary::Project { path: path.clone() }
             }
             CommandPaletteItemAction::NewConversation => ItemSummary::NewConversation,
+            CommandPaletteItemAction::OpenSshServer { node_id, .. } => ItemSummary::SshServer {
+                node_id: node_id.clone(),
+            },
             CommandPaletteItemAction::NoOp => ItemSummary::NoOp,
         }
     }
@@ -194,6 +203,10 @@ pub enum ItemSummary {
     },
     ForkConversation,
     NewConversation,
+    /// SSH 服务器(openWarp 独有)。`node_id` 是 ssh_nodes 表的 UUID。
+    SshServer {
+        node_id: String,
+    },
     /// No-op action (used for non-interactable separator items that don't do anything on click).
     NoOp,
 }

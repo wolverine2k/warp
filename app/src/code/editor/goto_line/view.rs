@@ -50,7 +50,7 @@ impl GoToLineView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Line number:Column", ctx);
+            editor.set_placeholder_text(crate::t!("code-goto-line-placeholder"), ctx);
             editor
         });
 

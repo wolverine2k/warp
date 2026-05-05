@@ -1222,7 +1222,7 @@ impl CodeReviewView {
         let maximize_button = ctx.add_typed_action_view(move |_| {
             // Since the view isn't part of a pane group yet, default to not-maximized. The button will be updated
             //when focus state changes.
-            let (icon, tooltip_text) = (Icon::Maximize, "Maximize");
+            let (icon, tooltip_text) = (Icon::Maximize, crate::t_static!("common-maximize"));
 
             ActionButton::new("", NakedTheme)
                 .with_icon(icon)
@@ -1246,12 +1246,12 @@ impl CodeReviewView {
         let file_nav_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", NakedTheme)
                 .with_icon(Icon::FileCopy)
-                .with_tooltip("Show file navigation")
+                .with_tooltip(crate::t!("code-review-tooltip-show-file-navigation"))
                 .on_click(|ctx| ctx.dispatch_typed_action(CodeReviewAction::ToggleFileSidebar))
         });
 
         let git_primary_action_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Commit", SecondaryTheme)
+            ActionButton::new(crate::t!("common-commit"), SecondaryTheme)
                 .with_size(ButtonSize::Small)
                 .with_icon(Icon::GitCommit)
                 .with_adjoined_side(AdjoinedSide::Right)
@@ -1292,7 +1292,7 @@ impl CodeReviewView {
 
         let undo_action_button = ctx.add_typed_action_view(move |ctx| {
             let keybinding = custom_tag_to_keystroke(CustomAction::Undo.into());
-            let mut action_button = ActionButton::new("Undo", NakedTheme)
+            let mut action_button = ActionButton::new(crate::t!("common-undo"), NakedTheme)
                 .with_size(ButtonSize::Small)
                 .on_click(move |ctx| {
                     ctx.dispatch_typed_action(WorkspaceAction::UndoRevertInCodeReviewPane {
@@ -1309,12 +1309,12 @@ impl CodeReviewView {
         });
 
         let discard_confirm_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Discard changes", DangerPrimaryTheme)
+            ActionButton::new(crate::t!("code-review-discard-changes"), DangerPrimaryTheme)
                 .on_click(|ctx| ctx.dispatch_typed_action(CodeReviewAction::ConfirmDiscardFile))
         });
 
         let discard_cancel_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Cancel", NakedTheme).on_click(|ctx| {
+            ActionButton::new(crate::t!("common-cancel"), NakedTheme).on_click(|ctx| {
                 ctx.dispatch_typed_action(CodeReviewAction::CancelDiscardFile);
             })
         });
@@ -1382,9 +1382,9 @@ impl CodeReviewView {
         let header = CodeReviewHeader::new();
 
         let init_project_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Initialize codebase", NakedTheme)
+            ActionButton::new(crate::t!("code-review-initialize-codebase"), NakedTheme)
                 .with_size(ButtonSize::Small)
-                .with_tooltip("Enables codebase indexing and WARP.md")
+                .with_tooltip(crate::t!("code-review-initialize-codebase-tooltip"))
                 .with_tooltip_alignment(TooltipAlignment::Center)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(CodeReviewAction::InitProjectForCurrentDirectory)
@@ -1393,9 +1393,9 @@ impl CodeReviewView {
 
         #[cfg(not(target_family = "wasm"))]
         let open_repository_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Open repository", NakedTheme)
+            ActionButton::new(crate::t!("code-review-open-repository"), NakedTheme)
                 .with_size(ButtonSize::Small)
-                .with_tooltip("Navigate to a repo and initialize it for coding")
+                .with_tooltip(crate::t!("code-review-open-repository-tooltip"))
                 .with_tooltip_alignment(TooltipAlignment::Center)
                 .on_click(|ctx| ctx.dispatch_typed_action(CodeReviewAction::OpenRepository))
         });
@@ -1508,9 +1508,9 @@ impl CodeReviewView {
 
         let is_maximized = focus_handle.is_maximized(ctx);
         let (icon, tooltip) = if is_maximized {
-            (Icon::Minimize, "Restore")
+            (Icon::Minimize, crate::t_static!("common-restore"))
         } else {
-            (Icon::Maximize, "Maximize")
+            (Icon::Maximize, crate::t_static!("common-maximize"))
         };
 
         self.maximize_button.update(ctx, |button, ctx| {
@@ -2948,7 +2948,7 @@ impl CodeReviewView {
                 ActionButton::new("", NakedTheme)
                     .with_icon(Icon::LinkExternal)
                     .with_size(ButtonSize::InlineActionHeader)
-                    .with_tooltip("Open file")
+                    .with_tooltip(crate::t!("code-review-open-file"))
                     .on_click(move |ctx| {
                         ctx.dispatch_typed_action(CodeReviewAction::OpenInNewTab {
                             path: open_tab_path.clone(),
@@ -2985,7 +2985,7 @@ impl CodeReviewView {
                 ActionButton::new("", NakedTheme)
                     .with_icon(Icon::Paperclip)
                     .with_size(ButtonSize::InlineActionHeader)
-                    .with_tooltip("Add file diff as context")
+                    .with_tooltip(crate::t!("code-review-add-file-diff-context"))
                     .on_click(move |ctx| {
                         ctx.dispatch_typed_action(CodeReviewAction::AddDiffSetAsContext(
                             DiffSetScope::File(context_path.clone()),
@@ -2998,7 +2998,7 @@ impl CodeReviewView {
                 ActionButton::new("", NakedTheme)
                     .with_icon(Icon::Copy)
                     .with_size(ButtonSize::InlineActionHeader)
-                    .with_tooltip("Copy file path")
+                    .with_tooltip(crate::t!("code-review-copy-file-path"))
                     .on_click(move |ctx| {
                         ctx.dispatch_typed_action(CodeReviewAction::CopyFilePath(copy_path.clone()))
                     })
@@ -4464,10 +4464,14 @@ impl CodeReviewView {
                 .finish(),
             )
             .with_child(
-                Text::new("No open changes", appearance.ui_font_family(), 16.)
-                    .with_style(Properties::default().weight(Weight::Semibold))
-                    .with_color(theme.main_text_color(theme.surface_2()).into())
-                    .finish(),
+                Text::new(
+                    crate::t!("code-review-no-open-changes"),
+                    appearance.ui_font_family(),
+                    16.,
+                )
+                .with_style(Properties::default().weight(Weight::Semibold))
+                .with_color(theme.main_text_color(theme.surface_2()).into())
+                .finish(),
             )
             .with_child(
                 Container::new(
@@ -6866,7 +6870,7 @@ impl CodeReviewView {
             }
             PrimaryGitActionMode::Publish => {
                 self.git_primary_action_button.update(ctx, |button, ctx| {
-                    button.set_label("Publish", ctx);
+                    button.set_label(crate::t!("common-publish"), ctx);
                     button.set_icon(Some(Icon::UploadCloud), ctx);
                     button.set_disabled(false, ctx);
                     button.set_on_click(
@@ -6885,7 +6889,7 @@ impl CodeReviewView {
     /// only the disabled state flips across modes (enabled in Commit mode,
     /// disabled in Push mode where there's nothing to commit).
     fn commit_menu_item(disabled: bool) -> MenuItem<CodeReviewAction> {
-        MenuItemFields::new("Commit")
+        MenuItemFields::new(crate::t!("common-commit"))
             .with_icon(Icon::GitCommit)
             .with_on_select_action(CodeReviewAction::OpenCommitDialog)
             .with_disabled(disabled)
@@ -6897,13 +6901,13 @@ impl CodeReviewView {
     /// sets the upstream).
     fn push_or_publish_menu_item(has_upstream: bool, disabled: bool) -> MenuItem<CodeReviewAction> {
         if has_upstream {
-            MenuItemFields::new("Push")
+            MenuItemFields::new(crate::t!("common-push"))
                 .with_icon(Icon::ArrowUp)
                 .with_on_select_action(CodeReviewAction::OpenPushDialog)
                 .with_disabled(disabled)
                 .into_item()
         } else {
-            MenuItemFields::new("Publish")
+            MenuItemFields::new(crate::t!("common-publish"))
                 .with_icon(Icon::UploadCloud)
                 .with_on_select_action(CodeReviewAction::PublishBranch)
                 .with_disabled(disabled)
@@ -6926,7 +6930,7 @@ impl CodeReviewView {
             let is_on_main = diff_state.is_on_main_branch();
             let has_upstream = diff_state.upstream_ref().is_some();
             let upstream_differs_from_main = diff_state.upstream_differs_from_main();
-            MenuItemFields::new("Create PR")
+            MenuItemFields::new(crate::t!("code-review-create-pr"))
                 .with_icon(Icon::Github)
                 .with_on_select_action(CodeReviewAction::OpenCreatePrDialog)
                 .with_disabled(is_on_main || !has_upstream || !upstream_differs_from_main)
@@ -6995,7 +6999,7 @@ impl CodeReviewView {
 
         if FeatureFlag::DiffSetAsContext.is_enabled() && has_changes {
             items.push(
-                MenuItemFields::new("Add diff set as context")
+                MenuItemFields::new(crate::t!("code-review-add-diff-set-context"))
                     .with_icon(Icon::Paperclip)
                     .with_on_select_action(CodeReviewAction::AddDiffSetAsContext(DiffSetScope::All))
                     .into_item(),
@@ -7003,9 +7007,15 @@ impl CodeReviewView {
         }
 
         let (comment_label, comment_icon) = if self.get_existing_diffset_comment(ctx).is_some() {
-            ("Show saved comment", Icon::MessageText)
+            (
+                crate::t!("code-review-show-saved-comment"),
+                Icon::MessageText,
+            )
         } else {
-            ("Add comment", Icon::MessagePlusSquare)
+            (
+                crate::t!("code-review-add-comment"),
+                Icon::MessagePlusSquare,
+            )
         };
 
         items.push(
@@ -7030,7 +7040,7 @@ impl CodeReviewView {
         let is_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
         if is_ai_enabled && FeatureFlag::DiffSetAsContext.is_enabled() && has_changes {
             items.push(
-                MenuItemFields::new("Add diff set as context")
+                MenuItemFields::new(crate::t!("code-review-add-diff-set-context"))
                     .with_icon(Icon::Paperclip)
                     .with_on_select_action(CodeReviewAction::AddDiffSetAsContext(DiffSetScope::All))
                     .into_item(),
@@ -7040,9 +7050,15 @@ impl CodeReviewView {
         if FeatureFlag::FileAndDiffSetComments.is_enabled() && has_changes {
             let (comment_label, comment_icon) = if self.get_existing_diffset_comment(ctx).is_some()
             {
-                ("Show saved comment", Icon::MessageText)
+                (
+                    crate::t!("code-review-show-saved-comment"),
+                    Icon::MessageText,
+                )
             } else {
-                ("Add comment", Icon::MessagePlusSquare)
+                (
+                    crate::t!("code-review-add-comment"),
+                    Icon::MessagePlusSquare,
+                )
             };
 
             items.push(
@@ -7055,7 +7071,7 @@ impl CodeReviewView {
 
         if FeatureFlag::DiscardPerFileAndAllChanges.is_enabled() && has_changes {
             items.push(
-                MenuItemFields::new("Discard all")
+                MenuItemFields::new(crate::t!("code-review-discard-all"))
                     .with_icon(Icon::ReverseLeft)
                     .with_on_select_action(CodeReviewAction::ShowDiscardConfirmDialog(None))
                     .into_item(),
@@ -7831,7 +7847,7 @@ impl BackingView for CodeReviewView {
         _ctx: &view::HeaderRenderContext<'_>,
         _app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple("Reviewing code changes")
+        view::HeaderContent::simple(crate::t!("code-review-header-reviewing-changes"))
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, ctx: &mut ViewContext<Self>) {

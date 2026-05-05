@@ -50,9 +50,12 @@ impl InheritanceState {
 
         match folder_name {
             Some(folder_name) => {
-                let prefix = style::detail_text("Inherited from ", appearance)
-                    .build()
-                    .finish();
+                let prefix = style::detail_text(
+                    crate::t_static!("sharing-inherited-from-prefix"),
+                    appearance,
+                )
+                .build()
+                .finish();
                 let source_folder = self.source_folder;
                 let folder_link = appearance
                     .ui_builder()
@@ -76,14 +79,17 @@ impl InheritanceState {
                         .with_children([prefix, folder_link])
                         .with_cross_axis_alignment(CrossAxisAlignment::Center)
                         .finish(),
-                    tooltip_text: "Edit inherited permissions on the parent folder",
+                    tooltip_text: crate::t!("sharing-inherited-permissions-edit-parent-tooltip"),
                 }
             }
             None => InheritanceDetails {
-                source_label: style::detail_text("Inherited permission", appearance)
-                    .build()
-                    .finish(),
-                tooltip_text: "Cannot edit inherited permissions",
+                source_label: style::detail_text(
+                    crate::t_static!("sharing-inherited-permission-label"),
+                    appearance,
+                )
+                .build()
+                .finish(),
+                tooltip_text: crate::t!("sharing-inherited-permissions-cannot-edit-tooltip"),
             },
         }
     }
@@ -95,5 +101,5 @@ pub struct InheritanceDetails {
     /// permissions directly.
     pub source_label: Box<dyn Element>,
     /// A tooltip to show on disabled permission-editing controls.
-    pub tooltip_text: &'static str,
+    pub tooltip_text: String,
 }

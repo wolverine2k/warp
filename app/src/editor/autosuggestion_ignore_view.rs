@@ -139,7 +139,7 @@ impl View for AutosuggestionIgnore {
             if state.is_hovered() {
                 let tool_tip = appearance
                     .ui_builder()
-                    .autosuggestion_tool_tip("Ignore this suggestion".into())
+                    .autosuggestion_tool_tip(crate::t!("autosuggestion-ignore-this-suggestion"))
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(

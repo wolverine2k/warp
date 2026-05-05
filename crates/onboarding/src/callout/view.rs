@@ -7,6 +7,27 @@ use warpui::{
     ViewContext,
 };
 
+use std::sync::OnceLock;
+
+type Localizer = fn(&str) -> String;
+
+static LOCALIZER: OnceLock<Localizer> = OnceLock::new();
+
+pub fn set_localizer(localizer: Localizer) {
+    let _ = LOCALIZER.set(localizer);
+}
+
+fn localized(key: &str, fallback: &str) -> String {
+    LOCALIZER
+        .get()
+        .map(|f| f(key))
+        .unwrap_or_else(|| fallback.to_string())
+}
+
+fn localized_static(key: &str, fallback: &'static str) -> String {
+    localized(key, fallback)
+}
+
 /// Display strings for keybindings shown in the onboarding callout.
 #[derive(Clone, Debug)]
 pub struct OnboardingKeybindings {
@@ -14,8 +35,6 @@ pub struct OnboardingKeybindings {
     pub toggle_input_mode: String,
     /// Display string for submitting to local agent (e.g., "⌘⏎")
     pub submit_to_local_agent: String,
-    /// Display string for submitting to cloud agent (e.g., "⌘⌥⏎")
-    pub submit_to_cloud_agent: String,
 }
 
 use crate::{
@@ -29,7 +48,7 @@ use crate::{
 
 /// Options for rendering a callout.
 struct CalloutOptions {
-    title: &'static str,
+    title: String,
     /// Pre-built text with keybindings already embedded
     text: String,
     step: StepStatus,
@@ -41,13 +60,13 @@ struct CalloutOptions {
 }
 
 struct ButtonOptions {
-    text: &'static str,
+    text: String,
     action: OnboardingCalloutViewAction,
     keystroke: Option<Keystroke>,
 }
 
 struct CheckboxOptions {
-    label: &'static str,
+    label: String,
     checked: bool,
 }
 
@@ -58,27 +77,38 @@ fn get_universal_input_callout_options(
 ) -> Option<CalloutOptions> {
     match state {
         UniversalInputCalloutState::MeetInput => Some(CalloutOptions {
-            title: "Meet the Warp input",
+            title: localized_static("onboarding-callout-meet-input-title", "Meet the Warp input"),
             text: format!(
-                "Your terminal input accepts both terminal commands and agent prompts and automatically detects which you're using. Use {} to lock the input to Agent mode (natural language) or Terminal mode (commands).",
-                keybindings.toggle_input_mode
+                "{} {} {}",
+                localized(
+                    "onboarding-callout-meet-input-text-prefix",
+                    "Your terminal input accepts both terminal commands and agent prompts and automatically detects which you're using. Use"
+                ),
+                keybindings.toggle_input_mode,
+                localized(
+                    "onboarding-callout-meet-input-text-suffix",
+                    "to lock the input to Agent mode (natural language) or Terminal mode (commands)."
+                )
             ),
             step: StepStatus::new(0, 2),
             left_button: None,
             right_button: ButtonOptions {
-                text: "Next",
+                text: localized("common-next", "Next"),
                 action: OnboardingCalloutViewAction::NextClicked,
                 keystroke: Some(Keystroke::parse("enter").unwrap_or_default()),
             },
             checkbox: None,
         }),
         UniversalInputCalloutState::TalkToAgent => Some(CalloutOptions {
-            title: "Talk to the agent",
-            text: "You can type in natural language to engage the agent. Submit the query below to start: What tests exist in this repo, how are they structured, and what do they cover?".to_string(),
+            title: localized_static("onboarding-callout-talk-agent-title", "Talk to the agent"),
+            text: localized(
+                "onboarding-callout-talk-agent-text",
+                "You can type in natural language to engage the agent. Submit the query below to start: What tests exist in this repo, how are they structured, and what do they cover?",
+            ),
             step: StepStatus::new(1, 2),
             left_button: if has_project {
                 Some(ButtonOptions {
-                    text: "Skip",
+                    text: localized("onboarding-callout-skip", "Skip"),
                     action: OnboardingCalloutViewAction::SkipClicked,
                     keystroke: Some(Keystroke::parse("delete").unwrap_or_default()),
                 })
@@ -86,7 +116,11 @@ fn get_universal_input_callout_options(
                 None
             },
             right_button: ButtonOptions {
-                text: if has_project { "Submit" } else { "Finish" },
+                text: if has_project {
+                    localized("onboarding-callout-submit", "Submit")
+                } else {
+                    localized("onboarding-callout-finish", "Finish")
+                },
                 action: OnboardingCalloutViewAction::NextClicked,
                 keystroke: Some(Keystroke::parse("enter").unwrap_or_default()),
             },
@@ -111,22 +145,35 @@ fn get_agent_modality_callout_options(
 
     match state {
         AgentModalityCalloutState::MeetTerminalInput => {
-            let title: &'static str  = if has_project || intention == OnboardingIntention::Terminal {
-                "Meet your terminal input"
+            let title = if has_project || intention == OnboardingIntention::Terminal {
+                localized_static(
+                    "onboarding-callout-meet-terminal-title",
+                    "Meet your terminal input",
+                )
             } else {
-                "Meet your updated terminal input"
+                localized_static(
+                    "onboarding-callout-meet-updated-terminal-title",
+                    "Meet your updated terminal input",
+                )
             };
             Some(CalloutOptions {
                 title,
                 text: format!(
-                    "Run commands from the terminal, or use {} or {} to start or send to a local or cloud agent respectively.",
+                    "{} {} {}",
+                    localized(
+                        "onboarding-callout-meet-terminal-text-prefix",
+                        "Run commands from the terminal, or use"
+                    ),
                     keybindings.submit_to_local_agent,
-                    keybindings.submit_to_cloud_agent
+                    localized(
+                        "onboarding-callout-meet-terminal-text-suffix",
+                        "to start or send to the agent."
+                    ),
                 ),
                 step: StepStatus::new(0, total_steps),
                 left_button: None,
                 right_button: ButtonOptions {
-                    text: "Next",
+                    text: localized("common-next", "Next"),
                     action: OnboardingCalloutViewAction::NextClicked,
                     keystroke: Some(Keystroke::parse("enter").unwrap_or_default()),
                 },
@@ -139,15 +186,26 @@ fn get_agent_modality_callout_options(
             if initial_natural_language_detection_enabled {
                 // NL detection was already enabled - show simpler "overrides" callout without checkbox
                 Some(CalloutOptions {
-                    title: "Natural language overrides",
+                    title: localized_static(
+                        "onboarding-callout-nl-overrides-title",
+                        "Natural language overrides",
+                    ),
                     text: format!(
-                        "You can always override any auto-detection using {}.",
-                        keybindings.toggle_input_mode
+                        "{} {}.",
+                        localized(
+                            "onboarding-callout-nl-overrides-text-prefix",
+                            "You can always override any auto-detection using"
+                        ),
+                        keybindings.toggle_input_mode,
                     ),
                     step: StepStatus::new(1, total_steps),
                     left_button: None,
                     right_button: ButtonOptions {
-                        text: if is_final_step { "Finish" } else { "Next" },
+                        text: if is_final_step {
+                            localized("onboarding-callout-finish", "Finish")
+                        } else {
+                            localized("common-next", "Next")
+                        },
                         action: OnboardingCalloutViewAction::NextClicked,
                         keystroke: Some(Keystroke::parse("enter").unwrap_or_default()),
                     },
@@ -156,32 +214,52 @@ fn get_agent_modality_callout_options(
             } else {
                 // NL detection was disabled - show full explanation with checkbox to enable
                 Some(CalloutOptions {
-                    title: "Natural language support",
+                    title: localized_static(
+                        "onboarding-callout-nl-support-title",
+                        "Natural language support",
+                    ),
                     text: format!(
-                        "Natural language input is off by default. If enabled, you can type requests in plain English and Warp will autodetect queries for the agent. You can always override them using {}.",
-                        keybindings.toggle_input_mode
+                        "{} {}.",
+                        localized(
+                            "onboarding-callout-nl-support-text-prefix",
+                            "Natural language input is off by default. If enabled, you can type requests in plain English and Warp will autodetect queries for the agent. You can always override them using"
+                        ),
+                        keybindings.toggle_input_mode,
                     ),
                     step: StepStatus::new(1, total_steps),
                     left_button: None,
                     right_button: ButtonOptions {
-                        text: if is_final_step { "Finish" } else { "Next" },
+                        text: if is_final_step {
+                            localized("onboarding-callout-finish", "Finish")
+                        } else {
+                            localized("common-next", "Next")
+                        },
                         action: OnboardingCalloutViewAction::NextClicked,
                         keystroke: Some(Keystroke::parse("enter").unwrap_or_default()),
                     },
                     checkbox: Some(CheckboxOptions {
-                        label: "Enable Natural Language Detection",
+                        label: localized(
+                            "onboarding-callout-enable-nl-detection",
+                            "Enable Natural Language Detection",
+                        ),
                         checked: natural_language_detection_enabled,
                     }),
                 })
             }
         }
         AgentModalityCalloutState::IntroducingAgentExperience => Some(CalloutOptions {
-            title: "Introducing Warp's new agent experience",
-            text: "Agent conversations are now their own scoped view outside of your terminal. Simply hit ESC to return to the terminal at any point.".to_string(),
+            title: localized_static(
+                "onboarding-callout-new-agent-title",
+                "Introducing Warp's new agent experience",
+            ),
+            text: localized(
+                "onboarding-callout-new-agent-text",
+                "Agent conversations are now their own scoped view outside of your terminal. Simply hit ESC to return to the terminal at any point.",
+            ),
             step: StepStatus::new(2, total_steps),
             left_button: None,
             right_button: ButtonOptions {
-                text: "Next",
+                text: localized("common-next", "Next"),
                 action: OnboardingCalloutViewAction::NextClicked,
                 keystroke: Some(Keystroke::parse("enter").unwrap_or_default()),
             },
@@ -190,16 +268,25 @@ fn get_agent_modality_callout_options(
         AgentModalityCalloutState::UpdatedAgentInput => {
             if has_project {
                 Some(CalloutOptions {
-                    title: "Updated agent input",
-                    text: "Your agent input will detect natural language as well as commands by default. Use ! to lock the input in bash mode to write commands.\n\nSubmit the query below to have the agent initialize this project, or ⊗ to clear the input and start your own!".to_string(),
+                    title: localized_static(
+                        "onboarding-callout-updated-agent-input-title",
+                        "Updated agent input",
+                    ),
+                    text: localized(
+                        "onboarding-callout-updated-agent-input-project-text",
+                        "Your agent input will detect natural language as well as commands by default. Use ! to lock the input in bash mode to write commands.\n\nSubmit the query below to have the agent initialize this project, or ⊗ to clear the input and start your own!",
+                    ),
                     step: StepStatus::new(3, total_steps),
                     left_button: Some(ButtonOptions {
-                        text: "Skip initialization",
+                        text: localized(
+                            "onboarding-callout-skip-initialization",
+                            "Skip initialization",
+                        ),
                         action: OnboardingCalloutViewAction::SkipClicked,
                         keystroke: Some(Keystroke::parse("delete").unwrap_or_default()),
                     }),
                     right_button: ButtonOptions {
-                        text: "Initialize",
+                        text: localized("onboarding-callout-initialize", "Initialize"),
                         action: OnboardingCalloutViewAction::NextClicked,
                         keystroke: Some(Keystroke::parse("enter").unwrap_or_default()),
                     },
@@ -207,16 +294,22 @@ fn get_agent_modality_callout_options(
                 })
             } else {
                 Some(CalloutOptions {
-                    title: "Updated agent input",
-                    text: "Your agent input will detect natural language as well as commands by default. Use ! to lock the input in bash mode to write commands.".to_string(),
+                    title: localized_static(
+                        "onboarding-callout-updated-agent-input-title",
+                        "Updated agent input",
+                    ),
+                    text: localized(
+                        "onboarding-callout-updated-agent-input-text",
+                        "Your agent input will detect natural language as well as commands by default. Use ! to lock the input in bash mode to write commands.",
+                    ),
                     step: StepStatus::new(3, total_steps),
                     left_button: Some(ButtonOptions {
-                        text: "Back to terminal",
+                        text: localized("onboarding-callout-back-terminal", "Back to terminal"),
                         action: OnboardingCalloutViewAction::BackToTerminalClicked,
                         keystroke: Some(Keystroke::parse("escape").unwrap_or_default()),
                     }),
                     right_button: ButtonOptions {
-                        text: "Finish",
+                        text: localized("onboarding-callout-finish", "Finish"),
                         action: OnboardingCalloutViewAction::NextClicked,
                         keystroke: Some(Keystroke::parse("enter").unwrap_or_default()),
                     },

@@ -142,7 +142,7 @@ impl InlineModelSelectorView {
 
         let menu_view = if FeatureFlag::InlineMenuHeaders.is_enabled() {
             let manage_defaults_button = ctx.add_view(|_| {
-                ActionButton::new("Manage defaults", ManageDefaultsTheme)
+                ActionButton::new(crate::t!("terminal-manage-defaults"), ManageDefaultsTheme)
                     .with_icon(Icon::Settings)
                     .with_size(ButtonSize::Small)
                     .on_click(|ctx| {
@@ -186,11 +186,15 @@ impl InlineModelSelectorView {
                     let is_cli_agent_in_control_or_tagged_in =
                         cli_ctrl.as_ref(app).is_agent_in_control_or_tagged_in();
                     let message = match active_tab {
-                        InlineModelSelectorTab::FullTerminalUse if main_agent_in_progress && !is_cli_agent_in_control_or_tagged_in => {
-                            Some("You're using the base agent. Full terminal use models only apply to the full terminal use agent.")
+                        InlineModelSelectorTab::FullTerminalUse
+                            if main_agent_in_progress && !is_cli_agent_in_control_or_tagged_in =>
+                        {
+                            Some(crate::t!("terminal-model-banner-base-agent"))
                         }
-                        InlineModelSelectorTab::BaseAgent if is_cli_agent_in_control_or_tagged_in => {
-                            Some("You're using the full terminal use agent. Base models only apply to the base agent.")
+                        InlineModelSelectorTab::BaseAgent
+                            if is_cli_agent_in_control_or_tagged_in =>
+                        {
+                            Some(crate::t!("terminal-model-banner-full-terminal-agent"))
                         }
                         _ => None,
                     };
@@ -198,8 +202,7 @@ impl InlineModelSelectorView {
                     message.map(|msg| {
                         let appearance = Appearance::as_ref(app);
                         Alert::new().render(
-                            AlertConfig::warning(msg.to_string())
-                                .with_main_axis_size(MainAxisSize::Max),
+                            AlertConfig::warning(msg).with_main_axis_size(MainAxisSize::Max),
                             appearance,
                         )
                     })

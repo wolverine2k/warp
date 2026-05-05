@@ -1088,13 +1088,13 @@ impl UseAgentToolbar {
 
         let button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new(
-                "Use agent",
+                crate::t!("terminal-use-agent"),
                 AgentFooterButtonTheme::new(Some(terminal_model.clone())),
             )
             .with_icon(Icon::Oz)
             .with_keybinding(KeystrokeSource::Fixed(USE_AGENT_KEYSTROKE.clone()), ctx)
             .with_size(button_size)
-            .with_tooltip("Ask the Warp agent to assist")
+            .with_tooltip(crate::t!("terminal-use-agent-tooltip"))
             .with_tooltip_alignment(TooltipAlignment::Left)
             .on_click(|ctx| {
                 ctx.dispatch_typed_action(TerminalAction::SetInputModeAgent);
@@ -1102,13 +1102,13 @@ impl UseAgentToolbar {
         });
         let give_control_back_button = ctx.add_typed_action_view(|ctx| {
             ActionButton::new(
-                "Give control back to agent",
+                crate::t!("terminal-give-control-back-to-agent"),
                 AgentFooterButtonTheme::new(Some(terminal_model.clone())),
             )
             .with_icon(Icon::Oz)
             .with_keybinding(KeystrokeSource::Fixed(USE_AGENT_KEYSTROKE.clone()), ctx)
             .with_size(button_size)
-            .with_tooltip("Ask the Warp agent to resume")
+            .with_tooltip(crate::t!("terminal-resume-agent-tooltip"))
             .with_tooltip_alignment(TooltipAlignment::Left)
             .on_click(|ctx| {
                 ctx.dispatch_typed_action(TerminalAction::SetInputModeAgent);

@@ -34,7 +34,6 @@ use crate::pane_group::pane::ActionOrigin;
 use crate::quit_warning::UnsavedStateSummary;
 #[cfg(target_family = "wasm")]
 use crate::server::cloud_objects::update_manager::UpdateManager;
-use crate::server::server_api::ServerApiProvider;
 use crate::settings::{AISettings, DefaultSessionMode, PaneSettings};
 use crate::settings_view::SettingsSection;
 use crate::shell_indicator::ShellIndicatorType;
@@ -86,8 +85,7 @@ use warp_util::path::convert_wsl_to_windows_host_path;
 #[cfg(feature = "local_fs")]
 use warp_util::path::LineAndColumnArg;
 use warpui::elements::{
-    Clipped, CrossAxisAlignment, DispatchEventResult, EventHandler, Flex, MainAxisSize, Shrinkable,
-    Stack,
+    CrossAxisAlignment, DispatchEventResult, EventHandler, Flex, MainAxisSize, Shrinkable, Stack,
 };
 use warpui::keymap::{Context, EditableBinding, FixedBinding};
 use warpui::notification::NotificationSendError;
@@ -137,18 +135,15 @@ use crate::terminal::shared_session::render_util::ParticipantAvatarParams;
 use crate::terminal::shared_session::role_change_modal::{
     RoleChangeCloseSource, RoleChangeModal, RoleChangeModalEvent,
 };
-use crate::terminal::shared_session::share_modal::{ShareSessionModal, ShareSessionModalEvent};
+// OpenWarp:删除 ShareSessionModal import(云端 shared session 弹窗)
 use crate::terminal::shared_session::{self, IsSharedSessionCreator, SharedSessionActionSource};
 use crate::terminal::view::ssh_file_upload::FileUploadId;
 use crate::terminal::view::{
     BlockNotification, ConversationRestorationInNewPaneType, ExecuteCommandEvent,
     LeftPanelTargetView, SyncEvent, TerminalViewState,
 };
-use crate::terminal::{
-    MockTerminalManager, ShareBlockModal, ShareBlockModalEvent, ShellLaunchData, ShellLaunchState,
-};
+use crate::terminal::{MockTerminalManager, ShellLaunchData, ShellLaunchState};
 use crate::{cmd_or_ctrl_shift, send_telemetry_from_ctx};
-use session_sharing_protocol::sharer::SessionSourceType;
 use settings::Setting as _;
 
 use crate::code::active_file::ActiveFileModel;
@@ -173,10 +168,6 @@ pub mod working_directories;
 use child_agent::{apply_hidden_child_agent_task_context, HiddenChildAgentTaskContext};
 
 use focus_state::PaneGroupFocusState;
-
-#[cfg(test)]
-#[path = "mod_tests.rs"]
-mod tests;
 
 pub use crate::code_review::CodeReviewPanelArg;
 pub use pane::ai_document_pane::AIDocumentPane;
@@ -350,14 +341,14 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "pane_group:close_current_session",
-            "Close Current Session",
+            crate::t!("keybinding-desc-pane-group-close-current-session"),
             PaneGroupAction::RemoveActive,
         )
         .with_custom_action(CustomAction::CloseCurrentSession)
         .with_context_predicate(id!("PaneGroup")),
         EditableBinding::new(
             "pane_group:add_left",
-            "Split pane left",
+            crate::t!("keybinding-desc-pane-group-split-left"),
             PaneGroupAction::Add(Direction::Left),
         )
         .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
@@ -365,7 +356,7 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
         EditableBinding::new(
             "pane_group:add_up",
-            "Split pane up",
+            crate::t!("keybinding-desc-pane-group-split-up"),
             PaneGroupAction::Add(Direction::Up),
         )
         .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
@@ -373,7 +364,7 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
         EditableBinding::new(
             "pane_group:navigate_left",
-            "Switch panes left",
+            crate::t!("keybinding-desc-pane-group-switch-left"),
             PaneGroupAction::NavigateLeft,
         )
         .with_context_predicate(
@@ -382,7 +373,7 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("cmdorctrl-alt-left"),
         EditableBinding::new(
             "pane_group:navigate_right",
-            "Switch panes right",
+            crate::t!("keybinding-desc-pane-group-switch-right"),
             PaneGroupAction::NavigateRight,
         )
         .with_context_predicate(
@@ -391,7 +382,7 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("cmdorctrl-alt-right"),
         EditableBinding::new(
             "pane_group:navigate_up",
-            "Switch panes up",
+            crate::t!("keybinding-desc-pane-group-switch-up"),
             PaneGroupAction::NavigateUp,
         )
         .with_context_predicate(
@@ -400,7 +391,7 @@ pub fn init(app: &mut AppContext) {
         .with_key_binding("cmdorctrl-alt-up"),
         EditableBinding::new(
             "pane_group:navigate_down",
-            "Switch panes down",
+            crate::t!("keybinding-desc-pane-group-switch-down"),
             PaneGroupAction::NavigateDown,
         )
         .with_context_predicate(
@@ -415,7 +406,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "pane_group:resize_left",
-            "Resize pane > Move divider left",
+            crate::t!("keybinding-desc-pane-group-resize-left"),
             PaneGroupAction::ResizeLeft,
         )
         .with_context_predicate(
@@ -424,7 +415,7 @@ pub fn init(app: &mut AppContext) {
         .with_mac_key_binding("cmd-ctrl-left"),
         EditableBinding::new(
             "pane_group:resize_right",
-            "Resize pane > Move divider right",
+            crate::t!("keybinding-desc-pane-group-resize-right"),
             PaneGroupAction::ResizeRight,
         )
         .with_context_predicate(
@@ -433,7 +424,7 @@ pub fn init(app: &mut AppContext) {
         .with_mac_key_binding("cmd-ctrl-right"),
         EditableBinding::new(
             "pane_group:resize_up",
-            "Resize pane > Move divider up",
+            crate::t!("keybinding-desc-pane-group-resize-up"),
             PaneGroupAction::ResizeUp,
         )
         .with_context_predicate(
@@ -442,7 +433,7 @@ pub fn init(app: &mut AppContext) {
         .with_mac_key_binding("cmd-ctrl-up"),
         EditableBinding::new(
             "pane_group:resize_down",
-            "Resize pane > Move divider down",
+            crate::t!("keybinding-desc-pane-group-resize-down"),
             PaneGroupAction::ResizeDown,
         )
         .with_context_predicate(
@@ -454,7 +445,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "pane_group:add_down",
-            "Split pane down",
+            crate::t!("keybinding-desc-pane-group-split-down"),
             PaneGroupAction::Add(Direction::Down),
         )
         .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
@@ -462,7 +453,7 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
         EditableBinding::new(
             "pane_group:add_right",
-            "Split pane right",
+            crate::t!("keybinding-desc-pane-group-split-right"),
             PaneGroupAction::Add(Direction::Right),
         )
         .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
@@ -470,7 +461,7 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
         EditableBinding::new(
             "pane_group:toggle_maximize_pane",
-            "Toggle Maximize Active Pane",
+            crate::t!("keybinding-desc-pane-group-toggle-maximize"),
             PaneGroupAction::ToggleMaximizePane,
         )
         .with_context_predicate(id!("PaneGroup") & !id!("PaneGroup_PaneDragging"))
@@ -505,9 +496,6 @@ pub enum Event {
         pane_id: PaneId,
     },
     OpenSettings(SettingsSection),
-    OpenAutoReloadModal {
-        purchased_credits: i32,
-    },
     AskAIAssistant(AskAIType),
     /// Pass input sync event up from underlying TerminalViews
     /// to the Workspace to sync throughout the window.
@@ -744,9 +732,6 @@ pub enum Event {
     OpenLspLogs {
         log_path: PathBuf,
     },
-    ShowCloudAgentCapacityModal {
-        variant: crate::workspace::view::cloud_agent_capacity_modal::CloudAgentCapacityModalVariant,
-    },
     FreeTierLimitCheckTriggered,
     #[cfg(not(target_family = "wasm"))]
     OpenPluginInstructionsPane(crate::terminal::CLIAgent, PluginModalKind),
@@ -862,21 +847,11 @@ pub struct PaneGroup {
 
     server_api: Arc<ServerApi>,
 
-    /// The terminal session with an open share block modal. Only terminal panes use the share block modal.
-    terminal_with_open_share_block_modal: Option<TerminalPaneId>,
-
-    // We are only holding one instance of share modal view in the pane group and
-    // update it with the correct terminal model and size info when triggered by
-    // the context menu event.
-    share_block_modal: ViewHandle<ShareBlockModal>,
+    // OpenWarp:删除 terminal_with_open_share_block_modal / share_block_modal 字段(云端 share block)
     dragged_border: Option<DraggedBorder>,
     user_default_shell_changed_banner: ViewHandle<Banner<PaneGroupAction>>,
 
-    /// If there is an open share session modal, the pane ID of its terminal. Only terminal panes
-    /// use the share session modal. `None` if no share session modal is open.
-    terminal_with_open_share_session_modal: Option<TerminalPaneId>,
-    share_session_modal: ViewHandle<ShareSessionModal>,
-
+    // OpenWarp:删除 terminal_with_open_share_session_modal / share_session_modal 字段(云端 shared session)
     /// If there is a shared session role change modal open, this is the `TerminalPaneId` of the relevant session. Modal is opened whenever a shared session participant attempts to change a
     /// role. For a viewer when they request a role. For a sharer when they receive a role request,
     /// or when they attempt to grant a role.
@@ -1886,6 +1861,15 @@ impl PaneGroup {
                     "Can't restore execution profile editor panes"
                 ))
             }
+            LeafContents::SshServer { .. } => {
+                // SSH server editor panes are intentionally not restored —
+                // they're transient editor surfaces over the persistent
+                // `ssh_servers` table. Users reopen via the SSH manager tree
+                // in the left panel.
+                Err(anyhow::anyhow!(
+                    "SSH server pane should not have been persisted, as it cannot be restored"
+                ))
+            }
             LeafContents::NetworkLog => {
                 // Network log panes are intentionally not restored. Two
                 // reasons:
@@ -2468,107 +2452,27 @@ impl PaneGroup {
             return;
         }
 
-        self.share_session_modal.update(ctx, |modal, ctx| {
-            modal.open(
-                terminal_pane_id,
-                open_source,
-                terminal_view.as_ref(ctx).model.clone(),
-                terminal_view.id(),
-                ctx,
-            );
-        });
-        self.terminal_with_open_share_session_modal = Some(terminal_pane_id);
-        ctx.focus(&self.share_session_modal);
+        // OpenWarp:share_session_modal 已删,no-op
+        let _ = (terminal_pane_id, open_source, terminal_view);
         ctx.notify();
     }
 
     fn open_share_session_denied_modal(
         &mut self,
-        terminal_pane_id: TerminalPaneId,
+        _terminal_pane_id: TerminalPaneId,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.share_session_modal.update(ctx, |modal, ctx| {
-            modal.open_denied(terminal_pane_id, ctx);
-        });
-        self.terminal_with_open_share_session_modal = Some(terminal_pane_id);
-        ctx.focus(&self.share_session_modal);
+        // OpenWarp:share_session_modal 已删,no-op
         ctx.notify();
     }
 
     /// Closes the share session modal if it is open. Does nothing otherwise. Does not change
     /// which element is focused.
-    fn close_share_session_modal(&mut self, ctx: &mut ViewContext<Self>) {
-        let Some(terminal_pane_id) = self.terminal_with_open_share_session_modal.take() else {
-            return;
-        };
-
-        if let Some(terminal_view) = self.terminal_view_from_pane_id(terminal_pane_id, ctx) {
-            terminal_view.update(ctx, |view, ctx| {
-                view.set_show_pane_accent_border(false, ctx)
-            });
-        }
-        ctx.notify();
+    fn close_share_session_modal(&mut self, _ctx: &mut ViewContext<Self>) {
+        // OpenWarp:share_session_modal 已删,no-op
     }
 
-    fn handle_share_session_modal_event(
-        &mut self,
-        event: &ShareSessionModalEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match event {
-            ShareSessionModalEvent::Close => {
-                let Some(terminal_pane_id) = self.terminal_with_open_share_session_modal.take()
-                else {
-                    return;
-                };
-
-                if let Some(pane) = self.focused_pane_content(ctx) {
-                    pane.focus(ctx);
-                }
-
-                if let Some(terminal_view) = self.terminal_view_from_pane_id(terminal_pane_id, ctx)
-                {
-                    terminal_view.update(ctx, |view, ctx| {
-                        view.set_show_pane_accent_border(false, ctx)
-                    });
-                }
-                ctx.notify();
-            }
-            ShareSessionModalEvent::StartSharing {
-                terminal_pane_id,
-                scrollback_type,
-                source,
-            } => {
-                self.terminal_with_open_share_session_modal = None;
-                ctx.notify();
-
-                let Some(terminal_view) = self.terminal_view_from_pane_id(*terminal_pane_id, ctx)
-                else {
-                    return;
-                };
-
-                terminal_view.update(ctx, |view, ctx| {
-                    view.attempt_to_share_session(
-                        *scrollback_type,
-                        Some(*source),
-                        SessionSourceType::default(),
-                        false,
-                        ctx,
-                    );
-                });
-            }
-            ShareSessionModalEvent::Upgrade => {
-                self.terminal_with_open_share_session_modal = None;
-                if let Some(pane) = self.focused_pane_content(ctx) {
-                    pane.focus(ctx);
-                }
-                ctx.emit(Event::OpenSettings(SettingsSection::Teams));
-                ctx.notify();
-
-                send_telemetry_from_ctx!(TelemetryEvent::SharedSessionModalUpgradePressed, ctx);
-            }
-        }
-    }
+    // OpenWarp:删除 handle_share_session_modal_event(云端 shared session 弹窗)
 
     fn open_shared_session_viewer_request_modal(
         &mut self,
@@ -2917,12 +2821,7 @@ impl PaneGroup {
             me.handle_focus_state_event(event, ctx);
         });
 
-        let block_client = ServerApiProvider::as_ref(ctx).get_block_client();
-        let share_modal =
-            ctx.add_typed_action_view(|ctx| ShareBlockModal::new(None, block_client, ctx));
-        ctx.subscribe_to_view(&share_modal, move |me, _, event, ctx| {
-            me.handle_share_block_modal_event(event, ctx);
-        });
+        // OpenWarp:删除 share_block_modal 注册(云端 share block)
 
         ctx.subscribe_to_model(&PaneSettings::handle(ctx), |_, _, _, ctx| {
             ctx.notify();
@@ -2963,10 +2862,7 @@ impl PaneGroup {
             },
         );
 
-        let share_session_modal = ctx.add_typed_action_view(ShareSessionModal::new);
-        ctx.subscribe_to_view(&share_session_modal, |me, _, event, ctx| {
-            me.handle_share_session_modal_event(event, ctx);
-        });
+        // OpenWarp:删除 share_session_modal 注册(云端 shared session 弹窗)
 
         let shared_session_role_change_modal = ctx.add_view(RoleChangeModal::new);
         ctx.subscribe_to_view(&shared_session_role_change_modal, |me, _, event, ctx| {
@@ -2989,12 +2885,8 @@ impl PaneGroup {
             pane_history,
             pane_contents,
             server_api,
-            terminal_with_open_share_block_modal: None,
-            share_block_modal: share_modal,
             dragged_border: None,
             user_default_shell_changed_banner,
-            terminal_with_open_share_session_modal: None,
-            share_session_modal,
             terminal_with_shared_session_role_change_modal_open: None,
             shared_session_role_change_modal,
             active_file_model,
@@ -3929,24 +3821,7 @@ impl PaneGroup {
         }
     }
 
-    fn handle_share_block_modal_event(
-        &mut self,
-        event: &ShareBlockModalEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match event {
-            ShareBlockModalEvent::Close => {
-                self.focus(ctx);
-                self.terminal_with_open_share_block_modal = None;
-                ctx.notify();
-            }
-            ShareBlockModalEvent::ShowToast { message, flavor } => ctx.emit(Event::ShowToast {
-                message: message.clone(),
-                flavor: *flavor,
-                pane_id: None,
-            }),
-        }
-    }
+    // OpenWarp:删除 handle_share_block_modal_event(云端 share block)
 
     /// Used to add a new pane but not splitting panes.
     pub fn add_terminal_pane(
@@ -4555,10 +4430,7 @@ impl PaneGroup {
                 self.hide_closed_pane(pane_id, ctx);
             }
 
-            // Remove opened share modal associated with the closing session.
-            if Some(pane_id) == self.terminal_with_open_share_block_modal.map(Into::into) {
-                self.terminal_with_open_share_block_modal = None;
-            }
+            // OpenWarp:删除 share_block_modal cleanup(云端 share block)
 
             if self.pane_with_open_environment_setup_mode_selector == Some(pane_id) {
                 self.pane_with_open_environment_setup_mode_selector = None;
@@ -4587,10 +4459,7 @@ impl PaneGroup {
 
             self.clean_up_pane(pane_id, ctx);
 
-            // Remove opened share modal associated with the closing session.
-            if Some(pane_id) == self.terminal_with_open_share_block_modal.map(Into::into) {
-                self.terminal_with_open_share_block_modal = None;
-            }
+            // OpenWarp:删除 share_block_modal cleanup(云端 share block)
 
             if self.pane_with_open_environment_setup_mode_selector == Some(pane_id) {
                 self.pane_with_open_environment_setup_mode_selector = None;
@@ -6668,16 +6537,6 @@ impl PaneGroup {
             })
     }
 
-    #[cfg(test)]
-    pub fn is_share_session_modal_open(&self) -> bool {
-        self.terminal_with_open_share_session_modal.is_some()
-    }
-
-    #[cfg(test)]
-    pub fn share_session_modal(&self) -> &ViewHandle<ShareSessionModal> {
-        &self.share_session_modal
-    }
-
     pub(crate) fn start_agent_mode_in_new_pane(
         &mut self,
         initial_query: Option<&str>,
@@ -6835,7 +6694,7 @@ impl PaneGroup {
 
         self.close_share_session_modal(ctx);
         self.close_shared_session_role_change_modal(RoleChangeCloseSource::ViewerRequest, ctx);
-        self.terminal_with_open_share_block_modal = None;
+        // OpenWarp:删除 terminal_with_open_share_block_modal 清空(字段已不存在)
         ctx.notify();
     }
 
@@ -6978,16 +6837,8 @@ impl View for PaneGroup {
 
         let mut stack = Stack::new().with_child(column.finish());
 
-        // Render the share modals on the pane group level so that their
-        // size is not restricted to within the terminal view.
-        if self.terminal_with_open_share_block_modal.is_some() {
-            stack
-                .add_child(Clipped::new(ChildView::new(&self.share_block_modal).finish()).finish());
-        } else if FeatureFlag::CreatingSharedSessions.is_enabled()
-            && self.terminal_with_open_share_session_modal.is_some()
-        {
-            stack.add_child(ChildView::new(&self.share_session_modal).finish());
-        } else if self
+        // OpenWarp:删除 share_block_modal / share_session_modal 渲染分支(字段已不存在)
+        if self
             .terminal_with_shared_session_role_change_modal_open
             .is_some()
         {

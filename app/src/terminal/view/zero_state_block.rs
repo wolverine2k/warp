@@ -19,7 +19,6 @@ use warpui::{
 use crate::{
     ai::blocklist::agent_view::{
         AgentViewController, AgentViewControllerEvent, ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
-        ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE,
     },
     appearance::Appearance,
     settings::{AISettings, AISettingsChangedEvent, InputModeSettings},
@@ -49,7 +48,6 @@ pub enum TerminalViewZeroStateAction {
 struct StateHandles {
     dismiss_button: MouseStateHandle,
     start_new_conversation: MouseStateHandle,
-    start_cloud_conversation: MouseStateHandle,
     open_history_menu: MouseStateHandle,
     open_code_review: MouseStateHandle,
     nld_checkbox: MouseStateHandle,
@@ -166,7 +164,7 @@ impl View for TerminalViewZeroStateBlock {
             )
             .with_child(
                 Text::new(
-                    "New terminal session",
+                    crate::t!("terminal-zero-state-title"),
                     appearance.ui_font_family(),
                     title_font_size,
                 )
@@ -190,7 +188,7 @@ impl View for TerminalViewZeroStateBlock {
                 Message::new(vec![MessageItem::clickable(
                     vec![
                         MessageItem::keystroke(ENTER_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone()),
-                        MessageItem::text("start a new agent conversation"),
+                        MessageItem::text(crate::t!("terminal-zero-state-start-agent")),
                     ],
                     |ctx| {
                         ctx.dispatch_typed_action(TerminalAction::StartNewAgentConversation);
@@ -202,26 +200,11 @@ impl View for TerminalViewZeroStateBlock {
             render_standard_message(
                 Message::new(vec![MessageItem::clickable(
                     vec![
-                        MessageItem::keystroke(
-                            ENTER_CLOUD_AGENT_VIEW_NEW_CONVERSATION_KEYSTROKE.clone(),
-                        ),
-                        MessageItem::text("start a new cloud agent conversation"),
-                    ],
-                    |ctx| {
-                        ctx.dispatch_typed_action(TerminalAction::EnterCloudAgentView);
-                    },
-                    self.state_handles.start_cloud_conversation.clone(),
-                )]),
-                app,
-            ),
-            render_standard_message(
-                Message::new(vec![MessageItem::clickable(
-                    vec![
                         MessageItem::keystroke(Keystroke {
                             key: "up".to_owned(),
                             ..Default::default()
                         }),
-                        MessageItem::text("cycle past commands and conversations"),
+                        MessageItem::text(crate::t!("terminal-zero-state-cycle-history")),
                     ],
                     |ctx| {
                         ctx.dispatch_typed_action(TerminalAction::OpenInlineHistoryMenu);
@@ -240,7 +223,7 @@ impl View for TerminalViewZeroStateBlock {
                     Message::new(vec![MessageItem::clickable(
                         vec![
                             MessageItem::keystroke(keystroke),
-                            MessageItem::text("open code review"),
+                            MessageItem::text(crate::t!("terminal-zero-state-open-code-review")),
                         ],
                         |ctx| {
                             ctx.dispatch_typed_action(WorkspaceAction::ToggleRightPanel);
@@ -279,7 +262,9 @@ impl View for TerminalViewZeroStateBlock {
                         Shrinkable::new(
                             1.,
                             render_standard_message(
-                                Message::from_text("autodetect agent prompts in terminal sessions"),
+                                Message::from_text(crate::t!(
+                                    "terminal-zero-state-autodetect-prompts"
+                                )),
                                 app,
                             ),
                         )
@@ -296,7 +281,7 @@ impl View for TerminalViewZeroStateBlock {
                 theme.disabled_text_color(theme.background())
             };
             Text::new(
-                "Don't show again",
+                crate::t!("terminal-zero-state-dismiss"),
                 appearance.ui_font_family(),
                 appearance.monospace_font_size() - 4.,
             )

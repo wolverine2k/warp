@@ -106,7 +106,7 @@ pub(super) const ERROR_ALERT_MARGIN_TOP: f32 = 8.;
 pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([EditableBinding::new(
         "Close Env Var Collection",
-        "Close",
+        crate::t!("keybinding-desc-env-var-collection-close"),
         EnvVarCollectionAction::Close,
     )
     .with_custom_action(CustomAction::CloseCurrentSession)
@@ -497,7 +497,8 @@ impl EnvVarCollectionView {
             view.handle_cloud_model_event(event, ctx);
         });
 
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("Untitled"));
+        let pane_configuration =
+            ctx.add_model(|_ctx| PaneConfiguration::new(crate::t!("common-untitled")));
 
         let active_env_var_collection_data = ctx.add_model(ActiveEnvVarCollectionData::new);
         ctx.subscribe_to_model(
@@ -669,7 +670,12 @@ impl EnvVarCollectionView {
 
         let title = collection.title.clone().unwrap_or_default();
 
-        self.set_pane_title(if title.is_empty() { "Untitled" } else { &title }, ctx);
+        let title = if title.is_empty() {
+            crate::t!("common-untitled")
+        } else {
+            title
+        };
+        self.set_pane_title(&title, ctx);
         if let Some(server_id) = env_var_collection.id.into_server() {
             self.pane_configuration.update(ctx, |pane_config, ctx| {
                 pane_config
@@ -1595,7 +1601,11 @@ impl BackingView for EnvVarCollectionView {
         app: &AppContext,
     ) -> view::HeaderContent {
         let title = self.title_editor.as_ref(app).buffer_text(app);
-        let title = if title.is_empty() { "Untitled" } else { &title };
+        let title = if title.is_empty() {
+            crate::t!("common-untitled")
+        } else {
+            title
+        };
         view::HeaderContent::simple(title)
     }
 

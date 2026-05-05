@@ -150,13 +150,9 @@ impl TerminalView {
         self.update_agent_view_pane_header(ctx);
     }
 
-    /// Returns the shareable object for the active agent view conversation, if any.
+    /// Returns the shareable object for the active agent view, if any.
+    /// AI conversation sharing was removed alongside the CloudConversations feature.
     fn agent_view_shareable_object(&self, ctx: &ViewContext<Self>) -> Option<ShareableObject> {
-        // Only set shareable object if CloudConversations feature is enabled
-        if !FeatureFlag::CloudConversations.is_enabled() {
-            return None;
-        }
-
         // If we're in a shared session, prioritize this to share.
         if let Some(shared_session) = &self.shared_session {
             return Some(ShareableObject::Session {
@@ -165,31 +161,7 @@ impl TerminalView {
                 started_at: *shared_session.started_at(),
             });
         }
-
-        // Check if agent view is active
-        let conversation_id = self
-            .agent_view_controller
-            .as_ref(ctx)
-            .agent_view_state()
-            .active_conversation_id()?;
-
-        // Don't show share button for empty conversations
-        let conversation = BlocklistAIHistoryModel::as_ref(ctx).conversation(&conversation_id)?;
-        if conversation.is_empty() {
-            return None;
-        }
-        let exchange_count = conversation.exchange_count();
-        // If there's only one exchange, make sure it's completed (not still streaming)
-        if exchange_count == 1 {
-            if let Some(latest_exchange) = conversation.latest_exchange() {
-                if latest_exchange.output_status.is_streaming() {
-                    return None;
-                }
-            }
-        }
-
-        // Return the ShareableObject with the conversation ID
-        Some(ShareableObject::AIConversation(conversation_id))
+        None
     }
 
     /// Updates the pane header's shareable object based on agent view state.
@@ -655,7 +627,7 @@ impl BackingView for TerminalView {
         if shared_session_status.is_sharer_or_viewer() {
             if !is_ambient_agent {
                 items.push(
-                    MenuItemFields::new("Copy link")
+                    MenuItemFields::new(crate::t!("menu-pane-copy-link"))
                         .with_on_select_action(TerminalAction::CopySharedSessionLink { source })
                         .into_item(),
                 );
@@ -663,7 +635,7 @@ impl BackingView for TerminalView {
 
             if shared_session_status.is_sharer() {
                 items.push(
-                    MenuItemFields::new("Stop sharing session")
+                    MenuItemFields::new(crate::t!("menu-pane-stop-sharing-session"))
                         .with_on_select_action(TerminalAction::StopSharingCurrentSession { source })
                         .into_item(),
                 );
@@ -675,22 +647,15 @@ impl BackingView for TerminalView {
                     == UserAppInstallStatus::Detected
             {
                 items.push(
-                    MenuItemFields::new("Open on Desktop")
+                    MenuItemFields::new(crate::t!("menu-pane-open-on-desktop"))
                         .with_on_select_action(TerminalAction::OpenSharedSessionOnDesktop {
                             source,
                         })
                         .into_item(),
                 );
             }
-        } else if FeatureFlag::CreatingSharedSessions.is_enabled()
-            && ContextFlag::CreateSharedSession.is_enabled()
-        {
-            items.push(
-                MenuItemFields::new("Share session")
-                    .with_on_select_action(TerminalAction::OpenShareSessionModal { source })
-                    .into_item(),
-            );
         }
+        // OpenWarp:删除 Pane 头部 "Share session" 入口(云端 shared session)
 
         // Split-pane related items.
         if self.split_pane_state(ctx).is_in_split_pane() {
@@ -763,7 +728,12 @@ impl TerminalView {
             self.ambient_agent_cancel_mouse_state.clone(),
             blended_colors::text_sub(theme, theme.background()).into(),
         )
-        .with_tooltip(move || ui_builder.tool_tip("Cancel".to_string()).build().finish())
+        .with_tooltip(move || {
+            ui_builder
+                .tool_tip(crate::t!("common-cancel"))
+                .build()
+                .finish()
+        })
         .build()
         .on_click(|ctx, _, _| {
             ctx.dispatch_typed_action::<PaneHeaderAction<TerminalAction, TerminalAction>>(
@@ -1045,8 +1015,8 @@ impl TerminalView {
 
 fn default_agent_conversation_title(is_ambient_agent: bool) -> String {
     if is_ambient_agent {
-        "New cloud agent".to_owned()
+        crate::t!("terminal-pane-new-cloud-agent-title")
     } else {
-        "New agent conversation".to_owned()
+        crate::t!("terminal-pane-new-agent-conversation-title")
     }
 }

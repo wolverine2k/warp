@@ -100,7 +100,7 @@ impl AcceptAutosuggestionKeybinding {
                     },
                 )
                 .into_item(),
-            MenuItemFields::new("Custom...")
+            MenuItemFields::new(crate::t!("editor-custom-keybinding"))
                 .with_on_select_action(
                     AcceptAutosuggestionKeybindingAction::OpenSettingsForCustomKeybinding,
                 )
@@ -345,7 +345,7 @@ impl View for AcceptAutosuggestionKeybinding {
             if !is_menu_open && state.is_hovered() {
                 let tool_tip = appearance
                     .ui_builder()
-                    .autosuggestion_tool_tip("Change keybinding".into())
+                    .autosuggestion_tool_tip(crate::t!("editor-change-keybinding"))
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(

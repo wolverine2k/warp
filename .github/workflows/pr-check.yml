@@ -1,0 +1,49 @@
+# PR 校验流水线 — 只跑 cargo check,不打包
+#
+# 与 openwarp_release.yml 的分工:
+# - 本 workflow:每次 PR 跑 Linux cargo check,几分钟内拿到编译反馈
+# - openwarp_release.yml:仅 push tag / 手动 dispatch 时跑三平台全量打包(~3h)
+#
+# 只跑 Linux 一个平台 — Windows/macOS 编译的差异主要在 bundle 阶段而非 cargo 编译,
+# Linux check 已经能拦截 90% 的编译错误,跨平台问题留到 release tag 时再发现成本可接受。
+
+name: PR Check
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # 跟 openwarp_release.yml 保持一致 — oss channel 才能 cargo build/check 不依赖
+  # warp-channel-config 私有仓库。
+  CHANNEL: oss
+
+jobs:
+  cargo_check:
+    name: cargo check (Linux x86_64)
+    # 与 release_linux 同 runner,glibc 2.35,避免某些 ubuntu-latest 才出现的 deps 差异
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          is_self_hosted: false
+          # release_deps 会装 cargo-about,check 不需要;build_deps 足够提供 protoc / libdbus / pkg-config 等
+          install_release_deps: false
+
+      - name: Ensure rust target is installed
+        run: rustup target add x86_64-unknown-linux-gnu
+        shell: bash
+
+      - name: cargo check (default = warp-oss bin)
+        # `cargo check --workspace` 会拖入 wasm/preview 等 channel-gated target,
+        # 这里只 check 默认 oss bin + 它的依赖图,跟 release_linux 编译目标一致。
+        run: cargo check --bin warp-oss --locked
+        shell: bash

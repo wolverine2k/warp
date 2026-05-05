@@ -161,56 +161,55 @@ impl CliAgentPluginManager for ClaudeCodePluginManager {
     }
 }
 
-static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
-    PluginInstructions {
-        title: "Install Warp Plugin for Claude Code",
-        subtitle: "Ensure that jq is installed on your machine. Then, run these commands.",
-        steps: &[
-            PluginInstructionStep {
-                description: "Add the Warp plugin marketplace repository",
-                command: "claude plugin marketplace add warpdotdev/claude-code-warp",
-                executable: true,
-                link: None,
-            },
-            PluginInstructionStep {
-                description: "Install the Warp plugin",
-                command: "claude plugin install warp@claude-code-warp",
-                executable: true,
-                link: None,
-            },
-        ],
-        post_install_notes: &[
-            "Restart Claude Code to activate the plugin.",
-            "There are some known issues with Claude Code's plugin system. \
-             If the plugin is not found after step 1, you can try manually adding an \"extraKnownMarketplaces\" entry to ~/.claude/settings.json.",
-        ],
-    }
-});
-
-static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
-    title: "Update Warp Plugin for Claude Code",
-    subtitle: "Run the following commands.",
-    steps: &[
+static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
+    title: crate::t_static!("cli-agent-plugin-claude-install-title"),
+    subtitle: crate::t_static!("cli-agent-plugin-claude-install-subtitle"),
+    steps: vec![
         PluginInstructionStep {
-            description: "Remove the existing marketplace (if present)",
-            command: "claude plugin marketplace remove claude-code-warp",
-            executable: true,
-            link: None,
-        },
-        PluginInstructionStep {
-            description: "Re-add the marketplace",
+            description: crate::t_static!("cli-agent-plugin-claude-add-marketplace-step"),
             command: "claude plugin marketplace add warpdotdev/claude-code-warp",
             executable: true,
             link: None,
         },
         PluginInstructionStep {
-            description: "Install the latest plugin version",
+            description: crate::t_static!("cli-agent-plugin-install-warp-plugin-step"),
             command: "claude plugin install warp@claude-code-warp",
             executable: true,
             link: None,
         },
     ],
-    post_install_notes: &["Restart Claude Code to activate the update."],
+    post_install_notes: vec![
+        crate::t_static!("cli-agent-plugin-claude-restart-note"),
+        crate::t_static!("cli-agent-plugin-claude-known-issues-note"),
+    ],
+});
+
+static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
+    title: crate::t_static!("cli-agent-plugin-claude-update-title"),
+    subtitle: crate::t_static!("cli-agent-plugin-run-following-commands"),
+    steps: vec![
+        PluginInstructionStep {
+            description: crate::t_static!("cli-agent-plugin-remove-existing-marketplace-step"),
+            command: "claude plugin marketplace remove claude-code-warp",
+            executable: true,
+            link: None,
+        },
+        PluginInstructionStep {
+            description: crate::t_static!("cli-agent-plugin-readd-marketplace-step"),
+            command: "claude plugin marketplace add warpdotdev/claude-code-warp",
+            executable: true,
+            link: None,
+        },
+        PluginInstructionStep {
+            description: crate::t_static!("cli-agent-plugin-install-latest-version-step"),
+            command: "claude plugin install warp@claude-code-warp",
+            executable: true,
+            link: None,
+        },
+    ],
+    post_install_notes: vec![crate::t_static!(
+        "cli-agent-plugin-claude-restart-update-note"
+    )],
 });
 
 fn check_installed(claude_dir: &Path) -> bool {

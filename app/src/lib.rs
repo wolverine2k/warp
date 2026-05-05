@@ -1,5 +1,7 @@
 // Suppress warnings about rustdoc style.
 #![allow(clippy::doc_lazy_continuation)]
+// 上游 Warp 裁剪后遗留的孤儿代码暂时保留,统一抑制 dead_code 告警。
+#![allow(dead_code)]
 
 mod ai;
 mod alloc;
@@ -41,11 +43,10 @@ mod external_secrets;
 mod font_fallback;
 mod global_resource_handles;
 mod gpu_state;
+pub mod i18n;
 mod input_classifier;
 mod interval_timer;
 mod linear;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-mod login_item;
 mod menu;
 mod modal;
 mod network;
@@ -74,6 +75,7 @@ mod search_bar;
 mod server;
 mod session_management;
 mod shell_indicator;
+mod ssh_manager;
 mod suggestions;
 mod system;
 mod tab;
@@ -571,6 +573,10 @@ fn apply_scroll_multiplier(event: &mut Event, app: &AppContext) {
 pub fn run() -> Result<()> {
     // Perform any necessary platform-specific initialization.
     platform::init();
+
+    // i18n 必须早于 UI 任何 t!() 调用初始化;先按系统 locale,后续 settings 加载完会用
+    // LanguageSettings 覆盖。OnceLock 重入安全。
+    i18n::init(None);
 
     // Ensure feature flags are initialized before parsing command-line arguments.
     init_feature_flags();
@@ -1145,6 +1151,11 @@ fn initialize_app(
     let (sqlite_data, writer_handles) = persistence::initialize(ctx);
     timer.mark_interval_end("SQLITE_INITIALIZED");
 
+    // SSH 管理器在主写线程外开自己的写连接(WAL + busy_timeout 保证安全)。
+    // 必须在 persistence::initialize 跑完 migration 之后才设路径,否则首个
+    // SshManager 操作可能撞 missing-table。
+    warp_ssh_manager::set_database_path(persistence::database_file_path());
+
     let persistence_writer = PersistenceWriter::new(writer_handles);
 
     let model_event_sender = persistence_writer.sender();
@@ -1266,6 +1277,10 @@ fn initialize_app(
         manager.subscribe_to_settings_changes(ctx);
         manager
     });
+
+    // 自定义 Agent Provider 的 API key 由独立单例存到 secure storage,
+    // 与 ApiKeyManager (BYOK 转发给 warp-server) 解耦。
+    ctx.add_singleton_model(crate::ai::agent_providers::AgentProviderSecrets::new);
 
     ctx.add_singleton_model(AntivirusInfo::new);
 
@@ -1523,6 +1538,7 @@ fn initialize_app(
     terminal::init(ctx);
     input::init(ctx);
     editor::init(ctx);
+    onboarding::set_localizer(|key| crate::i18n::t_or(key, key));
     onboarding::init(ctx);
     menu::init(ctx);
     tips::tip_view::init(ctx);
@@ -1539,7 +1555,7 @@ fn initialize_app(
     prompt::editor_modal::init(ctx);
     ai::blocklist::agent_view::editor::init(ctx);
     undo_close::init(ctx);
-    billing::shared_objects_creation_denied_modal::init(ctx);
+    // OpenWarp:删除 billing::shared_objects_creation_denied_modal::init
     tab_configs::new_worktree_modal::init(ctx);
     tab_configs::params_modal::init(ctx);
     ai::blocklist::init(ctx);
@@ -1571,6 +1587,7 @@ fn initialize_app(
     ctx.add_singleton_model(|_| NetworkStatus::new());
     ctx.add_singleton_model(|_| SystemStats::new());
     ctx.add_singleton_model(|_| KeybindingChangedNotifier::new());
+    ctx.add_singleton_model(|_| crate::ssh_manager::SshTreeChangedNotifier::new());
     ctx.add_singleton_model(|_| search::command_palette::SelectedItems::new());
     ctx.add_singleton_model(search::files::model::FileSearchModel::new);
     ctx.add_singleton_model(|_| VimRegisters::new());
@@ -1649,7 +1666,30 @@ fn initialize_app(
         let conversations = &multi_agent_conversations;
         ctx.add_singleton_model(move |_| BlocklistAIHistoryModel::new(ai_queries, conversations));
     }
-    ctx.add_singleton_model(move |_| RestoredAgentConversations::new(multi_agent_conversations));
+    {
+        let (restored, failed_to_restore) =
+            RestoredAgentConversations::new(multi_agent_conversations);
+        // 把无法转换的持久化会话从 sqlite 中清理掉,避免每次启动都重复尝试 + 打 warn
+        if !failed_to_restore.is_empty() {
+            if let Some(sender) =
+                crate::global_resource_handles::GlobalResourceHandlesProvider::as_ref(ctx)
+                    .get()
+                    .model_event_sender
+                    .as_ref()
+            {
+                if let Err(e) = sender.send(
+                    crate::persistence::ModelEvent::DeleteMultiAgentConversations {
+                        conversation_ids: failed_to_restore,
+                    },
+                ) {
+                    log::error!(
+                        "Failed to purge unconvertible persisted conversations from sqlite: {e:?}"
+                    );
+                }
+            }
+        }
+        ctx.add_singleton_model(move |_| restored);
+    }
     ctx.add_singleton_model(|_| CLIAgentSessionsModel::new());
     // ActiveAgentViewsModel is used to track active agent conversations and notify listeners when they change.
     ctx.add_singleton_model(|_| ActiveAgentViewsModel::new());
@@ -1881,13 +1921,10 @@ fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppCallbacks {
             NetworkStatus::handle(ctx)
                 .update(ctx, move |me, ctx| me.reachability_changed(reachable, ctx));
         })),
-        on_become_active: Some(Box::new(move |ctx| {
-            let auth_state = AuthStateProvider::as_ref(ctx).get();
-            ctx.record_app_focus(
-                auth_state.user_id().map(|uid| uid.as_string()),
-                auth_state.anonymous_id(),
-            );
-        })),
+        // openWarp 闭源遥测剥离 P4d:on_become_active 原会触发 ctx.record_app_focus
+        // 累积每日聚焦时长 → Rudder。剥离后 callback 留空(回调本身仍由平台层触发,
+        // 仅删 telemetry 副作用)。
+        on_become_active: Some(Box::new(move |_ctx| {})),
         on_screen_changed: Some(Box::new(move |ctx| {
             ctx.dispatch_global_action(
                 "root_view:move_quake_mode_window_from_screen_change",
@@ -1935,12 +1972,7 @@ fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppCallbacks {
                 }
             }
             ctx.dispatch_global_action("root_view:update_quake_mode_state", &update_quake_mode_arg);
-
-            let auth_state = AuthStateProvider::as_ref(ctx).get();
-            ctx.record_app_blur(
-                auth_state.user_id().map(|uid| uid.as_string()),
-                auth_state.anonymous_id(),
-            );
+            // openWarp 闭源遥测剥离 P4d:on_resigned_active 原同步累积聚焦时长 → Rudder。
         })),
         on_will_terminate: Some(Box::new(move |ctx| {
             NotebookManager::handle(ctx).update(ctx, |manager, ctx| {
@@ -1953,11 +1985,7 @@ fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppCallbacks {
                 writer.terminate();
             });
 
-            let auth_state = AuthStateProvider::as_ref(ctx).get();
-            ctx.try_record_daily_app_focus_duration(
-                auth_state.user_id().map(|uid| uid.as_string()),
-                auth_state.anonymous_id(),
-            );
+            // openWarp 闭源遥测剥离 P4d:on_will_terminate 原最后 flush 一次每日聚焦时长。
             TelemetryCollector::handle(ctx).update(ctx, |telemetry_collector, ctx| {
                 telemetry_collector.flush_telemetry_events_for_shutdown(ctx);
             });
@@ -2175,9 +2203,16 @@ fn app_callbacks(is_integration_test: bool) -> warpui::platform::AppCallbacks {
             ctx.dispatch_global_action("workspace:save_app", &());
         })),
         on_window_moved: Some(Box::new(move |ctx| {
+            // 启动期 winit 会连续触发若干次 move/resize,这阶段的 save_app 没有意义且拖慢启动
+            if ctx.windows().stage() == ApplicationStage::Starting {
+                return;
+            }
             ctx.dispatch_global_action("workspace:save_app", &());
         })),
         on_window_resized: Some(Box::new(move |ctx| {
+            if ctx.windows().stage() == ApplicationStage::Starting {
+                return;
+            }
             ctx.dispatch_global_action("workspace:save_app", &());
         })),
         ..Default::default()
@@ -2345,20 +2380,6 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
             IntervalTimer::handle(ctx).update(ctx, |timer, _| {
                 timer.mark_interval_end("WINDOWS_CREATED");
             });
-
-            // TODO(ben): We should skip this for LaunchMode::Test.
-            #[cfg(any(target_os = "macos", target_os = "windows"))]
-            {
-                use crate::login_item::maybe_register_app_as_login_item;
-                use crate::terminal::general_settings::GeneralSettingsChangedEvent;
-                // Note that we put this here because it depends on settings already having been initialized.
-                ctx.subscribe_to_model(&GeneralSettings::handle(ctx), |_, event, ctx| {
-                    if matches!(event, GeneralSettingsChangedEvent::LoginItem { .. }) {
-                        maybe_register_app_as_login_item(ctx);
-                    }
-                });
-                maybe_register_app_as_login_item(ctx);
-            }
         }
         #[cfg_attr(target_family = "wasm", allow(unused_variables))]
         LaunchMode::CommandLine {
@@ -2759,8 +2780,6 @@ pub fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::LocalComputerUse,
         #[cfg(feature = "team_api_keys")]
         FeatureFlag::TeamApiKeys,
-        #[cfg(feature = "cloud_conversations")]
-        FeatureFlag::CloudConversations,
         #[cfg(feature = "agent_toolbar_editor")]
         FeatureFlag::AgentToolbarEditor,
         #[cfg(feature = "configurable_toolbar")]

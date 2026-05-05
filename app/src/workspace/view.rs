@@ -1,5 +1,4 @@
 mod build_plan_migration_modal;
-pub(crate) mod cloud_agent_capacity_modal;
 pub(crate) mod codex_modal;
 pub mod conversation_list;
 #[cfg(enable_crash_recovery)]
@@ -82,17 +81,11 @@ use crate::notification::NotificationContext;
 use crate::pane_group::pane::ActionOrigin;
 use crate::projects::ProjectManagementModel;
 use crate::settings_view::mcp_servers_page::MCPServersSettingsPage;
-use crate::terminal::enable_auto_reload_modal::{
-    EnableAutoReloadModal, EnableAutoReloadModalEvent,
-};
 use crate::terminal::model::terminal_model::ConversationTranscriptViewerStatus;
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::terminal::view::load_ai_conversation::{RestorationDirState, RestoredAIConversation};
-use crate::terminal::view::{
-    AgentOnboardingVersion, ConversationRestorationInNewPaneType, OnboardingIntention,
-    OnboardingVersion,
-};
+use crate::terminal::view::{ConversationRestorationInNewPaneType, OnboardingIntention};
 use crate::ui_components::red_notification_dot::RedNotificationDot;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::settings::OpenConversationPreference;
@@ -123,9 +116,6 @@ use crate::workspace::header_toolbar_item::HeaderToolbarItemKind;
 use crate::workspace::tab_settings::TabCloseButtonPosition;
 use crate::workspace::view::build_plan_migration_modal::{
     BuildPlanMigrationModal, BuildPlanMigrationModalEvent,
-};
-use crate::workspace::view::cloud_agent_capacity_modal::{
-    CloudAgentCapacityModal, CloudAgentCapacityModalEvent, CloudAgentCapacityModalVariant,
 };
 use crate::workspace::view::codex_modal::{CodexModal, CodexModalEvent};
 use crate::workspace::view::free_tier_limit_hit_modal::{
@@ -204,9 +194,7 @@ use repo_metadata::RemoteRepositoryIdentifier;
 #[cfg(target_family = "wasm")]
 use url::Url;
 
-use crate::billing::shared_objects_creation_denied_modal::{
-    SharedObjectsCreationDeniedModal, SharedObjectsCreationDeniedModalEvent,
-};
+// OpenWarp:删除 SharedObjectsCreationDeniedModal(云端 Drive 配额拒绝弹窗)
 
 #[cfg(target_family = "wasm")]
 use crate::wasm_nux_dialog::WasmNUXDialog;
@@ -269,7 +257,7 @@ use crate::resource_center::{
     ResourceCenterEvent, ResourceCenterPage, ResourceCenterView, Tip, TipAction, TipsCompleted,
 };
 use crate::reward_view::{RewardEvent, RewardKind, RewardView};
-use crate::root_view::{quake_mode_window_id, NewWorkspaceSource, OpenLaunchConfigArg};
+use crate::root_view::{NewWorkspaceSource, OpenLaunchConfigArg};
 use crate::search::command_search::searcher::{
     AcceptedHistoryItem, AcceptedWorkflow, CommandSearchItemAction,
 };
@@ -282,15 +270,14 @@ use crate::server::server_api::{ServerApi, ServerApiEvent, ServerApiProvider, Se
 use crate::server::telemetry::{
     AddTabWithShellSource, AnonymousUserSignupEntrypoint, CloseTarget, EnvVarTelemetryMetadata,
     FileTreeSource, KnowledgePaneEntrypoint, LaunchConfigUiLocation,
-    MCPServerCollectionPaneEntrypoint, OpenedWarpAISource, SharingDialogSource, TierLimitHitEvent,
-    WarpDriveSource,
+    MCPServerCollectionPaneEntrypoint, OpenedWarpAISource, SharingDialogSource, WarpDriveSource,
 };
 use crate::session_management::{SessionNavigationData, SessionSource};
 use crate::settings::{
     active_theme_kind, respect_system_theme, AccessibilitySettings, AliasExpansionSettings,
-    AppEditorSettings, BlockVisibilitySettings, ChangelogSettings, CursorBlink, DebugSettings,
-    FontSettings, GPUSettings, InputSettings, MonospaceFontSize, PaneSettings, PrivacySettings,
-    SelectionSettings, Settings, SshSettings, ThemeSettings,
+    AppEditorSettings, BlockVisibilitySettings, CursorBlink, DebugSettings, FontSettings,
+    GPUSettings, InputSettings, MonospaceFontSize, PaneSettings, PrivacySettings,
+    SelectionSettings, SshSettings, ThemeSettings,
 };
 use crate::settings_view::flags;
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
@@ -342,9 +329,7 @@ use crate::user_config::{
     tab_configs_dir,
 };
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
-use crate::util::bindings::{
-    keybinding_name_to_display_string, keybinding_name_to_keystroke, trigger_to_keystroke,
-};
+use crate::util::bindings::{keybinding_name_to_display_string, keybinding_name_to_keystroke};
 use crate::util::links;
 use crate::util::traffic_lights::{traffic_light_data, TrafficLightMouseStates, TrafficLightSide};
 use crate::util::truncation::truncate_from_end;
@@ -573,7 +558,6 @@ pub(crate) const VERTICAL_TABS_PANEL_POSITION_ID: &str = "workspace_view:vertica
 const TAB_CONTENT_POSITION_ID: &str = "workspace_view:tab_content";
 
 const WELCOME_TIPS_POSITION_ID: &str = "welcome_tips_pill";
-const ELLIPSE_SVG_PATH: &str = "bundled/svg/ellipse.svg";
 
 const AI_ASSISTANT_BUTTON_ID: &str = "workspace_view:ai_assistant_button";
 
@@ -626,6 +610,7 @@ pub(crate) const LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME: &str = "workspace:left_p
 pub(crate) const LEFT_PANEL_WARP_DRIVE_BINDING_NAME: &str = "workspace:left_panel_warp_drive";
 pub(crate) const LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME: &str =
     "workspace:left_panel_agent_conversations";
+pub(crate) const LEFT_PANEL_SSH_MANAGER_BINDING_NAME: &str = "workspace:left_panel_ssh_manager";
 
 const KEYBINDINGS_TO_CACHE: [&str; 4] = [
     ASK_AI_ASSISTANT_KEYBINDING_NAME,
@@ -677,8 +662,7 @@ pub enum WorkspaceBanner {
     UnableToUpdateToNewVersion,
     /// to display the AutoupdateStage::UnableToLaunchNewVersion
     UnableToLaunchNewVersion,
-    /// to display when the user needs to reauthenticate
-    Reauth,
+    // 去中心化分支:`Reauth` banner 已删除。
     // to display an anonymous user has X days left to sign in
     AnonymousUserAuth,
     /// to display when recovering from a crash that may have been due to use
@@ -699,7 +683,7 @@ impl WorkspaceBanner {
             Self::UnableToLaunchNewVersion => true,
             Self::VersionDeprecated => false,
             Self::AnonymousUserAuth => false,
-            Self::Reauth => true,
+            // 去中心化分支:`Reauth` 已删除。
             #[cfg(target_os = "linux")]
             Self::WaylandCrashRecovery => true,
             Self::InvalidSettings => true,
@@ -958,7 +942,6 @@ pub struct Workspace {
     command_search_view: ViewHandle<CommandSearchView>,
     autoupdate_unable_to_update_banner_dismissed: bool,
     autoupdate_unable_to_launch_new_version: bool,
-    reauth_banner_dismissed: bool,
     settings_file_error: Option<crate::settings::SettingsFileError>,
     settings_error_banner_dismissed: bool,
     ai_assistant_panel: ViewHandle<AIAssistantPanelView>,
@@ -978,10 +961,8 @@ pub struct Workspace {
     suggested_rule_modal: ViewHandle<SuggestedRuleModal>,
     oz_launch_modal: ModalWithTab<LaunchModal<OzLaunchSlide>>,
     openwarp_launch_modal: ViewHandle<OpenWarpLaunchModal>,
-    enable_auto_reload_modal: ViewHandle<EnableAutoReloadModal>,
     build_plan_migration_modal: ViewHandle<BuildPlanMigrationModal>,
     codex_modal: ViewHandle<CodexModal>,
-    cloud_agent_capacity_modal: ViewHandle<CloudAgentCapacityModal>,
     free_tier_limit_hit_modal: ViewHandle<FreeTierLimitHitModal>,
     free_tier_limit_check_triggered: bool,
     toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
@@ -995,7 +976,6 @@ pub struct Workspace {
     tab_bar_pinned_by_popup: bool,
     user_menu: ViewHandle<Menu<WorkspaceAction>>,
     native_modal: ViewHandle<NativeModal>,
-    shared_objects_creation_denied_modal: ViewHandle<SharedObjectsCreationDeniedModal>,
     shown_staging_banner_count: u32,
 
     // When user's open WEB for the first time, we ask them to select a preference of
@@ -1198,7 +1178,7 @@ impl Workspace {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("Search repos", ctx);
+            editor.set_placeholder_text(crate::t!("workspace-search-repos-placeholder"), ctx);
             editor
         });
         ctx.subscribe_to_view(&editor, |me, editor_view, event, ctx| match event {
@@ -1234,7 +1214,7 @@ impl Workspace {
             EditorView::single_line(options, ctx)
         });
         editor.update(ctx, |editor, ctx| {
-            editor.set_placeholder_text("Search tabs...", ctx);
+            editor.set_placeholder_text(crate::t!("workspace-search-tabs-placeholder"), ctx);
         });
         ctx.subscribe_to_view(&editor, |me, editor_view, event, ctx| match event {
             EditorEvent::Edited(_) => {
@@ -2363,16 +2343,6 @@ impl Workspace {
             appearance,
         )
     }
-    fn build_enable_auto_reload_modal(
-        ctx: &mut ViewContext<Self>,
-    ) -> ViewHandle<EnableAutoReloadModal> {
-        let enable_auto_reload_modal = ctx.add_typed_action_view(EnableAutoReloadModal::new);
-        ctx.subscribe_to_view(&enable_auto_reload_modal, move |me, _, event, ctx| {
-            me.handle_enable_auto_reload_modal_event(event, ctx);
-        });
-
-        enable_auto_reload_modal
-    }
 
     /// Subscribe to the [`ServerApiProvider`] model to report status changes.
     fn observe_server_api(ctx: &mut ViewContext<Self>) {
@@ -2641,11 +2611,6 @@ impl Workspace {
         let resource_center_view =
             Self::build_resource_center_view(ctx, tips_completed.clone(), changelog_model.clone());
 
-        let enable_auto_reload_modal = ctx.add_typed_action_view(EnableAutoReloadModal::new);
-        ctx.subscribe_to_view(&enable_auto_reload_modal, |me, _, event, ctx| {
-            me.handle_enable_auto_reload_modal_event(event, ctx);
-        });
-
         let build_plan_migration_modal = ctx.add_typed_action_view(BuildPlanMigrationModal::new);
         ctx.subscribe_to_view(&build_plan_migration_modal, |me, _, event, ctx| {
             me.handle_build_plan_migration_modal_event(event, ctx);
@@ -2654,12 +2619,6 @@ impl Workspace {
         let codex_modal = ctx.add_typed_action_view(CodexModal::new);
         ctx.subscribe_to_view(&codex_modal, |me, _, event, ctx| {
             me.handle_codex_modal_event(event, ctx);
-        });
-
-        let cloud_agent_capacity_modal =
-            ctx.add_typed_action_view(|_| CloudAgentCapacityModal::new());
-        ctx.subscribe_to_view(&cloud_agent_capacity_modal, |me, _, event, ctx| {
-            me.handle_cloud_agent_capacity_modal_event(event, ctx);
         });
 
         let free_tier_limit_hit_modal = ctx.add_typed_action_view(FreeTierLimitHitModal::new);
@@ -2698,8 +2657,6 @@ impl Workspace {
         let new_worktree_modal = Self::build_new_worktree_modal(ctx);
 
         let session_config_modal = Self::build_session_config_modal(ctx);
-
-        let enable_auto_reload_modal = Self::build_enable_auto_reload_modal(ctx);
 
         let close_session_confirmation_dialog = Self::build_close_session_confirmation_dialog(ctx);
         let rewind_confirmation_dialog = Self::build_rewind_confirmation_dialog(ctx);
@@ -2981,25 +2938,7 @@ impl Workspace {
         });
 
         let native_modal = Self::build_native_modal_view(ctx);
-
-        let shared_objects_creation_denied_modal =
-            ctx.add_typed_action_view(|ctx| SharedObjectsCreationDeniedModal::new(None, ctx));
-        ctx.subscribe_to_view(
-            &shared_objects_creation_denied_modal,
-            |me, _, event, ctx| match event {
-                SharedObjectsCreationDeniedModalEvent::Close => {
-                    me.current_workspace_state
-                        .is_shared_objects_creation_denied_modal_open = false;
-                    ctx.notify();
-                }
-                SharedObjectsCreationDeniedModalEvent::TeamSettings => {
-                    me.show_settings_with_section(Some(SettingsSection::Teams), ctx);
-                    me.current_workspace_state
-                        .is_shared_objects_creation_denied_modal_open = false;
-                    ctx.notify();
-                }
-            },
-        );
+        // OpenWarp:删除 SharedObjectsCreationDeniedModal 注册(云端 Drive 配额拒绝弹窗)
 
         ctx.subscribe_to_model(&AISettings::handle(ctx), |me, _, event, ctx| match event {
             AISettingsChangedEvent::IsAnyAIEnabled { .. }
@@ -3105,7 +3044,6 @@ impl Workspace {
             command_search_view,
             autoupdate_unable_to_update_banner_dismissed: false,
             autoupdate_unable_to_launch_new_version: false,
-            reauth_banner_dismissed: false,
             settings_file_error,
             settings_error_banner_dismissed: false,
             ai_assistant_panel,
@@ -3134,7 +3072,6 @@ impl Workspace {
             tab_bar_pinned_by_popup: false,
             user_menu,
             native_modal,
-            shared_objects_creation_denied_modal,
             file_upload_sessions: Default::default(),
             ai_fact_view,
             left_panel_open: false,
@@ -3164,12 +3101,10 @@ impl Workspace {
                 tab_pane_group_id: None,
             },
             openwarp_launch_modal: openwarp_launch_view,
-            enable_auto_reload_modal,
             agent_management_view,
             notification_mailbox_view,
             notification_toast_stack,
             codex_modal,
-            cloud_agent_capacity_modal,
             free_tier_limit_hit_modal,
             free_tier_limit_check_triggered: false,
             lightbox_view: None,
@@ -3494,7 +3429,8 @@ impl Workspace {
                 ..
             }
             | TabSettingsChangedEvent::VerticalTabsShowPrLink { .. }
-            | TabSettingsChangedEvent::VerticalTabsShowDiffStats { .. } => {
+            | TabSettingsChangedEvent::VerticalTabsShowDiffStats { .. }
+            | TabSettingsChangedEvent::ShowTitleBarSearchBar { .. } => {
                 ctx.notify();
             }
             TabSettingsChangedEvent::VerticalTabsShowDetailsOnHover { .. } => {
@@ -3818,6 +3754,7 @@ impl Workspace {
                 },
                 LeftPanelDisplayedTab::WarpDrive => ToolPanelView::WarpDrive,
                 LeftPanelDisplayedTab::ConversationListView => ToolPanelView::ConversationListView,
+                LeftPanelDisplayedTab::SshManager => ToolPanelView::SshManager,
             };
             lp.restore_active_view_from_snapshot(active_view, ctx);
             lp.set_active_pane_group(pane_group.clone(), &self.working_directories_model, ctx);
@@ -5592,9 +5529,11 @@ impl Workspace {
         if !FeatureFlag::ConfigurableToolbar.is_enabled() {
             return;
         }
-        let items = vec![MenuItemFields::new("Re-arrange toolbar items")
-            .with_on_select_action(WorkspaceAction::OpenHeaderToolbarEditor)
-            .into_item()];
+        let items = vec![
+            MenuItemFields::new(crate::t!("workspace-rearrange-toolbar-items"))
+                .with_on_select_action(WorkspaceAction::OpenHeaderToolbarEditor)
+                .into_item(),
+        ];
         self.header_toolbar_context_menu
             .update(ctx, |menu, ctx| menu.set_items(items, ctx));
         self.show_header_toolbar_context_menu = Some(position);
@@ -5862,7 +5801,106 @@ impl Workspace {
                     ctx,
                 );
             }
+            LeftPanelEvent::OpenSshServerEditor { node_id } => {
+                self.open_ssh_server(node_id.clone(), ctx);
+            }
+            LeftPanelEvent::OpenSshTerminal { node_id, server } => {
+                self.open_ssh_terminal(node_id.clone(), server.clone(), ctx);
+            }
         }
+    }
+
+    /// 在中央区域打开给定 SSH 节点的编辑 pane。MVP 实现:**每次都开新
+    /// pane**(暂未做去重 / find_pane);Phase 2 起加 manager singleton 做
+    /// dedupe + 切窗口聚焦。
+    pub fn open_ssh_server(&mut self, node_id: String, ctx: &mut ViewContext<Self>) {
+        use crate::pane_group::pane::ssh_server_pane::SshServerPane;
+        self.active_tab_pane_group().update(ctx, |pane_group, ctx| {
+            let pane = SshServerPane::new(node_id, ctx);
+            let smart_split_direction =
+                pane_group.smart_split_direction(ctx, WORKFLOW_AND_ENV_VAR_SPLIT_RATIO);
+            pane_group.add_pane_with_direction(
+                smart_split_direction,
+                pane,
+                true, /* focus_new_pane */
+                ctx,
+            );
+        });
+    }
+
+    /// 在当前 tab 开新 terminal pane,自动跑 `ssh ...` 命令,并 spawn 一个
+    /// SecretInjector 监听 PTY 输出,在出现 `password:` / `passphrase:` 提示时
+    /// 自动注入 keychain 里的 secret。
+    ///
+    /// **配公钥免登录的边界**:用户在 server 端配了 authorized_keys,客户端
+    /// 默认私钥握手成功 → 不会出现 prompt → injector 静默超时(15s)退出,
+    /// **不会乱注入到登录后的 shell**。这是 SecretInjector 的天然特性:行尾
+    /// 严格匹配 + 一次性触发 + deadline。
+    ///
+    /// **shell bootstrap 时序**:`execute_command_or_set_pending` 把 ssh 命令
+    /// 丢进 pending 队列,等 `BootstrapPrecmdDone` 事件再 flush —— 不会跟
+    /// bootstrap 脚本拼到一起把 shell 整挂(2026-05-04 实测过)。
+    pub fn open_ssh_terminal(
+        &mut self,
+        node_id: String,
+        server: warp_ssh_manager::SshServerInfo,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use warp_ssh_manager::{KeychainSecretStore, SecretKind, SshSecretStore};
+
+        let cmd = warp_ssh_manager::build_ssh_command_line(&server);
+        let window_id = ctx.window_id();
+
+        // 开新 tab(不分屏 — 之前用 add_terminal_pane(Direction::Right) 会切左/右
+        // 分屏,用户反馈不喜欢)。新 tab 添加后会自动成为 active tab。
+        self.add_new_session_tab_internal_with_default_session_mode_behavior(
+            NewSessionSource::Tab,
+            Some(window_id),
+            None, /* chosen_shell */
+            None, /* conversation_restoration */
+            true, /* hide_homepage */
+            DefaultSessionModeBehavior::Ignore,
+            ctx,
+        );
+
+        // 拿新 tab 的 focused terminal view。
+        let pane_group = self.active_tab_pane_group();
+        let focused_pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
+        let Some(terminal_view) = pane_group
+            .as_ref(ctx)
+            .terminal_view_from_pane_id(focused_pane_id, ctx)
+        else {
+            log::warn!("open_ssh_terminal: no terminal in newly added tab");
+            return;
+        };
+
+        // 1. 同步读 keychain(主线程 OK)。auth_type 决定查 password 还是 passphrase。
+        let secret_kind = match server.auth_type {
+            warp_ssh_manager::AuthType::Password => SecretKind::Password,
+            warp_ssh_manager::AuthType::Key => SecretKind::Passphrase,
+        };
+        let secret = match KeychainSecretStore.get(&node_id, secret_kind) {
+            Ok(opt) => opt.unwrap_or_else(|| zeroize::Zeroizing::new(String::new())),
+            Err(e) => {
+                log::warn!("ssh keychain read failed (will continue without injection): {e}");
+                zeroize::Zeroizing::new(String::new())
+            }
+        };
+
+        // 2. 注入器 spawn 必须在 execute_command 之前启动 — 否则 password prompt
+        //    在 spawn 之前已经飞过 broadcast,injector 拿不到。
+        let pty_reads_rx = terminal_view.read(ctx, |v, c| v.inactive_pty_reads_rx(c));
+        crate::ssh_manager::secret_injector::spawn_password_injector(
+            pty_reads_rx,
+            terminal_view.downgrade(),
+            secret,
+            ctx,
+        );
+
+        // 3. 排队 ssh 命令,等 bootstrap 完成自动 flush。
+        terminal_view.update(ctx, |view, ctx| {
+            view.execute_command_or_set_pending(&cmd, ctx);
+        });
     }
 
     fn handle_right_panel_event(&mut self, event: RightPanelEvent, ctx: &mut ViewContext<Self>) {
@@ -6056,7 +6094,7 @@ impl Workspace {
 
         // 1. Agent (if AI enabled)
         if is_any_ai_enabled {
-            let mut agent_item = MenuItemFields::new("Agent")
+            let mut agent_item = MenuItemFields::new(crate::t!("workspace-new-session-agent"))
                 .with_on_select_action(WorkspaceAction::AddAgentTab)
                 .with_icon(icons::Icon::LayoutAlt01);
             if effective_default == DefaultSessionMode::Agent {
@@ -6072,11 +6110,12 @@ impl Workspace {
             #[cfg(target_os = "windows")]
             {
                 let is_terminal_default = effective_default == DefaultSessionMode::Terminal;
-                let mut terminal_item = MenuItemFields::new("Terminal")
-                    .with_on_select_action(WorkspaceAction::AddTerminalTab {
-                        hide_homepage: false,
-                    })
-                    .with_icon(icons::Icon::LayoutAlt01);
+                let mut terminal_item =
+                    MenuItemFields::new(crate::t!("workspace-new-session-terminal"))
+                        .with_on_select_action(WorkspaceAction::AddTerminalTab {
+                            hide_homepage: false,
+                        })
+                        .with_icon(icons::Icon::LayoutAlt01);
                 if is_terminal_default {
                     terminal_item = terminal_item.with_key_shortcut_label(shortcut_label.clone());
                 }
@@ -6109,11 +6148,12 @@ impl Workspace {
             // On other platforms, Terminal is a regular item.
             #[cfg(not(target_os = "windows"))]
             {
-                let mut terminal_item = MenuItemFields::new("Terminal")
-                    .with_on_select_action(WorkspaceAction::AddTerminalTab {
-                        hide_homepage: false,
-                    })
-                    .with_icon(icons::Icon::LayoutAlt01);
+                let mut terminal_item =
+                    MenuItemFields::new(crate::t!("workspace-new-session-terminal"))
+                        .with_on_select_action(WorkspaceAction::AddTerminalTab {
+                            hide_homepage: false,
+                        })
+                        .with_icon(icons::Icon::LayoutAlt01);
                 if effective_default == DefaultSessionMode::Terminal {
                     terminal_item = terminal_item.with_key_shortcut_label(shortcut_label.clone());
                 }
@@ -6126,7 +6166,7 @@ impl Workspace {
             && FeatureFlag::AgentView.is_enabled()
             && FeatureFlag::CloudMode.is_enabled()
         {
-            let mut cloud_item = MenuItemFields::new("Cloud Oz")
+            let mut cloud_item = MenuItemFields::new(crate::t!("workspace-new-session-cloud-oz"))
                 .with_on_select_action(WorkspaceAction::AddAmbientAgentTab)
                 .with_icon(icons::Icon::LayoutAlt01);
             if effective_default == DefaultSessionMode::CloudAgent {
@@ -6137,9 +6177,10 @@ impl Workspace {
 
         // 3b. Local Docker Sandbox
         if FeatureFlag::LocalDockerSandbox.is_enabled() {
-            let mut docker_item = MenuItemFields::new("Local Docker Sandbox")
-                .with_on_select_action(WorkspaceAction::AddDockerSandboxTab)
-                .with_icon(icons::Icon::Docker);
+            let mut docker_item =
+                MenuItemFields::new(crate::t!("workspace-new-session-local-docker-sandbox"))
+                    .with_on_select_action(WorkspaceAction::AddDockerSandboxTab)
+                    .with_icon(icons::Icon::Docker);
             if effective_default == DefaultSessionMode::DockerSandbox {
                 docker_item = docker_item.with_key_shortcut_label(shortcut_label.clone());
             }
@@ -6197,14 +6238,14 @@ impl Workspace {
         if FeatureFlag::TabConfigs.is_enabled() {
             menu_items.push(MenuItem::Separator);
             menu_items.push(
-                MenuItemFields::new_submenu("New worktree config")
+                MenuItemFields::new_submenu(crate::t!("workspace-new-worktree-config"))
                     .with_icon(icons::Icon::Dataflow02)
                     .into_item(),
             );
 
             // 6. New tab config — V0: opens the TOML template.
             menu_items.push(
-                MenuItemFields::new("New tab config")
+                MenuItemFields::new(crate::t!("workspace-new-tab-config"))
                     .with_on_select_action(WorkspaceAction::SelectNewSessionMenuItem(
                         NewSessionMenuItem::CreateNewTabConfig,
                     ))
@@ -6215,7 +6256,7 @@ impl Workspace {
 
         menu_items.push(MenuItem::Separator);
         menu_items.push(
-            MenuItemFields::new("Reopen closed session")
+            MenuItemFields::new(crate::t!("workspace-reopen-closed-session"))
                 .with_on_select_action(WorkspaceAction::ReopenClosedSession)
                 .with_key_shortcut_label(reopen_closed_session_shortcut_label)
                 .with_disabled(UndoCloseStack::handle(ctx).as_ref(ctx).is_empty())
@@ -6592,7 +6633,7 @@ impl Workspace {
                             .into_item(),
                     ),
                     AutoupdateStage::UnableToUpdateToNewVersion { .. } => menu_items.push(
-                        MenuItemFields::new("Update Warp manually")
+                        MenuItemFields::new(crate::t!("workspace-menu-update-warp-manually"))
                             .with_on_select_action(WorkspaceAction::DownloadNewVersion)
                             .into_item(),
                     ),
@@ -6745,65 +6786,14 @@ impl Workspace {
     /// If the user is new and therefore has not seen the in app onboarding,
     /// triggers the welcome block to be shown after bootstrapping is completed.
     fn check_and_trigger_onboarding(&mut self, ctx: &mut ViewContext<Self>) -> bool {
-        // Onboarding requires a real user to interact with it; suppress when
-        // running in a headless mode like the SDK/CLI.
-        if !AppExecutionMode::as_ref(ctx).can_show_onboarding() {
-            return false;
-        }
-
+        // OpenWarp: 去掉首次打开的 agentic suggestions 欢迎块教程。仍把用户标记为
+        // onboarded,避免下游(如 telemetry banner)把已用户当新用户处理。
         if !self.auth_state.is_onboarded().unwrap_or_default() {
-            if self.should_show_agent_onboarding(ctx) {
-                // If the user is anonymous, we shouldn't trigger agent onboarding.
-                // It will not display anyway, and we don't want to mark the user as onboarded.
-                if self.auth_state.is_anonymous_or_logged_out() {
-                    return false;
-                }
-                self.trigger_agent_onboarding(ctx);
-            } else {
-                self.trigger_legacy_onboarding(ctx);
-            }
-
-            // Add telemetry banner for new users BEFORE the agentic onboarding blocks.
-            if let Some(terminal_view_handle) = self.active_session_view(ctx) {
-                terminal_view_handle.update(ctx, |terminal_view, ctx| {
-                    terminal_view.insert_telemetry_banner(false, ctx);
-                });
-            }
-
-            // After onboarding is triggered, mark the user as onboarded
             AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
                 auth_manager.set_user_onboarded(ctx);
             });
-
-            return true;
         }
-
         false
-    }
-
-    fn trigger_legacy_onboarding(&self, ctx: &mut ViewContext<Self>) {
-        self.dispatch_onboarding(
-            TerminalAction::OnboardingFlow(OnboardingVersion::Legacy),
-            ctx,
-        );
-    }
-
-    fn trigger_agent_onboarding(&self, ctx: &mut ViewContext<Self>) {
-        log::error!(
-            "Triggering agent onboarding callout flow but not during initial login. This should not normally happen."
-        );
-        let version = if FeatureFlag::AgentView.is_enabled() {
-            AgentOnboardingVersion::AgentModality {
-                has_project: false,
-                intention: OnboardingIntention::AgentDrivenDevelopment,
-            }
-        } else {
-            AgentOnboardingVersion::UniversalInput { has_project: false }
-        };
-        self.dispatch_onboarding(
-            TerminalAction::OnboardingFlow(OnboardingVersion::Agent(version)),
-            ctx,
-        );
     }
 
     fn dispatch_onboarding(&self, action: TerminalAction, ctx: &mut ViewContext<Self>) {
@@ -7207,7 +7197,7 @@ impl Workspace {
         self.add_tab_with_pane_layout(
             panes_layout,
             Arc::new(HashMap::new()),
-            Some("Settings".to_owned()),
+            Some(crate::t!("settings-title")),
             ctx,
         );
     }
@@ -8282,11 +8272,9 @@ impl Workspace {
     }
 
     fn user_menu_items(&self, app: &AppContext) -> Vec<MenuItem<WorkspaceAction>> {
+        // 去中心化分支:用户菜单不再展示账户名 / Sign up / Upgrade / Billing / Invite /
+        // Log out 等云端账户相关项,只保留本地可用入口(更新、设置、文档、反馈、日志)。
         let mut items = Vec::new();
-        if !self.auth_state.is_anonymous_or_logged_out() {
-            let name = self.auth_state.username_for_display().unwrap_or_default();
-            items.push(MenuItemFields::new(name).with_disabled(true).into_item())
-        }
 
         let appearance = Appearance::as_ref(app);
 
@@ -8303,7 +8291,7 @@ impl Workspace {
                     ) =>
                 {
                     items.push(
-                        MenuItemFields::new("Update and relaunch Warp")
+                        MenuItemFields::new(crate::t!("workspace-update-and-relaunch-warp"))
                             .with_on_select_action(WorkspaceAction::ApplyUpdate)
                             .with_override_text_color(appearance.theme().ansi_fg_red())
                             .into_item(),
@@ -8315,9 +8303,12 @@ impl Workspace {
                     ) =>
                 {
                     items.push(
-                        MenuItemFields::new(format!("Updating to ({})", new_version.version))
-                            .with_disabled(true)
-                            .into_item(),
+                        MenuItemFields::new(crate::t!(
+                            "workspace-updating-to-version",
+                            version = new_version.version
+                        ))
+                        .with_disabled(true)
+                        .into_item(),
                     )
                 }
                 AutoupdateStage::UnableToUpdateToNewVersion { new_version }
@@ -8326,7 +8317,7 @@ impl Workspace {
                     ) =>
                 {
                     items.push(
-                        MenuItemFields::new("Update Warp manually")
+                        MenuItemFields::new(crate::t!("workspace-update-warp-manually"))
                             .with_on_select_action(WorkspaceAction::DownloadNewVersion)
                             .with_override_text_color(appearance.theme().ansi_fg_red())
                             .into_item(),
@@ -8337,81 +8328,40 @@ impl Workspace {
         }
 
         items.extend([
-            MenuItemFields::new("What's new")
+            MenuItemFields::new(crate::t!("workspace-menu-whats-new"))
                 .with_on_select_action(WorkspaceAction::ViewLatestChangelog)
                 .into_item(),
-            MenuItemFields::new("Settings")
+            MenuItemFields::new(crate::t!("workspace-menu-settings"))
                 .with_on_select_action(WorkspaceAction::ShowSettings)
                 .into_item(),
-            MenuItemFields::new("Keyboard shortcuts")
+            MenuItemFields::new(crate::t!("workspace-menu-keyboard-shortcuts"))
                 .with_on_select_action(WorkspaceAction::ToggleKeybindingsPage)
                 .into_item(),
             MenuItem::Separator,
-            MenuItemFields::new("Documentation")
+            MenuItemFields::new(crate::t!("workspace-menu-documentation"))
                 .with_on_select_action(WorkspaceAction::ViewUserDocs)
                 .into_item(),
-            MenuItemFields::new("Feedback")
+            MenuItemFields::new(crate::t!("workspace-menu-feedback"))
                 .with_on_select_action(WorkspaceAction::SendFeedback)
                 .into_item(),
         ]);
 
         #[cfg(not(target_family = "wasm"))]
         items.push(
-            MenuItemFields::new("View Warp logs")
+            MenuItemFields::new(crate::t!("workspace-menu-view-warp-logs"))
                 .with_on_select_action(WorkspaceAction::ViewLogs)
                 .into_item(),
         );
 
         items.extend([
-            MenuItemFields::new("Slack")
+            MenuItemFields::new(crate::t!("workspace-menu-slack"))
                 .with_on_select_action(WorkspaceAction::JoinSlack)
                 .into_item(),
             MenuItem::Separator,
         ]);
 
-        if self.auth_state.is_anonymous_or_logged_out() {
-            items.push(
-                MenuItemFields::new("Sign up")
-                    .with_on_select_action(WorkspaceAction::SignupAnonymousUser)
-                    .into_item(),
-            );
-        }
-
-        // Check if the user is on any paid plan to determine whether to show "Billing and Usage" or "Upgrade"
-        let is_on_paid_plan = UserWorkspaces::as_ref(app)
-            .current_workspace()
-            .map(|workspace| workspace.billing_metadata.is_user_on_paid_plan())
-            .unwrap_or(false);
-
-        if is_on_paid_plan {
-            items.push(
-                MenuItemFields::new("Billing and usage")
-                    .with_on_select_action(WorkspaceAction::ShowSettingsPage(
-                        SettingsSection::BillingAndUsage,
-                    ))
-                    .into_item(),
-            );
-        } else {
-            items.push(
-                MenuItemFields::new("Upgrade")
-                    .with_on_select_action(WorkspaceAction::ShowUpgrade)
-                    .into_item(),
-            );
-        }
-
-        items.push(
-            MenuItemFields::new("Invite a friend")
-                .with_on_select_action(WorkspaceAction::ShowReferralSettingsPage)
-                .into_item(),
-        );
-
-        if !self.auth_state.is_anonymous_or_logged_out() {
-            items.push(
-                MenuItemFields::new("Log out")
-                    .with_on_select_action(WorkspaceAction::LogOut)
-                    .into_item(),
-            );
-        }
+        // 去中心化分支:此处原本会追加 Sign up / Upgrade / Billing / Invite / Log out
+        // 等账号相关项,本地模式下全部移除。
         items
     }
 
@@ -8610,7 +8560,7 @@ impl Workspace {
                 .with_height(NEW_SESSION_SIDECAR_SEARCH_BOX_HEIGHT)
                 .finish()
             }),
-            Some("Search repos".to_string()),
+            Some(crate::t!("workspace-search-repos-placeholder")),
         )
         .with_no_interaction_on_hover()
         .no_highlight_on_hover()
@@ -8882,7 +8832,7 @@ impl Workspace {
         };
 
         match label.as_str() {
-            "New worktree config" => {
+            label if label == crate::t!("workspace-new-worktree-config") => {
                 self.tab_config_action_sidecar_item = None;
                 let auto_select_first_repo = self.new_session_dropdown_menu.read(ctx, |menu, _| {
                     menu.last_selection_source() != Some(MenuSelectionSource::Pointer)
@@ -8894,7 +8844,7 @@ impl Workspace {
                 );
             }
             // Items that don't get any sidecar.
-            "New tab config" => {
+            label if label == crate::t!("workspace-new-tab-config") => {
                 self.tab_config_action_sidecar_item = None;
                 if self.show_new_session_sidecar {
                     self.show_new_session_sidecar = false;
@@ -9405,26 +9355,6 @@ impl Workspace {
         );
     }
 
-    fn handle_enable_auto_reload_modal_event(
-        &mut self,
-        event: &EnableAutoReloadModalEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match event {
-            EnableAutoReloadModalEvent::Close => {
-                self.current_workspace_state
-                    .is_enable_auto_reload_modal_open = false;
-                ctx.notify();
-            }
-            EnableAutoReloadModalEvent::ShowToast { message, flavor } => {
-                self.toast_stack.update(ctx, |toast_stack, ctx| {
-                    toast_stack
-                        .add_ephemeral_toast(DismissibleToast::new(message.clone(), *flavor), ctx);
-                });
-            }
-        }
-    }
-
     fn handle_welcome_tips_event(&mut self, event: &TipsEvent, ctx: &mut ViewContext<Self>) {
         match event {
             TipsEvent::Close => {
@@ -9472,9 +9402,9 @@ impl Workspace {
 
                 self.toast_stack.update(ctx, |view, ctx| {
                     let new_toast =
-                        DismissibleToast::error("Looks like you're out of AI credits.".into())
+                        DismissibleToast::error(crate::t!("workspace-toast-out-of-ai-credits"))
                             .with_link(
-                                ToastLink::new("Upgrade for more credits.".into())
+                                ToastLink::new(crate::t!("workspace-toast-upgrade-more-credits"))
                                     .with_href(upgrade_link),
                             );
                     view.add_ephemeral_toast(new_toast, ctx);
@@ -11329,7 +11259,9 @@ impl Workspace {
                     ctx.notify();
                 });
                 WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::error("Failed to load conversation.".to_owned());
+                    let toast = DismissibleToast::error(crate::t!(
+                        "workspace-toast-failed-load-conversation"
+                    ));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
                 return;
@@ -11382,7 +11314,9 @@ impl Workspace {
             let Some(conversation) = conversation else {
                 log::warn!("Failed to load conversation {conversation_id}");
                 WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::error("Failed to load conversation.".to_owned());
+                    let toast = DismissibleToast::error(crate::t!(
+                        "workspace-toast-failed-load-conversation"
+                    ));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
                 // Close the loading pane
@@ -11451,7 +11385,9 @@ impl Workspace {
             let Some(conversation) = conversation else {
                 log::warn!("Failed to load conversation {conversation_id}");
                 WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::error("Failed to load conversation.".to_owned());
+                    let toast = DismissibleToast::error(crate::t!(
+                        "workspace-toast-failed-load-conversation"
+                    ));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
                 // Close the loading tab
@@ -11562,9 +11498,9 @@ impl Workspace {
             let Some(CloudConversationData::Oz(source_conversation)) = source_conversation else {
                 log::error!("Failed to load Oz conversation {conversation_id} for forking.");
                 WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast = DismissibleToast::error(
-                        "Failed to load conversation for forking.".to_owned(),
-                    );
+                    let toast = DismissibleToast::error(crate::t!(
+                        "workspace-toast-failed-load-conversation-for-forking"
+                    ));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
                 return;
@@ -11590,8 +11526,9 @@ impl Workspace {
                 Err(e) => {
                     log::error!("Conversation forking failed. {e}.");
                     WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                        let toast =
-                            DismissibleToast::error("Conversation forking failed.".to_owned());
+                        let toast = DismissibleToast::error(crate::t!(
+                            "workspace-toast-conversation-forking-failed"
+                        ));
                         toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                     });
                     return;
@@ -11755,6 +11692,7 @@ impl Workspace {
                         controller.send_slash_command_request(
                             SlashCommandRequest::Summarize {
                                 prompt: summarization_prompt,
+                                overflow: false, // ForkAndCompact 是用户主动触发,非自动 overflow
                             },
                             ctx,
                         );
@@ -11853,8 +11791,13 @@ impl Workspace {
 
         terminal_view.update(ctx, |terminal, ctx| {
             terminal.ai_controller().update(ctx, |controller, ctx| {
-                controller
-                    .send_slash_command_request(SlashCommandRequest::Summarize { prompt }, ctx);
+                controller.send_slash_command_request(
+                    SlashCommandRequest::Summarize {
+                        prompt,
+                        overflow: false,
+                    },
+                    ctx,
+                );
             });
 
             if let Some(prompt) = initial_prompt {
@@ -12544,106 +12487,8 @@ impl Workspace {
         ctx.notify();
     }
 
-    fn handle_changelog_event(&mut self, event: &ChangelogEvent, ctx: &mut ViewContext<Self>) {
-        // For certain contexts, like shared sessions, we do not want to force open the side panel
-        // or display the reward modal.
-        if !ContextFlag::ForceSidePanelOpen.is_enabled() {
-            return;
-        }
-        // Don't show changelog if user has disabled it in settings.
-        let show_changelog_setting = *ChangelogSettings::as_ref(ctx).show_changelog_after_update;
-
-        let mut request_type = None;
-        let should_show_changelog = match event {
-            ChangelogEvent::ChangelogRequestFailed {
-                request_type: ChangelogRequestType::UserAction,
-            }
-            | ChangelogEvent::ChangelogRequestComplete {
-                request_type: ChangelogRequestType::UserAction,
-                ..
-            } => {
-                request_type = Some(ChangelogRequestType::UserAction);
-                true
-            }
-            ChangelogEvent::ChangelogRequestComplete {
-                request_type: ChangelogRequestType::WindowLaunch,
-                ..
-            } => match ChannelState::app_version() {
-                Some(version) => {
-                    let opening_warp_drive_on_start_up = OPENING_WARP_DRIVE_ON_START_UP
-                        .lock()
-                        .expect("Should be able to access OPENING_WARP_DRIVE_ON_START_UP");
-
-                    request_type = Some(ChangelogRequestType::WindowLaunch);
-                    // Do not show changelog on quake mode window or if it has already been shown
-                    // or if we are opening Warp Drive on start up
-                    quake_mode_window_id() != Some(ctx.window_id())
-                        && !Settings::has_changelog_been_shown(version, ctx)
-                        && !*opening_warp_drive_on_start_up
-                }
-                None => false,
-            },
-            ChangelogEvent::ChangelogRequestFailed {
-                request_type: ChangelogRequestType::WindowLaunch,
-            } => false,
-            ChangelogEvent::ImageRequestComplete => false,
-        } && show_changelog_setting;
-
-        match (
-            should_show_changelog,
-            request_type,
-            self.reward_modal_pending,
-        ) {
-            (true, Some(ChangelogRequestType::WindowLaunch), _) => {
-                if let Some(version) = ChannelState::app_version() {
-                    Settings::mark_changelog_shown(version, ctx);
-                    if FeatureFlag::AvatarInTabBar.is_enabled() {
-                        self.update_toast_stack.update(ctx, |stack, ctx| {
-                            // Get keybinding for view changelog action
-                            let keystroke = ctx
-                                .editable_bindings()
-                                .find(|binding| binding.name == "workspace:view_changelog")
-                                .and_then(|binding| trigger_to_keystroke(binding.trigger));
-
-                            let mut link = ToastLink::new("View changelog".to_owned())
-                                .with_onclick_action(WorkspaceAction::ViewLatestChangelog);
-                            if let Some(keystroke) = keystroke {
-                                link = link.with_keystroke(keystroke);
-                            }
-
-                            let toast = DismissibleToast::default(String::from("Warp updated!"))
-                                .with_link(link);
-
-                            stack.add_ephemeral_toast(toast, ctx);
-                        });
-                    } else {
-                        // If resource center isn't already open and Warp AI isn't open, then open resource center
-                        if !self.current_workspace_state.is_resource_center_open
-                            && !self.current_workspace_state.is_ai_assistant_panel_open
-                        {
-                            self.open_resource_center_main_page(ctx);
-                            self.update_resource_center_action_target(ctx);
-                            ctx.notify();
-                        }
-                    }
-                }
-            }
-            (_, Some(ChangelogRequestType::UserAction), _) => {
-                if !self.current_workspace_state.is_resource_center_open
-                    && !self.current_workspace_state.is_ai_assistant_panel_open
-                {
-                    self.open_resource_center_main_page(ctx);
-                    self.update_resource_center_action_target(ctx);
-                    ctx.notify();
-                }
-            }
-            (false, _, Some(kind)) => {
-                // We shouldn't show the changelog modal, but we have a pending reward modal, so we
-                // should show that now that we know the changelog won't be shown
-                self.show_reward_modal(kind, ctx);
-            }
-            _ => {}
-        }
+    fn handle_changelog_event(&mut self, _event: &ChangelogEvent, _ctx: &mut ViewContext<Self>) {
+        // OpenWarp 是本地化 fork,不依赖私有 changelog 服务,不在更新后弹出 toast/resource-center。
     }
 
     fn manual_check_for_update(&self, ctx: &mut ViewContext<Self>) {
@@ -12964,14 +12809,6 @@ impl Workspace {
             }
             pane_group::Event::OpenSettings(section) => {
                 self.show_settings_with_section(Some(*section), ctx);
-            }
-            pane_group::Event::OpenAutoReloadModal { purchased_credits } => {
-                self.current_workspace_state
-                    .is_enable_auto_reload_modal_open = true;
-                self.enable_auto_reload_modal.update(ctx, |modal, ctx| {
-                    modal.set_selected_denomination_by_credits(*purchased_credits, ctx);
-                });
-                ctx.notify();
             }
             #[cfg(not(target_family = "wasm"))]
             pane_group::Event::OpenPluginInstructionsPane(agent, kind) => {
@@ -14020,9 +13857,6 @@ impl Workspace {
                     });
                 }
             }
-            pane_group::Event::ShowCloudAgentCapacityModal { variant } => {
-                self.open_cloud_agent_capacity_modal(*variant, ctx);
-            }
             pane_group::Event::FreeTierLimitCheckTriggered => {
                 self.free_tier_limit_check_triggered = true;
             }
@@ -14457,8 +14291,8 @@ impl Workspace {
             DrivePanelEvent::FocusWarpDrive => {
                 ctx.focus(&self.left_panel_view);
             }
-            DrivePanelEvent::OpenSharedObjectsCreationDeniedModal(object_type, team_uid) => {
-                self.open_shared_objects_creation_denied_modal(*object_type, *team_uid, ctx)
+            DrivePanelEvent::OpenSharedObjectsCreationDeniedModal(_, _) => {
+                // OpenWarp:云端 Drive 配额拒绝弹窗已删除,事件直接忽略
             }
             DrivePanelEvent::AttachPlanAsContext(id) => {
                 self.attach_plan_as_context(*id, ctx);
@@ -14470,9 +14304,9 @@ impl Workspace {
         let Some(view) = self.active_session_view(ctx) else {
             let window_id = ctx.window_id();
             WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                let toast = DismissibleToast::default(
-                    "No terminal pane open. Open a new pane to attach as context.".to_owned(),
-                );
+                let toast = DismissibleToast::default(crate::t!(
+                    "workspace-toast-no-terminal-pane-for-context"
+                ));
                 toast_stack.add_ephemeral_toast(toast, window_id, ctx);
             });
             return;
@@ -14490,8 +14324,9 @@ impl Workspace {
             {
                 let window_id = ctx.window_id();
                 WorkspaceToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast =
-                        DismissibleToast::default("This plan is already in context.".to_owned());
+                    let toast = DismissibleToast::default(crate::t!(
+                        "workspace-toast-plan-already-in-context"
+                    ));
                     toast_stack.add_ephemeral_toast(toast, window_id, ctx);
                 });
                 return;
@@ -14572,9 +14407,8 @@ impl Workspace {
             // The active terminal exists but is busy, and the fallback behavior is
             // RequireExisting or OpenIfNone. In those cases, show a toast and no-op.
             self.toast_stack.update(ctx, |toast_stack, ctx| {
-                let mut toast = DismissibleToast::error(
-                    "A command in this session is still running.".to_string(),
-                );
+                let mut toast =
+                    DismissibleToast::error(crate::t!("workspace-toast-command-still-running"));
                 if let Some(id) = object_id {
                     toast = toast.with_object_id(id.uid());
                 }
@@ -14595,8 +14429,9 @@ impl Workspace {
 
         if !ContextFlag::CreateNewSession.is_enabled() {
             self.toast_stack.update(ctx, |toast_stack, ctx| {
-                let toast =
-                    DismissibleToast::error("Cannot open a new terminal session".to_string());
+                let toast = DismissibleToast::error(crate::t!(
+                    "workspace-toast-cannot-open-terminal-session"
+                ));
                 toast_stack.add_ephemeral_toast(toast, ctx);
             });
             return None;
@@ -15803,12 +15638,6 @@ impl Workspace {
 
                 self.focus_active_tab(ctx);
             }
-            LaunchModalEvent::ToggleCheckbox => {
-                PrivacySettings::handle(ctx).update(ctx, |settings, ctx| {
-                    let current_value = settings.is_cloud_conversation_storage_enabled;
-                    settings.set_is_cloud_conversation_storage_enabled(!current_value, ctx);
-                });
-            }
         }
     }
 
@@ -16042,40 +15871,6 @@ impl Workspace {
         }
     }
 
-    fn handle_cloud_agent_capacity_modal_event(
-        &mut self,
-        event: &CloudAgentCapacityModalEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match event {
-            CloudAgentCapacityModalEvent::Close => {
-                self.current_workspace_state
-                    .is_cloud_agent_capacity_modal_open = false;
-                self.focus_active_tab(ctx);
-                ctx.notify();
-            }
-        }
-    }
-
-    pub fn open_cloud_agent_capacity_modal(
-        &mut self,
-        variant: CloudAgentCapacityModalVariant,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if !FeatureFlag::CloudMode.is_enabled() {
-            return;
-        }
-        self.cloud_agent_capacity_modal.update(ctx, |modal, ctx| {
-            modal.set_variant(variant);
-            ctx.notify();
-        });
-        self.current_workspace_state
-            .is_cloud_agent_capacity_modal_open = true;
-        ctx.focus(&self.cloud_agent_capacity_modal);
-        ctx.notify();
-        send_telemetry_from_ctx!(TelemetryEvent::CloudAgentCapacityModalOpened, ctx);
-    }
-
     fn handle_free_tier_limit_modal_event(
         &mut self,
         event: &FreeTierLimitHitModalEvent,
@@ -16253,51 +16048,7 @@ impl Workspace {
         ctx.notify();
     }
 
-    fn open_shared_objects_creation_denied_modal(
-        &mut self,
-        object_type: DriveObjectType,
-        team_uid: ServerId,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        let team = UserWorkspaces::as_ref(ctx).team_from_uid(team_uid);
-        if let Some(team) = team {
-            let current_user_email = self.auth_state.user_email().unwrap_or_default();
-            let has_admin_permissions = team.has_admin_permissions(&current_user_email);
-            let team_uid = team.uid;
-            let is_delinquent_due_to_payment_issue =
-                team.billing_metadata.is_delinquent_due_to_payment_issue();
-            let customer_type = team.billing_metadata.customer_type;
-
-            // Send telemetry event only if the team is not delinquent. If the team is
-            // delinquent, then they haven't technically hit any tier limits are just in a
-            // restricted state.
-            if !is_delinquent_due_to_payment_issue {
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::TierLimitHit(TierLimitHitEvent {
-                        team_uid: team.uid,
-                        feature: object_type.to_string(),
-                    }),
-                    ctx
-                );
-            }
-
-            self.current_workspace_state
-                .is_shared_objects_creation_denied_modal_open = true;
-            self.shared_objects_creation_denied_modal
-                .update(ctx, |modal, ctx| {
-                    modal.update_modal_state(
-                        team_uid,
-                        object_type,
-                        has_admin_permissions,
-                        is_delinquent_due_to_payment_issue,
-                        customer_type,
-                        ctx,
-                    );
-                });
-            ctx.focus(&self.shared_objects_creation_denied_modal);
-            ctx.notify();
-        }
-    }
+    // OpenWarp:删除 open_shared_objects_creation_denied_modal(云端 Drive 配额拒绝弹窗)
 
     /// Opens the workflow modal in the provided space and folder with no existing content (i.e. a new workflow modal).
     fn open_workflow_modal(
@@ -16315,11 +16066,7 @@ impl Workspace {
         let owner = match space {
             Space::Team { team_uid } => {
                 if !UserWorkspaces::has_capacity_for_shared_workflows(team_uid, ctx, 1) {
-                    self.open_shared_objects_creation_denied_modal(
-                        DriveObjectType::Workflow,
-                        team_uid,
-                        ctx,
-                    );
+                    // OpenWarp:云端配额拒绝弹窗已删除,直接 return
                     return;
                 }
 
@@ -16593,7 +16340,7 @@ impl Workspace {
                         icons::Icon::Grid,
                         &self.mouse_states.agent_management_view_button,
                         WorkspaceAction::ToggleAgentManagementView,
-                        "Agent management panel".to_string(),
+                        crate::t!("workspace-agent-management-panel-tooltip"),
                         keybinding_name_to_display_string(
                             "workspace:toggle_agent_management_view",
                             ctx,
@@ -16623,7 +16370,7 @@ impl Workspace {
             if vertical_tabs_active {
                 (
                     self.vertical_tabs_panel_open,
-                    "Tabs panel",
+                    crate::t!("workspace-tabs-panel-tooltip"),
                     WorkspaceAction::ToggleVerticalTabsPanel,
                     "workspace:toggle_vertical_tabs_panel",
                     "workspace:toggle_vertical_tabs_panel",
@@ -16636,13 +16383,22 @@ impl Workspace {
                         .copied()
                         .unwrap_or(ToolPanelView::WarpDrive)
                     {
-                        ToolPanelView::ProjectExplorer => "Project explorer",
-                        ToolPanelView::GlobalSearch { .. } => "Global search",
-                        ToolPanelView::WarpDrive => "Warp Drive",
-                        ToolPanelView::ConversationListView => "Agent conversations",
+                        ToolPanelView::ProjectExplorer => {
+                            crate::t!("workspace-left-panel-project-explorer")
+                        }
+                        ToolPanelView::GlobalSearch { .. } => {
+                            crate::t!("workspace-left-panel-global-search")
+                        }
+                        ToolPanelView::WarpDrive => crate::t!("workspace-left-panel-warp-drive"),
+                        ToolPanelView::ConversationListView => {
+                            crate::t!("workspace-left-panel-agent-conversations")
+                        }
+                        ToolPanelView::SshManager => {
+                            crate::t!("workspace-left-panel-ssh-manager")
+                        }
                     }
                 } else {
-                    "Tools panel"
+                    crate::t!("workspace-tools-panel-tooltip")
                 };
                 (
                     self.active_tab_pane_group().as_ref(ctx).left_panel_open,
@@ -16690,13 +16446,22 @@ impl Workspace {
                 .copied()
                 .unwrap_or(ToolPanelView::WarpDrive)
             {
-                ToolPanelView::ProjectExplorer => "Project explorer",
-                ToolPanelView::GlobalSearch { .. } => "Global search",
-                ToolPanelView::WarpDrive => "Warp Drive",
-                ToolPanelView::ConversationListView => "Agent conversations",
+                ToolPanelView::ProjectExplorer => {
+                    crate::t!("workspace-left-panel-project-explorer")
+                }
+                ToolPanelView::GlobalSearch { .. } => {
+                    crate::t!("workspace-left-panel-global-search")
+                }
+                ToolPanelView::WarpDrive => crate::t!("workspace-left-panel-warp-drive"),
+                ToolPanelView::ConversationListView => {
+                    crate::t!("workspace-left-panel-agent-conversations")
+                }
+                ToolPanelView::SshManager => {
+                    crate::t!("workspace-left-panel-ssh-manager")
+                }
             }
         } else {
-            "Tools panel"
+            crate::t!("workspace-tools-panel-tooltip")
         };
 
         SavePosition::new(
@@ -16853,7 +16618,7 @@ impl Workspace {
             button
                 .with_tooltip(self.render_tab_bar_icon_button_tooltip(
                     appearance,
-                    "Code review panel".to_string(),
+                    crate::t!("workspace-code-review-panel-tooltip"),
                     keybinding_name_to_display_string("workspace:toggle_right_panel", ctx),
                 ))
                 .build()
@@ -17126,11 +16891,13 @@ impl Workspace {
 
             let left_padding = self.compute_tab_bar_left_padding(ctx);
 
-            let tab_bar = Flex::row()
+            let show_title_bar_search_bar = *TabSettings::as_ref(ctx).show_title_bar_search_bar;
+            let mut tab_bar_row = Flex::row()
                 .with_main_axis_size(MainAxisSize::Max)
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(tab_bar.finish())
-                .with_child(
+                .with_child(tab_bar.finish());
+            if show_title_bar_search_bar {
+                tab_bar_row.add_child(
                     Shrinkable::new(
                         1.,
                         Clipped::new(
@@ -17144,9 +16911,12 @@ impl Workspace {
                         .finish(),
                     )
                     .finish(),
-                )
-                .with_child(right_controls.finish())
-                .finish();
+                );
+            } else {
+                tab_bar_row.add_child(Shrinkable::new(1., Empty::new().finish()).finish());
+            }
+            tab_bar_row.add_child(right_controls.finish());
+            let tab_bar = tab_bar_row.finish();
 
             return EventHandler::new(
                 Container::new(tab_bar)
@@ -17349,7 +17119,7 @@ impl Workspace {
                 WorkspaceAction::ToggleNotificationMailbox {
                     select_first: false,
                 },
-                "Notifications".to_string(),
+                crate::t!("workspace-notifications-tooltip"),
                 keybinding_name_to_display_string(TOGGLE_NOTIFICATION_MAILBOX_BINDING_NAME, ctx),
                 is_inbox_active,
                 false,
@@ -17455,15 +17225,7 @@ impl Workspace {
                     .finish(),
             );
         } else {
-            let resource_center_closed = !self.current_workspace_state.is_resource_center_open;
-            if resource_center_closed && ContextFlag::WarpEssentials.is_enabled() {
-                target.add_child(
-                    Container::new(self.render_resource_center_button(appearance, ctx))
-                        .with_margin_left(TAB_BAR_PADDING_LEFT)
-                        .finish(),
-                );
-            }
-
+            // 去中心化分支:不再渲染 Warp Essentials(灯泡)按钮,只保留设置齿轮。
             target.add_child(
                 Container::new(self.render_settings_button(appearance))
                     .with_margin_left(TAB_BAR_PADDING_LEFT)
@@ -17626,10 +17388,10 @@ impl Workspace {
         const BUTTON_WIDTH: f32 = 24. + SIDE_MENU_WIDTH;
         const BUTTON_LEFT_MARGIN: f32 = 4.;
 
-        let new_tab_tool_tip_label_text = "New Tab".to_string();
+        let new_tab_tool_tip_label_text = crate::t!("workspace-new-tab-tooltip");
         let new_tab_tool_tip_sublabel_text =
             keybinding_name_to_display_string(NEW_TAB_BINDING_NAME, ctx);
-        let tab_configs_tool_tip_label_text = "Tab configs".to_string();
+        let tab_configs_tool_tip_label_text = crate::t!("workspace-tab-configs-tooltip");
         let tab_configs_tool_tip_sublabel_text =
             keybinding_name_to_display_string(TOGGLE_TAB_CONFIGS_MENU_BINDING_NAME, ctx);
         let appearance = Appearance::as_ref(ctx);
@@ -17857,54 +17619,6 @@ impl Workspace {
         SavePosition::new(Align::new(button).finish(), USER_AVATAR_BUTTON_POSITION_ID).finish()
     }
 
-    fn render_resource_center_button(
-        &self,
-        appearance: &Appearance,
-        ctx: &AppContext,
-    ) -> Box<dyn Element> {
-        // only show the unread indicator if the tips are NOT completed
-        let should_show_unread_indicator = !self.tips_completed.as_ref(ctx).skipped_or_completed;
-        let mut button = self
-            .render_tab_bar_icon_button(
-                appearance,
-                icons::Icon::Lightbulb,
-                &self.mouse_states.resource_center_icon,
-                WorkspaceAction::ToggleResourceCenter,
-                "Warp Essentials".to_string(),
-                self.cached_keybindings[TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME].clone(),
-                false,
-                false,
-            )
-            .finish();
-
-        if should_show_unread_indicator {
-            const INDICATOR_DIAMETER: f32 = 6.;
-            let indicator = Container::new(
-                ConstrainedBox::new(
-                    WarpUiIcon::new(ELLIPSE_SVG_PATH, appearance.theme().accent()).finish(),
-                )
-                .with_height(INDICATOR_DIAMETER)
-                .with_width(INDICATOR_DIAMETER)
-                .finish(),
-            )
-            .finish();
-            let mut stack = Stack::new();
-            stack.add_child(button);
-            stack.add_positioned_child(
-                indicator,
-                OffsetPositioning::offset_from_parent(
-                    Vector2F::zero(),
-                    ParentOffsetBounds::WindowByPosition,
-                    ParentAnchor::TopRight,
-                    ChildAnchor::TopRight,
-                ),
-            );
-            button = stack.finish();
-        }
-
-        Align::new(button).finish()
-    }
-
     fn render_settings_button(&self, appearance: &Appearance) -> Box<dyn Element> {
         Align::new(
             self.render_tab_bar_icon_button(
@@ -17912,7 +17626,7 @@ impl Workspace {
                 icons::Icon::Gear,
                 &self.mouse_states.settings_icon,
                 WorkspaceAction::ShowSettings,
-                "Settings".to_string(),
+                crate::t!("settings-title"),
                 self.cached_keybindings[SHOW_SETTINGS_KEYBINDING_NAME].clone(),
                 false,
                 false,
@@ -17958,8 +17672,8 @@ impl Workspace {
         Align::new(
             button
                 .build()
-                .on_click(|ctx, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::SignInAnonymousWebUser)
+                .on_click(|_ctx, _, _| {
+                    // 去中心化分支:`SignInAnonymousWebUser` dispatch 已删除。
                 })
                 .finish(),
         )
@@ -18000,8 +17714,8 @@ impl Workspace {
         Align::new(
             button
                 .build()
-                .on_click(|ctx, _, _| {
-                    ctx.dispatch_typed_action(WorkspaceAction::SignupAnonymousUser)
+                .on_click(|_ctx, _, _| {
+                    // 去中心化分支:Sign up 按钮 dispatch 已删除。
                 })
                 .finish(),
         )
@@ -18011,7 +17725,7 @@ impl Workspace {
     fn render_offline_button(&self, appearance: &Appearance) -> Box<dyn Element> {
         let ui_builder = appearance.ui_builder().clone();
 
-        let tool_tip_label_text = "Some features may be unavailable offline".to_string();
+        let tool_tip_label_text = crate::t!("workspace-offline-tooltip");
         let icon = ConstrainedBox::new(
             Container::new(
                 icons::Icon::CloudOffline
@@ -18347,9 +18061,9 @@ impl Workspace {
         // more important that users are notified their settings file is broken
         // than that they continue to see any of the autoupdate or crash recovery
         // banners.
+        // 去中心化分支:reauth banner 已删除。
         let banner_fields = self
-            .render_reauth_banner_element()
-            .or_else(|| self.render_settings_error_banner(app))
+            .render_settings_error_banner(app)
             .or_else(|| self.render_autoupdate_banner_element(app));
 
         #[cfg(enable_crash_recovery)]
@@ -18401,26 +18115,7 @@ impl Workspace {
             .map(|fields| self.render_workspace_banner(fields, appearance))
     }
 
-    fn render_reauth_banner_element(&self) -> Option<WorkspaceBannerFields> {
-        if self.reauth_banner_dismissed || !self.auth_state.needs_reauth() {
-            return None;
-        }
-
-        Some(WorkspaceBannerFields {
-            banner_type: WorkspaceBanner::Reauth,
-            severity: BannerSeverity::Warning,
-            heading: Some("Your login has expired.".into()),
-            description: "Please sign in again to restore access to cloud-based features.".into(),
-            secondary_button: None,
-            button: Some(WorkspaceBannerButtonDetails {
-                text: "Sign in".into(),
-                action: WorkspaceAction::Reauth,
-                variant: BannerButtonVariant::Outlined,
-                icon: None,
-                more_info_button_action: None,
-            }),
-        })
-    }
+    // 去中心化分支:`render_reauth_banner_element` 已删除。
 
     fn render_autoupdate_banner_element(&self, app: &AppContext) -> Option<WorkspaceBannerFields> {
         if FeatureFlag::Autoupdate.is_enabled() {
@@ -18443,7 +18138,7 @@ impl Workspace {
                         description,
                         secondary_button: None,
                         button: Some(WorkspaceBannerButtonDetails {
-                            text: "Update Warp manually".to_string(),
+                            text: crate::t!("workspace-update-warp-manually"),
                             action: WorkspaceAction::DownloadNewVersion,
                             variant: BannerButtonVariant::Outlined,
                             icon: None,
@@ -18468,7 +18163,7 @@ impl Workspace {
                         description,
                         secondary_button: None,
                         button: Some(WorkspaceBannerButtonDetails {
-                            text: "Update Warp manually".to_string(),
+                            text: crate::t!("workspace-update-warp-manually"),
                             action: WorkspaceAction::DownloadNewVersion,
                             variant: BannerButtonVariant::Outlined,
                             icon: None,
@@ -18759,9 +18454,6 @@ impl Workspace {
             }
             WorkspaceBanner::VersionDeprecated => {}
             WorkspaceBanner::AnonymousUserAuth => {}
-            WorkspaceBanner::Reauth => {
-                self.reauth_banner_dismissed = true;
-            }
             #[cfg(all(enable_crash_recovery, target_os = "linux"))]
             WorkspaceBanner::WaylandCrashRecovery => {
                 crash_recovery::dismiss_workspace_banner(ctx);
@@ -19578,26 +19270,6 @@ impl Workspace {
         self.open_require_login_modal(AuthViewVariant::RequireLoginCloseable, ctx);
     }
 
-    fn redirect_to_sign_in(&mut self) {
-        #[cfg(target_family = "wasm")]
-        if let Some(current_url) = parse_current_url() {
-            update_browser_url(
-                Url::parse(&format!(
-                    "{}/login?redirect_to={}",
-                    ChannelState::server_root_url(),
-                    current_url.path()
-                ))
-                .ok(),
-                true,
-            );
-        } else {
-            update_browser_url(
-                Url::parse(&format!("{}/login", ChannelState::server_root_url())).ok(),
-                true,
-            );
-        }
-    }
-
     /// Triggers the necessary cleanup for when a user logs out.
     pub fn on_log_out(&mut self, ctx: &mut ViewContext<Self>) {
         // Logging out should mimic the same behaviour as closing a window.
@@ -19687,6 +19359,8 @@ impl Workspace {
         if WarpDriveSettings::is_warp_drive_enabled(ctx) {
             views.push(ToolPanelView::WarpDrive);
         }
+        // openWarp 独有:SSH 管理器,无 feature flag,默认始终显示。
+        views.push(ToolPanelView::SshManager);
         views
     }
 
@@ -19864,6 +19538,9 @@ impl TypedActionView for Workspace {
                     ctx,
                 );
                 ctx.notify();
+            }
+            OpenSshTerminal { node_id, server } => {
+                self.open_ssh_terminal(node_id.clone(), server.clone(), ctx);
             }
             AddTabWithShell { shell, source } => {
                 self.add_tab_with_shell(shell.clone(), *source, ctx)
@@ -20067,11 +19744,7 @@ impl TypedActionView for Workspace {
             }
             AutoupdateFailureLink => self.open_autoupdate_failure_link(ctx),
             ApplyUpdate => self.apply_update(ctx),
-            LogOut => {
-                // Need to dispatch global action, or else we will not be able to retrieve
-                // the currently active session in the log out modal.
-                ctx.dispatch_global_action("app:maybe_log_out", ());
-            }
+            // 去中心化分支:`LogOut` 已删除。
             ExportAllWarpDriveObjects => {
                 self.export_all_warp_drive_objects(ctx);
             }
@@ -20103,24 +19776,7 @@ impl TypedActionView for Workspace {
                 mode: palette_mode,
                 source,
             } => self.toggle_palette(*palette_mode, *source, ctx),
-            ShowUpgrade => {
-                send_telemetry_from_ctx!(TelemetryEvent::UserMenuUpgradeClicked, ctx);
-
-                let auth_state = AuthStateProvider::as_ref(ctx).get();
-                let user_workspaces = UserWorkspaces::as_ref(ctx);
-
-                let upgrade_url = if let Some(team) = user_workspaces.current_team() {
-                    UserWorkspaces::upgrade_link_for_team(team.uid)
-                } else {
-                    let user_id = auth_state.user_id().unwrap_or_default();
-                    UserWorkspaces::upgrade_link(user_id)
-                };
-
-                ctx.open_url(&upgrade_url);
-            }
-            ShowReferralSettingsPage => {
-                self.show_settings_with_section(Some(SettingsSection::Referrals), ctx);
-            }
+            // 去中心化分支:`ShowUpgrade` / `ShowReferralSettingsPage` 已删除。
             JoinSlack => self.join_slack(ctx),
             ViewUserDocs => self.view_user_docs(ctx),
             ViewLatestChangelog => self.view_latest_changelog(ctx),
@@ -20819,25 +20475,15 @@ impl TypedActionView for Workspace {
                 self.process_updated_sync_state(ctx);
 
                 self.toast_stack.update(ctx, |view, ctx| {
-                    let new_toast =
-                        DismissibleToast::success("Disabled all synchronized inputs.".to_string());
+                    let new_toast = DismissibleToast::success(crate::t!(
+                        "workspace-toast-disabled-synchronized-inputs"
+                    ));
                     view.add_ephemeral_toast(new_toast, ctx);
                 });
                 send_telemetry_from_ctx!(TelemetryEvent::DisableInputSync, ctx);
             }
-            Reauth => {
-                AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
-                    let sign_in_url = auth_manager.sign_in_url();
-                    ctx.open_url(&sign_in_url);
-                });
-                send_telemetry_from_ctx!(TelemetryEvent::InitiateReauth, ctx);
-            }
-            SignupAnonymousUser => {
-                self.initiate_user_signup(AnonymousUserSignupEntrypoint::SignUpButton, ctx);
-            }
-            SignInAnonymousWebUser => {
-                self.redirect_to_sign_in();
-            }
+            // 去中心化分支:`Reauth` 已删除。
+            // 去中心化分支:`SignupAnonymousUser` / `SignInAnonymousWebUser` 已删除。
             HandleConflictingWorkflow(workflow_id) => {
                 self.toast_stack.update(ctx, |view, ctx| {
                     view.dismiss_older_toasts(&workflow_id.uid(), ctx);
@@ -20957,15 +20603,7 @@ impl TypedActionView for Workspace {
                 self.insert_in_input(content, *replace_buffer, false, *ensure_agent_mode, ctx);
                 ctx.notify();
             }
-            AttemptLoginGatedAIUpgrade => {
-                AuthManager::handle(ctx).update(ctx, |auth_manager, ctx| {
-                    auth_manager.attempt_login_gated_feature(
-                        "Upgrade AI Usage",
-                        AuthViewVariant::RequireLoginCloseable,
-                        ctx,
-                    )
-                });
-            }
+            // 去中心化分支:`AttemptLoginGatedAIUpgrade` 已删除。
             #[cfg(all(enable_crash_recovery, target_os = "linux"))]
             DismissWaylandCrashRecoveryBannerAndOpenLink => {
                 self.dismiss_workspace_banner(ctx, &WorkspaceBanner::WaylandCrashRecovery);
@@ -21521,16 +21159,11 @@ impl TypedActionView for Workspace {
                                             ty: Some(AttachmentType::Attachment),
                                             ..Default::default()
                                         };
-                                        sentry::with_scope(
-                                            |scope| {
-                                                scope.add_attachment(attachment);
-                                            },
-                                            || {
-                                                sentry::capture_message(
-                                                    "[FOR PERFORMANCE BOT] Dev took performance sample with results: ",
-                                                    sentry::Level::Warning,
-                                                )
-                                            },
+                                        // openWarp 闭源遥测剥离 P2:原会把 perf sample
+                                        // 作为 attachment 上报到 Warp 官方 Sentry,改本地 log。
+                                        let _ = attachment;
+                                        log::info!(
+                                            "openWarp: dev performance sample taken (上报已剥离,sample 仅本地)"
                                         );
                                     }
                                 }
@@ -21570,6 +21203,11 @@ impl TypedActionView for Workspace {
                         self.left_panel_view.as_ref(ctx).active_view() == ToolPanelView::WarpDrive;
                     self.toggle_left_panel_view(&LeftPanelAction::WarpDrive, is_showing, ctx);
                 }
+            }
+            ToggleSshManager => {
+                let is_showing =
+                    self.left_panel_view.as_ref(ctx).active_view() == ToolPanelView::SshManager;
+                self.toggle_left_panel_view(&LeftPanelAction::SshManager, is_showing, ctx);
             }
             ToggleGlobalSearch => {
                 if FeatureFlag::GlobalSearch.is_enabled()
@@ -21712,7 +21350,9 @@ impl TypedActionView for Workspace {
                 send_telemetry_from_ctx!(TelemetryEvent::ConversationListItemDeleted, ctx);
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::success("Conversation deleted".to_string()),
+                        DismissibleToast::success(crate::t!(
+                            "workspace-toast-conversation-deleted"
+                        )),
                         window_id,
                         ctx,
                     );
@@ -22528,12 +22168,7 @@ impl View for Workspace {
             stack.add_child(ChildView::new(&self.theme_deletion_modal).finish());
         }
 
-        if self
-            .current_workspace_state
-            .is_shared_objects_creation_denied_modal_open
-        {
-            stack.add_child(ChildView::new(&self.shared_objects_creation_denied_modal).finish());
-        }
+        // OpenWarp:删除 shared_objects_creation_denied_modal 渲染分支
 
         if self.current_workspace_state.is_reward_modal_open {
             stack.add_child(Clipped::new(ChildView::new(&self.reward_modal).finish()).finish());
@@ -22747,27 +22382,12 @@ impl View for Workspace {
             }
         }
 
-        if self
-            .current_workspace_state
-            .is_enable_auto_reload_modal_open
-        {
-            stack.add_child(ChildView::new(&self.enable_auto_reload_modal).finish());
-        }
-
         if should_show_modal && one_time_modal_model.is_build_plan_migration_modal_open() {
             stack.add_child(ChildView::new(&self.build_plan_migration_modal).finish());
         }
 
         if self.current_workspace_state.is_codex_modal_open {
             stack.add_child(ChildView::new(&self.codex_modal).finish());
-        }
-
-        if FeatureFlag::CloudMode.is_enabled()
-            && self
-                .current_workspace_state
-                .is_cloud_agent_capacity_modal_open
-        {
-            stack.add_child(ChildView::new(&self.cloud_agent_capacity_modal).finish());
         }
 
         if self

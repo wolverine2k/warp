@@ -22,10 +22,8 @@ use warp_graphql::queries::get_conversation_usage::{
 use warp_graphql::mutations::set_user_is_onboarded::{
     SetUserIsOnboarded, SetUserIsOnboardedResult, SetUserIsOnboardedVariables,
 };
-use warp_graphql::mutations::update_user_settings::{
-    UpdateUserSettings, UpdateUserSettingsInput, UpdateUserSettingsResult,
-    UpdateUserSettingsVariables,
-};
+// openWarp 闭源遥测剥离 P4c review:UpdateUserSettings* 类型在 4 个 stub 后已无消费者,
+// import 整段删。GraphQL mutation 模块本身留作后续物理删。
 use warp_graphql::mutations::{
     create_anonymous_user::{
         AnonymousUserType, CreateAnonymousUser, CreateAnonymousUserResult,
@@ -41,14 +39,14 @@ use warp_graphql::queries::api_keys::{
     ApiKeyProperties, ApiKeyPropertiesResult, ApiKeys, ApiKeysVariables,
 };
 use warp_graphql::queries::get_user::{GetUser, GetUserVariables, UserOutput as GqlUserOutput};
-use warp_graphql::queries::get_user_settings::{GetUserSettings, GetUserSettingsVariables};
+// openWarp 闭源遥测剥离 P4c review:get_user_settings stub 成 Ok(None) 后两个类型不再消费。
+// use warp_graphql::queries::get_user_settings::{GetUserSettings, GetUserSettingsVariables};
 use warpui::r#async::BoxFuture;
 
 use crate::auth::UserUid;
 use crate::server::graphql::{default_request_options, get_user_facing_error_message};
 use crate::server::ids::ApiKeyUid;
 use crate::server::server_api::register_error;
-use crate::server::server_api::EXPERIMENT_ID_HEADER;
 use crate::settings::PrivacySettingsSnapshot;
 use crate::{
     auth::{
@@ -97,7 +95,6 @@ const AMBIENT_WORKLOAD_TOKEN_DURATION: Duration = Duration::from_secs(3 * 60 * 6
 /// User settings that are currently 'synced' (e.g. stored server-side) on a per-user basis.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct SyncedUserSettings {
-    pub is_cloud_conversation_storage_enabled: bool,
     pub is_crash_reporting_enabled: bool,
     pub is_telemetry_enabled: bool,
 }
@@ -174,8 +171,6 @@ pub trait AuthClient: 'static + Send + Sync {
     async fn set_is_telemetry_enabled(&self, value: bool) -> Result<()>;
 
     async fn set_is_crash_reporting_enabled(&self, value: bool) -> Result<()>;
-
-    async fn set_is_cloud_conversation_storage_enabled(&self, value: bool) -> Result<()>;
 
     /// Sends a request to update the user's settings on the server with values contained in the
     /// given `settings_snapshot`.
@@ -365,10 +360,8 @@ impl AuthClient for ServerApi {
                 self.client.clone(),
                 warp_graphql::client::RequestOptions {
                     auth_token: auth_token.map(ToOwned::to_owned),
-                    headers: std::collections::HashMap::from([(
-                        EXPERIMENT_ID_HEADER.to_string(),
-                        self.auth_state.anonymous_id(),
-                    )]),
+                    // openWarp 闭源遥测剥离 P4b:删 X-Warp-Experiment-Id 注入。
+                    headers: std::collections::HashMap::new(),
                     ..default_request_options()
                 },
             )
@@ -385,28 +378,12 @@ impl AuthClient for ServerApi {
     }
 
     async fn get_user_settings(&self) -> Result<Option<SyncedUserSettings>> {
-        let variables = GetUserSettingsVariables {
-            request_context: get_request_context(),
-        };
-        let operation = GetUserSettings::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
-
-        match response.user {
-            warp_graphql::queries::get_user_settings::UserResult::UserOutput(user_output) => {
-                match user_output.user.settings {
-                    Some(user_settings) => Ok(Some(SyncedUserSettings {
-                        is_cloud_conversation_storage_enabled: user_settings
-                            .is_cloud_conversation_storage_enabled,
-                        is_crash_reporting_enabled: user_settings.is_crash_reporting_enabled,
-                        is_telemetry_enabled: user_settings.is_telemetry_enabled,
-                    })),
-                    None => Ok(None),
-                }
-            }
-            warp_graphql::queries::get_user_settings::UserResult::Unknown => {
-                Err(anyhow!("Unable to fetch user settings"))
-            }
-        }
+        // openWarp 闭源遥测剥离 P4c review:补漏。原会向 app.warp.dev 发 GraphQL
+        // GetUserSettings query 拉云端隐私值,privacy.rs:408 用其覆盖本地——意味着
+        // 即使 P4c stub 了 4 个 set_is_* 写路径,这条读路径会把"云端记录的旧值"
+        // 同步回本地 PrivacySettings,让本地禁用动作隔几次启动就被服务器值覆盖。
+        // 直接返回 None(等价于"服务端无记录"),privacy.rs 会保留本地值不变。
+        Ok(None)
     }
 
     // Returns a history of the current user's conversation usage over the past n days.
@@ -429,106 +406,26 @@ impl AuthClient for ServerApi {
         }
     }
 
-    async fn set_is_telemetry_enabled(&self, value: bool) -> Result<()> {
-        let variables = UpdateUserSettingsVariables {
-            input: UpdateUserSettingsInput {
-                telemetry_enabled: Some(value),
-                ..Default::default()
-            },
-            request_context: get_request_context(),
-        };
-
-        let operation = UpdateUserSettings::build(variables);
-        let result = self
-            .send_graphql_request(operation, None)
-            .await?
-            .update_user_settings;
-
-        match result {
-            UpdateUserSettingsResult::UpdateUserSettingsOutput(_) => Ok(()),
-            UpdateUserSettingsResult::UserFacingError(user_facing_error) => {
-                Err(anyhow!(get_user_facing_error_message(user_facing_error)))
-            }
-            UpdateUserSettingsResult::Unknown => Err(anyhow!("failed to set telemetry enabled")),
-        }
+    // openWarp 闭源遥测剥离 P4c:trait 里有 4 个 UpdateUserSettings 入口
+    // (3 个细粒度 set_is_* + 1 个聚合 update_user_settings),用户每次切隐私开关
+    // 都会触发其中之一向 app.warp.dev 发 mutation。P3 只切了周期 update_user_settings,
+    // P4c 把 4 个 impl 全部 stub 成 Ok(()),上游 ~10 处调用站点(privacy.rs /
+    // settings_view / auth_view_body / login_slide / workspace::view)无需改。
+    // `UpdateUserSettings*` 类型 + GraphQL mutation 文件留作后续物理删。
+    // 配套 `get_user_settings` 同步 stub 成 Ok(None),否则云端旧值会回灌本地。
+    async fn set_is_telemetry_enabled(&self, _value: bool) -> Result<()> {
+        Ok(())
     }
 
-    async fn set_is_crash_reporting_enabled(&self, value: bool) -> Result<()> {
-        let variables = UpdateUserSettingsVariables {
-            input: UpdateUserSettingsInput {
-                crash_reporting_enabled: Some(value),
-                ..Default::default()
-            },
-            request_context: get_request_context(),
-        };
-
-        let operation = UpdateUserSettings::build(variables);
-        let result = self
-            .send_graphql_request(operation, None)
-            .await?
-            .update_user_settings;
-
-        match result {
-            UpdateUserSettingsResult::UpdateUserSettingsOutput(_) => Ok(()),
-            UpdateUserSettingsResult::UserFacingError(user_facing_error) => {
-                Err(anyhow!(get_user_facing_error_message(user_facing_error)))
-            }
-            UpdateUserSettingsResult::Unknown => {
-                Err(anyhow!("failed to set crash reporting enabled"))
-            }
-        }
+    async fn set_is_crash_reporting_enabled(&self, _value: bool) -> Result<()> {
+        Ok(())
     }
 
-    async fn set_is_cloud_conversation_storage_enabled(&self, value: bool) -> Result<()> {
-        let variables = UpdateUserSettingsVariables {
-            input: UpdateUserSettingsInput {
-                cloud_conversation_storage_enabled: Some(value),
-                ..Default::default()
-            },
-            request_context: get_request_context(),
-        };
-
-        let operation = UpdateUserSettings::build(variables);
-        let result = self
-            .send_graphql_request(operation, None)
-            .await?
-            .update_user_settings;
-
-        match result {
-            UpdateUserSettingsResult::UpdateUserSettingsOutput(_) => Ok(()),
-            UpdateUserSettingsResult::UserFacingError(user_facing_error) => {
-                Err(anyhow!(get_user_facing_error_message(user_facing_error)))
-            }
-            UpdateUserSettingsResult::Unknown => {
-                Err(anyhow!("failed to set cloud conversation storage enabled"))
-            }
-        }
-    }
-
-    async fn update_user_settings(&self, settings_snapshot: PrivacySettingsSnapshot) -> Result<()> {
-        let variables = UpdateUserSettingsVariables {
-            input: UpdateUserSettingsInput {
-                telemetry_enabled: Some(settings_snapshot.is_telemetry_enabled()),
-                crash_reporting_enabled: Some(settings_snapshot.is_crash_reporting_enabled()),
-                cloud_conversation_storage_enabled: settings_snapshot
-                    .cloud_conversation_storage_enabled(),
-            },
-            request_context: get_request_context(),
-        };
-
-        let operation = UpdateUserSettings::build(variables);
-        let result = self
-            .send_graphql_request(operation, None)
-            .await?
-            .update_user_settings;
-
-        match result {
-            UpdateUserSettingsResult::UpdateUserSettingsOutput(_) => Ok(()),
-            UpdateUserSettingsResult::UserFacingError(user_facing_error) => {
-                Err(anyhow!(get_user_facing_error_message(user_facing_error)))
-            }
-            UpdateUserSettingsResult::Unknown => Err(anyhow!("failed to update user settings")),
-        }
+    async fn update_user_settings(
+        &self,
+        _settings_snapshot: PrivacySettingsSnapshot,
+    ) -> Result<()> {
+        Ok(())
     }
 
     async fn set_user_is_onboarded(&self) -> Result<bool> {

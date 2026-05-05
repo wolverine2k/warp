@@ -365,8 +365,7 @@ impl OrchestrationEventStreamer {
             | BlocklistAIHistoryEvent::UpdatedTodoList { .. }
             | BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride { .. }
             | BlocklistAIHistoryEvent::SplitConversation { .. }
-            | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. }
-            | BlocklistAIHistoryEvent::NewConversationRequestComplete { .. } => {}
+            | BlocklistAIHistoryEvent::UpdatedConversationArtifacts { .. } => {}
         }
     }
 

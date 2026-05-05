@@ -1,13 +1,14 @@
 use warp_core::ui::appearance::Appearance;
+use warpui::elements::shimmering_text::ShimmeringTextStateHandle;
 use warpui::elements::{Container, CrossAxisAlignment, Element, Flex, ParentElement, Text};
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext};
 
 use super::search_results_common::{
     render_collapsible_search_results, CollapsibleSearchResultsState,
 };
-use crate::ai::agent::icons::yellow_running_icon;
 use crate::ai::agent::WebSearchStatus;
 use crate::ai::blocklist::block::view_impl::WithContentItemSpacing;
+use crate::ui_components::spinner::SpinnerStateHandle;
 
 pub enum WebSearchViewEvent {}
 
@@ -19,6 +20,9 @@ pub enum WebSearchViewAction {
 pub struct WebSearchView {
     pub status: WebSearchStatus,
     pub collapsible: CollapsibleSearchResultsState,
+    /// 双动画 state — 必须 view 持久化。详见 search_results_common 注释。
+    shimmer_handle: ShimmeringTextStateHandle,
+    spinner_handle: SpinnerStateHandle,
 }
 
 impl WebSearchView {
@@ -28,6 +32,8 @@ impl WebSearchView {
                 query: if query.is_empty() { None } else { Some(query) },
             },
             collapsible: CollapsibleSearchResultsState::new(),
+            shimmer_handle: ShimmeringTextStateHandle::new(),
+            spinner_handle: SpinnerStateHandle::new(),
         }
     }
 
@@ -36,16 +42,20 @@ impl WebSearchView {
     }
 
     fn render_loading(&self, query: &Option<String>, app: &AppContext) -> Box<dyn Element> {
-        let appearance = Appearance::as_ref(app);
-        let loading_icon = yellow_running_icon(appearance);
-
+        // 个性化进行时短语,对齐 opencode "Searching web..."。
+        let _ = Appearance::as_ref(app);
         let text = if let Some(q) = query {
-            format!("Searching the web for \"{q}\"")
+            format!("Searching the web for \"{q}\"...")
         } else {
-            "Searching the web".to_string()
+            "Searching the web...".to_string()
         };
 
-        super::search_results_common::render_loading_header(text, loading_icon, app)
+        super::search_results_common::render_loading_header_animated(
+            text,
+            self.spinner_handle.clone(),
+            self.shimmer_handle.clone(),
+            app,
+        )
     }
 
     fn render_success(

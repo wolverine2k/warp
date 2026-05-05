@@ -14,9 +14,10 @@ use super::schema::{
     generic_string_objects, ignored_suggestions, mcp_environment_variables,
     mcp_server_installations, mcp_server_panes, notebook_panes, notebooks, object_actions,
     object_metadata, object_permissions, pane_branches, pane_leaves, pane_nodes, panels,
-    project_rules, projects, server_experiments, settings_panes, tabs, team_members, team_settings,
-    teams, terminal_panes, user_profiles, welcome_panes, windows, workflow_panes, workflows,
-    workspace_language_server, workspace_metadata, workspace_teams, workspaces,
+    project_rules, projects, server_experiments, settings_panes, ssh_nodes, ssh_servers, tabs,
+    team_members, team_settings, teams, terminal_panes, user_profiles, welcome_panes, windows,
+    workflow_panes, workflows, workspace_language_server, workspace_metadata, workspace_teams,
+    workspaces,
 };
 
 #[derive(Insertable)]
@@ -1436,4 +1437,60 @@ pub struct Panel {
     pub tab_id: i32,
     pub left_panel: Option<String>,
     pub right_panel: Option<String>,
+}
+
+// --- SSH Manager ---------------------------------------------------------
+// Tree of folders and servers in the left-panel SSH manager. `parent_id` is
+// nullable for root-level entries; `kind` is `'folder'` or `'server'`.
+// Server-only metadata lives in `ssh_servers`. Secrets (password/passphrase)
+// are NOT stored here — they go into the OS keychain keyed by `node_id`.
+
+#[derive(Identifiable, Queryable, Selectable, Clone, Debug)]
+#[diesel(table_name = ssh_nodes)]
+#[diesel(primary_key(id))]
+pub struct SshNodeRow {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub kind: String,
+    pub name: String,
+    pub sort_order: i32,
+    pub created_at: NaiveDateTime,
+    pub updated_at: NaiveDateTime,
+    /// 仅对 folder 有意义;server 永远是 false。
+    pub is_collapsed: bool,
+}
+
+#[derive(Insertable, AsChangeset, Clone, Debug)]
+#[diesel(table_name = ssh_nodes)]
+pub struct NewSshNode<'a> {
+    pub id: &'a str,
+    pub parent_id: Option<&'a str>,
+    pub kind: &'a str,
+    pub name: &'a str,
+    pub sort_order: i32,
+}
+
+#[derive(Identifiable, Queryable, Selectable, Associations, Clone, Debug)]
+#[diesel(table_name = ssh_servers)]
+#[diesel(primary_key(node_id))]
+#[diesel(belongs_to(SshNodeRow, foreign_key = node_id))]
+pub struct SshServerRow {
+    pub node_id: String,
+    pub host: String,
+    pub port: i32,
+    pub username: String,
+    pub auth_type: String,
+    pub key_path: Option<String>,
+    pub last_connected_at: Option<NaiveDateTime>,
+}
+
+#[derive(Insertable, AsChangeset, Clone, Debug)]
+#[diesel(table_name = ssh_servers)]
+pub struct NewSshServer<'a> {
+    pub node_id: &'a str,
+    pub host: &'a str,
+    pub port: i32,
+    pub username: &'a str,
+    pub auth_type: &'a str,
+    pub key_path: Option<&'a str>,
 }

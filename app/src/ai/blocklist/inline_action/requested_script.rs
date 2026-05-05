@@ -337,12 +337,12 @@ fn script_status(
     is_collapsed: bool,
     is_viewing_detail: bool,
     app: &AppContext,
-) -> (&str, Box<dyn Element>) {
+) -> (String, Box<dyn Element>) {
     let appearance = Appearance::as_ref(app);
     let label = match (is_executing, is_collapsed) {
-        (true, _) => "Running...",
-        (false, true) => "Expand to show script",
-        (false, false) => "Hide",
+        (true, _) => crate::t!("command-palette-navigation-running"),
+        (false, true) => crate::t!("requested-script-expand-to-show"),
+        (false, false) => crate::t!("common-hide"),
     };
     let is_expanded = (is_executing && is_viewing_detail) || (!is_executing && !is_collapsed);
     let icon = ConstrainedBox::new(

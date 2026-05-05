@@ -30,9 +30,8 @@ pub(super) mod view_util;
 #[cfg_attr(target_family = "wasm", allow(unused_imports))]
 pub(crate) use action_model::{
     apply_edits, read_local_file_context, BlocklistAIActionEvent, BlocklistAIActionModel,
-    FileReadResult, ReadFileContextResult, RequestFileEditsFormatKind, ShellCommandExecutor,
-    ShellCommandExecutorEvent, StartAgentExecutor, StartAgentExecutorEvent, StartAgentRequest,
-    StartAgentRequestId,
+    FileReadResult, PromptSuggestionExecutor, PromptSuggestionExecutorEvent, ReadFileContextResult,
+    RequestFileEditsFormatKind, ShellCommandExecutor, ShellCommandExecutorEvent,
 };
 
 #[cfg(any(test, feature = "integration_tests"))]
@@ -65,12 +64,11 @@ pub(crate) use view_util::{
     ai_brand_color, ai_indicator_height, get_ai_block_overflow_menu_element_position_id,
     get_attached_blocks_chip_element_position_id, render_ai_agent_mode_icon,
     render_ai_follow_up_icon, ATTACH_AS_AGENT_MODE_CONTEXT_TEXT, CLAUDE_ORANGE,
-    NEW_AGENT_PANE_LABEL,
 };
 
 pub(crate) use view_util::format_credits;
 
-pub use crate::ai::blocklist::block::{secret_redaction, AIBlockResponseRating, TextLocation};
+pub use crate::ai::blocklist::block::{secret_redaction, TextLocation};
 pub use block::keyboard_navigable_buttons;
 pub use block::toggleable_items;
 pub use controller::input_context::{

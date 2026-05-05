@@ -8,7 +8,8 @@ use warpui::{
     AppContext, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
 };
 
-use crate::ai::agent::conversation::{AIConversationId, ConversationStatus};
+use crate::ai::agent::conversation::{AIConversation, AIConversationId, ConversationStatus};
+use crate::ai::agent::AIAgentOutputMessageType;
 use crate::ai::blocklist::agent_view::orchestration_conversation_links::conversation_navigation_card_with_icon;
 use crate::ai::blocklist::agent_view::{AgentViewController, AgentViewControllerEvent};
 use crate::ai::blocklist::BlocklistAIHistoryEvent;
@@ -195,8 +196,21 @@ impl View for ChildAgentStatusCard {
             }
 
             let agent_name = child.agent_name().unwrap_or("Agent").to_string();
-            let title = child.title().unwrap_or_else(|| "Untitled".to_string());
+            let raw_title = child.title().unwrap_or_else(|| "Untitled".to_string());
             let status_icon = child.status().status_icon_and_color(appearance.theme());
+
+            // T3-7:in_progress 子代理在 title 里 surface 当前 action,
+            // "Untitled · ↳ Searching codebase..." / "Refactor X · ↳ Reading files..."。
+            // finished 子代理仍显示原 title 不变。
+            let title = if child.status().is_in_progress() {
+                if let Some(presence) = latest_action_presence(child) {
+                    format!("{raw_title} · ↳ {presence}...")
+                } else {
+                    raw_title
+                }
+            } else {
+                raw_title
+            };
 
             let Some(mouse_state) = self.mouse_states.get(&conversation_id).cloned() else {
                 log::error!(
@@ -252,4 +266,27 @@ fn should_restore_dismissed_card(
 ) -> bool {
     let was_in_progress = previous_status.is_some_and(|s| s.is_in_progress());
     current_status.is_in_progress() && !was_in_progress
+}
+
+/// T3-7: 提取子代理 conversation 当前/最近的 action presence summary,
+/// 用于在父级 ChildAgentStatusCard 上 surface "↳ Searching codebase..." 之类的副标题。
+/// 对齐 opencode TUI Task 父卡 `↳ Bash $ git status` 的视觉。
+///
+/// 实现:遍历 latest_exchange.output_status.output().messages 反向找最后一个
+/// `AIAgentOutputMessageType::Action`,取 `presence_continuous_summary`。
+/// 找不到则返回 None(card 不显示 subtitle)。
+fn latest_action_presence(conversation: &AIConversation) -> Option<&'static str> {
+    let exchange = conversation.latest_exchange()?;
+    let output = exchange.output_status.output()?;
+    output
+        .get()
+        .messages
+        .iter()
+        .rev()
+        .find_map(|msg| match &msg.message {
+            AIAgentOutputMessageType::Action(action) => {
+                Some(action.action.presence_continuous_summary())
+            }
+            _ => None,
+        })
 }

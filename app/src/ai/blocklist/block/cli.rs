@@ -177,7 +177,7 @@ pub fn init(app: &mut AppContext) {
     ]);
     app.register_editable_bindings([EditableBinding::new(
         SET_INPUT_MODE_TERMINAL_ACTION_NAME,
-        "Take control of running command",
+        crate::t!("keybinding-desc-take-control-of-running-command"),
         CLISubagentAction::TakeControlOfRunningCommand,
     )
     .with_mac_key_binding("cmd-i")
@@ -312,11 +312,11 @@ impl CLISubagentView {
         allow_menu.update(ctx, |menu, ctx| {
             menu.set_items(
                 vec![
-                    MenuItemFields::new("Accept".to_string())
+                    MenuItemFields::new(crate::t!("ai-block-accept"))
                         .with_key_shortcut_label(Some(ACCEPT_KEYSTROKE.displayed()))
                         .with_on_select_action(CLISubagentAction::ExecuteBlockedAction)
                         .into_item(),
-                    MenuItemFields::new("Auto-approve".to_string())
+                    MenuItemFields::new(crate::t!("ai-block-auto-approve"))
                         .with_key_shortcut_label(Some(AUTO_APPROVE_KEYSTROKE.displayed()))
                         .with_on_select_action(CLISubagentAction::ExecuteAndAutoApprove)
                         .into_item(),

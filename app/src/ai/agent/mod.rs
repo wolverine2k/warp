@@ -1041,32 +1041,6 @@ impl<'a> std::fmt::Display for MarkdownActionResult<'a> {
                 ReadFilesResult::Error(error) => write!(f, "\n_Read files error: {error} _"),
                 ReadFilesResult::Cancelled => write!(f, "\n_Read files cancelled_"),
             },
-            AIAgentActionResultType::UploadArtifact(result) => match result {
-                UploadArtifactResult::Success {
-                    artifact_uid,
-                    filepath,
-                    mime_type,
-                    description,
-                    size_bytes,
-                } => {
-                    write!(f, "\n**Artifact Uploaded:** `{artifact_uid}`")?;
-                    if let Some(filepath) = filepath {
-                        write!(f, "\n\n**File:** `{filepath}`")?;
-                    }
-                    write!(
-                        f,
-                        "\n\n**MIME Type:** `{mime_type}`\n\n**Size:** `{size_bytes}` bytes"
-                    )?;
-                    if let Some(description) = description {
-                        write!(f, "\n\n**Description:** {description}")?;
-                    }
-                    Ok(())
-                }
-                UploadArtifactResult::Error(error) => {
-                    write!(f, "\n_Upload artifact error: {error} _")
-                }
-                UploadArtifactResult::Cancelled => write!(f, "\n_Upload artifact cancelled_"),
-            },
             AIAgentActionResultType::SearchCodebase(result) => match result {
                 SearchCodebaseResult::Success { files } => {
                     write!(f, "\n\n**Codebase Search Results:**\n\n")?;
@@ -1211,7 +1185,6 @@ impl AIAgentActionResult {
                     RequestCommandOutputResult::CancelledBeforeExecution
                 )
                 | AIAgentActionResultType::ReadFiles(ReadFilesResult::Cancelled)
-                | AIAgentActionResultType::UploadArtifact(UploadArtifactResult::Cancelled)
                 | AIAgentActionResultType::SearchCodebase(SearchCodebaseResult::Cancelled)
                 | AIAgentActionResultType::Grep(GrepResult::Cancelled)
                 | AIAgentActionResultType::FileGlob(FileGlobResult::Cancelled)
@@ -2454,6 +2427,12 @@ pub enum AIAgentInput {
 
     SummarizeConversation {
         prompt: Option<String>,
+        /// OpenWarp BYOP:本字段标记本次摘要是否由 token-overflow 自动触发,
+        /// `chat_stream::SummarizeConversation` 分支据此决定 follow-up 文案
+        /// (overflow 路径会拼一段 "previous request exceeded ..." 解释)。
+        /// 非 BYOP 路径(走 protobuf `api::request::input::SummarizeConversation`)
+        /// 不读这个字段。所有现有调用点保持 `overflow: false`。
+        overflow: bool,
     },
 
     /// Invoke a skill. The skill content is passed as instructions to the agent.

@@ -115,8 +115,10 @@ impl StatusColor {
     fn to_color(&self, appearance: &Appearance) -> ColorU {
         match self {
             StatusColor::Red => appearance.theme().ui_error_color(),
-            StatusColor::Yellow => appearance.theme().ansi_fg_yellow(),
-            StatusColor::Green => appearance.theme().ansi_fg_green(),
+            // 状态指示点用原始 ANSI 颜色,避免 ansi_fg_* 把饱和度对半混到 foreground 上
+            // 在 One Dark / Tokyo Night 这类低饱和前景的主题里出现"灰绿/灰黄"模糊感。
+            StatusColor::Yellow => appearance.theme().terminal_colors().normal.yellow.into(),
+            StatusColor::Green => appearance.theme().terminal_colors().normal.green.into(),
             StatusColor::Neutral => {
                 blended_colors::text_sub(appearance.theme(), appearance.theme().surface_1())
             }
@@ -234,7 +236,7 @@ impl From<ServerCardStatus> for ServerCardOptions {
                     indicator_type: StatusElementTypes::Circle,
                     color: StatusColor::Neutral,
                 }),
-                status_line: Some("Offline".to_string()),
+                status_line: Some(crate::t!("settings-mcp-card-status-offline")),
                 background: Background::Filled,
                 full_card_clickable: false,
             },
@@ -254,7 +256,7 @@ impl From<ServerCardStatus> for ServerCardOptions {
                     indicator_type: StatusElementTypes::Circle,
                     color: StatusColor::Yellow,
                 }),
-                status_line: Some("Starting server...".to_string()),
+                status_line: Some(crate::t!("settings-mcp-card-status-starting")),
                 background: Background::Filled,
                 full_card_clickable: false,
             },
@@ -274,7 +276,7 @@ impl From<ServerCardStatus> for ServerCardOptions {
                     indicator_type: StatusElementTypes::Circle,
                     color: StatusColor::Yellow,
                 }),
-                status_line: Some("Authenticating...".to_string()),
+                status_line: Some(crate::t!("settings-mcp-card-status-authenticating")),
                 background: Background::Filled,
                 full_card_clickable: false,
             },
@@ -314,7 +316,7 @@ impl From<ServerCardStatus> for ServerCardOptions {
                     indicator_type: StatusElementTypes::Circle,
                     color: StatusColor::Neutral,
                 }),
-                status_line: Some("Shutting down...".to_string()),
+                status_line: Some(crate::t!("settings-mcp-card-status-shutting-down")),
                 background: Background::Filled,
                 full_card_clickable: false,
             },
@@ -491,7 +493,7 @@ impl ServerCardView {
 
         if tools.is_empty() {
             return Text::new(
-                "No tools available".to_string(),
+                crate::t!("settings-mcp-card-tools-none"),
                 appearance.ui_font_family(),
                 appearance.ui_font_size(),
             )
@@ -513,7 +515,7 @@ impl ServerCardView {
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_child(
                     Text::new(
-                        format!("{} tools available", tools.len()),
+                        crate::t!("settings-mcp-card-tools-available", count = tools.len()),
                         appearance.ui_font_family(),
                         appearance.ui_font_size(),
                     )
@@ -762,7 +764,7 @@ impl ServerCardView {
                     self.build_icon_button(
                         appearance,
                         Icon::Code1,
-                        "Show logs".to_string(),
+                        crate::t!("settings-mcp-card-tooltip-show-logs"),
                         self.mouse_handles.show_logs_icon_button.clone(),
                     )
                     .on_click(move |ctx, _, _| {
@@ -777,7 +779,7 @@ impl ServerCardView {
                     self.build_icon_button(
                         appearance,
                         Icon::LogOut,
-                        "Log out".to_string(),
+                        crate::t!("settings-mcp-card-tooltip-log-out"),
                         self.mouse_handles.logout_icon_button.clone(),
                     )
                     .on_click(move |ctx, _, _| {
@@ -792,7 +794,7 @@ impl ServerCardView {
                     self.build_icon_button(
                         appearance,
                         Icon::Share,
-                        "Share server".to_string(),
+                        crate::t!("settings-mcp-card-tooltip-share-server"),
                         self.mouse_handles.share_icon_button.clone(),
                     )
                     .on_click(move |ctx, _, _| {
@@ -807,7 +809,7 @@ impl ServerCardView {
                     self.build_icon_button(
                         appearance,
                         Icon::Pencil,
-                        "Edit".to_string(),
+                        crate::t!("settings-mcp-card-tooltip-edit"),
                         self.mouse_handles.edit_icon_button.clone(),
                     )
                     .on_click(move |ctx, _, _| {
@@ -829,7 +831,7 @@ impl ServerCardView {
                     ButtonVariant::Secondary,
                     self.mouse_handles.view_logs_button.clone(),
                 )
-                .with_centered_text_label("View logs".to_string())
+                .with_centered_text_label(crate::t!("settings-mcp-card-button-view-logs"))
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(ServerCardAction::ViewLogs(item_id))
@@ -845,7 +847,7 @@ impl ServerCardView {
                     ButtonVariant::Accent,
                     self.mouse_handles.edit_config_button.clone(),
                 )
-                .with_centered_text_label("Edit config".to_string())
+                .with_centered_text_label(crate::t!("settings-mcp-card-button-edit-config"))
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(ServerCardAction::Edit(item_id));
@@ -861,7 +863,7 @@ impl ServerCardView {
                     ButtonVariant::Accent,
                     self.mouse_handles.setup_button.clone(),
                 )
-                .with_centered_text_label("Set up".to_string())
+                .with_centered_text_label(crate::t!("settings-mcp-card-button-set-up"))
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(ServerCardAction::Install(item_id));
@@ -909,7 +911,7 @@ impl ServerCardView {
             .build_icon_button(
                 appearance,
                 Icon::Refresh,
-                "Server update available".to_string(),
+                crate::t!("settings-mcp-card-tooltip-update-available"),
                 self.mouse_handles.update_icon_button.clone(),
             )
             .on_click(move |ctx, _, _| {

@@ -35,7 +35,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "workspace:new_tab",
-            "Terminal session",
+            crate::t!("keybinding-desc-welcome-terminal-session"),
             WelcomeViewAction::CreateTerminalSession,
         )
         .with_context_predicate(id!("WelcomeView"))
@@ -44,7 +44,7 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
         EditableBinding::new(
             "welcome_view:open_project",
-            "Add repository",
+            crate::t!("keybinding-desc-welcome-add-repository"),
             WelcomeViewAction::OpenProject,
         )
         .with_context_predicate(id!("WelcomeView"))
@@ -71,7 +71,8 @@ pub struct WelcomeView {
 
 impl WelcomeView {
     pub fn new(startup_directory: Option<PathBuf>, ctx: &mut ViewContext<Self>) -> Self {
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("New tab"));
+        let pane_configuration =
+            ctx.add_model(|_ctx| PaneConfiguration::new(crate::t!("pane-new-tab-title")));
         let window_id = ctx.window_id();
         let view_id = ctx.view_id();
         let palette = ctx.add_typed_action_view(|ctx| {
@@ -290,7 +291,7 @@ impl BackingView for WelcomeView {
         _ctx: &view::HeaderRenderContext<'_>,
         _app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple("New tab")
+        view::HeaderContent::simple(crate::t!("pane-new-tab-title"))
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {

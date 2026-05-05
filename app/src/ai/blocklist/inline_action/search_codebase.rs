@@ -2,6 +2,9 @@ use std::ops::Range;
 use std::sync::{Arc, RwLock};
 
 use warp_core::ui::appearance::Appearance;
+use warpui::elements::shimmering_text::ShimmeringTextStateHandle;
+
+use crate::ui_components::spinner::SpinnerStateHandle;
 use warpui::ui_components::components::UiComponentStyles;
 use warpui::{
     elements::{
@@ -15,14 +18,11 @@ use super::search_results_common::{
     render_collapsible_search_results, CollapsibleSearchResultsState,
 };
 use crate::ai::blocklist::TextLocation;
-use crate::ai::{
-    agent::icons::yellow_running_icon,
-    blocklist::inline_action::{
-        inline_action_header::{
-            INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
-        },
-        inline_action_icons::cancelled_icon,
+use crate::ai::blocklist::inline_action::{
+    inline_action_header::{
+        INLINE_ACTION_HEADER_VERTICAL_PADDING, INLINE_ACTION_HORIZONTAL_PADDING,
     },
+    inline_action_icons::cancelled_icon,
 };
 use crate::ai::{
     agent::FileContext,
@@ -92,6 +92,9 @@ pub struct SearchCodebaseView {
     selected_text: Arc<RwLock<Option<String>>>,
     action_index: usize,
     status: Option<AIActionStatus>,
+    /// 双动画 state — 必须 view 持久化。详见 search_results_common 注释。
+    shimmer_handle: ShimmeringTextStateHandle,
+    spinner_handle: SpinnerStateHandle,
 }
 
 impl SearchCodebaseView {
@@ -126,6 +129,8 @@ impl SearchCodebaseView {
             status: None,
             shell_launch_data: shell_launch_data.clone(),
             current_working_directory: current_working_directory.clone(),
+            shimmer_handle: ShimmeringTextStateHandle::new(),
+            spinner_handle: SpinnerStateHandle::new(),
         }
     }
 
@@ -472,15 +477,23 @@ impl View for SearchCodebaseView {
                 | AIActionStatus::Queued
                 | AIActionStatus::RunningAsync,
             ) => {
+                // 进行时短语,对齐 opencode "Searching content..." 风格。
                 let loading_text = if let Some(repo_name) = &self.repo_name {
-                    format!("Searching for \"{}\" in {}", self.search_query, repo_name)
+                    format!("Searching \"{}\" in {}...", self.search_query, repo_name)
                 } else {
-                    format!("Searching codebase for \"{}\"", self.search_query)
+                    format!("Searching codebase for \"{}\"...", self.search_query)
                 };
-                let loading_icon = yellow_running_icon(appearance);
-                self.render_header(appearance, loading_text, loading_icon, app)
-                    .with_agent_output_item_spacing(app)
-                    .finish()
+                // loading 分支用 animated 版本:icon = BrailleSpinner 帧动画 ⠋⠙⠹...,
+                // 标题文字 = ShimmeringText 波纹。终态(cancelled / finished)继续走静态 render_header。
+                let _ = appearance; // helper 内部按需取色
+                super::search_results_common::render_loading_header_animated(
+                    loading_text,
+                    self.spinner_handle.clone(),
+                    self.shimmer_handle.clone(),
+                    app,
+                )
+                .with_agent_output_item_spacing(app)
+                .finish()
             }
             Some(AIActionStatus::Finished(result)) if result.result.is_cancelled() => {
                 let cancelled_text = if let Some(repo_name) = &self.repo_name {
@@ -492,9 +505,15 @@ impl View for SearchCodebaseView {
                     format!("Search for \"{}\" cancelled", self.search_query)
                 };
                 let cancelled_icon = cancelled_icon(appearance);
-                self.render_header(appearance, cancelled_text, cancelled_icon, app)
-                    .with_agent_output_item_spacing(app)
-                    .finish()
+                // T3-5:cancelled / denied 用删除线 header 表达"驳回"语义,
+                // 对齐 opencode TUI permission rejected 的 STRIKETHROUGH 视觉。
+                super::search_results_common::render_terminal_header_strikethrough(
+                    cancelled_text,
+                    cancelled_icon,
+                    app,
+                )
+                .with_agent_output_item_spacing(app)
+                .finish()
             }
             Some(AIActionStatus::Finished(_)) => self
                 .render_finished(appearance, &self.file_contexts, app)

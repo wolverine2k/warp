@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 use warp_core::channel::ChannelState;
-use warp_core::{features::FeatureFlag, report_error};
+use warp_core::report_error;
 use warp_multi_agent_api::ConversationData;
 
 use super::auth::AuthClient;
@@ -1638,45 +1638,10 @@ impl AIClient for ServerApi {
 
     async fn list_ai_conversation_metadata(
         &self,
-        conversation_ids: Option<Vec<String>>,
+        _conversation_ids: Option<Vec<String>>,
     ) -> anyhow::Result<Vec<ServerAIConversationMetadata>> {
-        if !FeatureFlag::CloudConversations.is_enabled() {
-            return Ok(vec![]);
-        }
-        use warp_graphql::queries::list_ai_conversations::{
-            ListAIConversationMetadata, ListAIConversationMetadataResult,
-            ListAIConversationMetadataVariables, ListAIConversationsInput,
-        };
-
-        let input = ListAIConversationsInput {
-            conversation_ids: conversation_ids
-                .map(|ids| ids.into_iter().map(cynic::Id::new).collect()),
-        };
-
-        let variables = ListAIConversationMetadataVariables {
-            input,
-            request_context: get_request_context(),
-        };
-
-        let operation = ListAIConversationMetadata::build(variables);
-        let response = self.send_graphql_request(operation, None).await?;
-
-        match response.list_ai_conversations {
-            ListAIConversationMetadataResult::ListAIConversationsOutput(output) => {
-                let metadata_vec: Result<Vec<_>, _> = output
-                    .conversations
-                    .into_iter()
-                    .map(|conv| conv.try_into())
-                    .collect();
-                metadata_vec
-            }
-            ListAIConversationMetadataResult::UserFacingError(e) => {
-                Err(anyhow!(get_user_facing_error_message(e)))
-            }
-            ListAIConversationMetadataResult::Unknown => {
-                Err(anyhow!("Failed to list AI conversations metadata"))
-            }
-        }
+        // CloudConversations was removed in OpenWarp; always return empty.
+        Ok(vec![])
     }
 
     async fn get_ai_conversation_format(

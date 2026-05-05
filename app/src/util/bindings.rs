@@ -361,9 +361,18 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         CustomAction::CopyBlockOutput => Keystroke::parse("cmdorctrl-alt-shift-C").ok(),
         // Set this to mac-only. On Linux this conflicts with the general binding to copy.
         CustomAction::CopyBlockCommand => mac_only_keystroke("cmd-shift-C"),
-        // Set this to mac-only. On Linux this conflicts with the cmd-enter keybindings
-        // (used for actions on the input suggestions menu, and for accepting passive code diffs).
-        CustomAction::ToggleMaximizePane => mac_only_keystroke("cmd-shift-enter"),
+        // On Mac, use `cmd-shift-enter`. On Linux/Windows we cannot reuse `ctrl-shift-enter`
+        // because that is taken by the prompt-suggestions menu (e.g. `/agent` slash command
+        // and `ResolvePromptSuggestion`), nor `alt-shift-enter` / `ctrl-alt-enter` which are
+        // also bound to other prompt-suggestion actions. We use `ctrl-alt-m` (`m` for
+        // "Maximize") instead, which is unbound today.
+        CustomAction::ToggleMaximizePane => {
+            if OperatingSystem::get().is_mac() {
+                Keystroke::parse("cmd-shift-enter").ok()
+            } else {
+                Keystroke::parse("ctrl-alt-m").ok()
+            }
+        }
         // Note: The base character '/' is used instead of '?' as mac registers keybindings
         // differently compared to the app which saves the resulting character used with shift
         // TODO: resolve these keybinding differences

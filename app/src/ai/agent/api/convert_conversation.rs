@@ -24,7 +24,7 @@ use crate::ai::agent::{
     RequestFileEditsResult, SearchCodebaseFailureReason, SearchCodebaseResult, ServerOutputId,
     Shared, ShellCommandCompletedTrigger, ShellCommandError, SuggestNewConversationResult,
     SuggestPromptResult, TransferShellCommandControlToUserResult, UpdatedFileContext,
-    UploadArtifactResult, WriteToLongRunningShellCommandResult,
+    WriteToLongRunningShellCommandResult,
 };
 use crate::ai::block_context::BlockContext;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
@@ -32,11 +32,7 @@ use crate::ai::llms::LLMId;
 use crate::ai_assistant::execution_context::{WarpAiExecutionContext, WarpAiOsContext};
 use crate::terminal::model::block::BlockId;
 use crate::terminal::model::terminal_model::BlockIndex;
-use ai::agent::action_result::{
-    AskUserQuestionAnswerItem, AskUserQuestionResult, FetchConversationResult, ReadSkillResult,
-    RequestComputerUseResult, SendMessageToAgentResult, StartAgentResult, StartAgentVersion,
-    UseComputerResult,
-};
+use ai::agent::action_result::{AskUserQuestionAnswerItem, AskUserQuestionResult, ReadSkillResult};
 use ai::skills::ParsedSkill;
 use chrono::{DateTime, Local, TimeZone};
 use persistence::model::AgentConversationData;
@@ -511,8 +507,7 @@ impl ConvertToExchanges for &api::Task {
                 | api::message::Message::DebugOutput(_)
                 | api::message::Message::ArtifactEvent(_)
                 | api::message::Message::MessagesReceivedFromAgents(_)
-                | api::message::Message::ModelUsed(_)
-                | api::message::Message::OrchestrationConfigSnapshot(_) => false,
+                | api::message::Message::ModelUsed(_) => false,
             };
 
             if !added_message_as_exchange_input {
@@ -676,33 +671,12 @@ pub(crate) fn convert_tool_call_result_to_input(
                 context,
             })
         }
-        Some(ToolCallResultType::UploadFileArtifact(result)) => {
-            let upload_result = match &result.result {
-                Some(api::upload_file_artifact_result::Result::Success(success)) => {
-                    UploadArtifactResult::Success {
-                        artifact_uid: success.artifact_uid.clone(),
-                        filepath: None,
-                        mime_type: success.mime_type.clone(),
-                        description: None,
-                        size_bytes: success.size_bytes,
-                    }
-                }
-                Some(api::upload_file_artifact_result::Result::Error(error)) => {
-                    UploadArtifactResult::Error(error.message.clone())
-                }
-                None => UploadArtifactResult::Error(
-                    "Upload artifact tool call returned no result".to_string(),
-                ),
-            };
-
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::UploadArtifact(upload_result),
-                },
-                context,
-            })
+        Some(ToolCallResultType::UploadFileArtifact(_)) => {
+            // Upload artifact 已物理切除,云端 result 直接丢弃
+            let _ = tool_call_id;
+            let _ = task_id;
+            let _ = context;
+            None
         }
         Some(ToolCallResultType::SearchCodebase(result)) => {
             let search_result = match &result.result {
@@ -1313,112 +1287,14 @@ pub(crate) fn convert_tool_call_result_to_input(
                 context,
             })
         }
-        Some(ToolCallResultType::UseComputer(result)) => {
-            let use_computer_result = match &result.result {
-                Some(api::use_computer_result::Result::Success(success)) => {
-                    let screenshot = success.screenshot.as_ref().map(|s| {
-                        // The original dimensions are not preserved through the API, so we use
-                        // the current dimensions for both.
-                        computer_use::Screenshot {
-                            width: s.width as usize,
-                            height: s.height as usize,
-                            original_width: s.width as usize,
-                            original_height: s.height as usize,
-                            data: s.data.clone(),
-                            mime_type: s.mime_type.clone().into(),
-                        }
-                    });
-                    let cursor_position = success
-                        .cursor_position
-                        .as_ref()
-                        .map(|c| computer_use::Vector2I::new(c.x, c.y));
-                    UseComputerResult::Success(computer_use::ActionResult {
-                        screenshot,
-                        cursor_position,
-                    })
-                }
-                Some(api::use_computer_result::Result::Error(error)) => {
-                    UseComputerResult::Error(error.message.clone())
-                }
-                None => UseComputerResult::Cancelled,
-            };
-
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::UseComputer(use_computer_result),
-                },
-                context,
-            })
+        Some(ToolCallResultType::UseComputer(_))
+        | Some(ToolCallResultType::RequestComputerUseResult(_)) => {
+            // Computer Use 已被移除,历史记录中遇到这两类 result 直接忽略。
+            None
         }
-        Some(ToolCallResultType::RequestComputerUseResult(result)) => {
-            let request_result = match &result.result {
-                Some(api::request_computer_use_result::Result::Approved(approved)) => {
-                    match (approved, convert_api_platform(approved.platform)) {
-                        (
-                            api::request_computer_use_result::Approved {
-                                screen_dimensions: Some(screen_dimensions),
-                                initial_screenshot: Some(initial_screenshot),
-                                ..
-                            },
-                            Some(platform),
-                        ) => RequestComputerUseResult::Approved {
-                            screenshot: computer_use::Screenshot {
-                                width: initial_screenshot.width as usize,
-                                height: initial_screenshot.height as usize,
-                                original_width: screen_dimensions.width_px as usize,
-                                original_height: screen_dimensions.height_px as usize,
-                                data: initial_screenshot.data.clone(),
-                                mime_type: initial_screenshot.mime_type.clone().into(),
-                            },
-                            platform,
-                        },
-                        _ => RequestComputerUseResult::Error(
-                            "Missing screen dimensions, initial screenshot, or valid platform"
-                                .to_string(),
-                        ),
-                    }
-                }
-                Some(api::request_computer_use_result::Result::Rejected(_)) => {
-                    RequestComputerUseResult::Cancelled
-                }
-                Some(api::request_computer_use_result::Result::Error(error)) => {
-                    RequestComputerUseResult::Error(error.message.clone())
-                }
-                None => RequestComputerUseResult::Cancelled,
-            };
-
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::RequestComputerUse(request_result),
-                },
-                context,
-            })
-        }
-        Some(ToolCallResultType::FetchConversation(result)) => {
-            let fetch_result = match &result.result {
-                Some(api::fetch_conversation_result::Result::Success(success)) => {
-                    FetchConversationResult::Success {
-                        directory_path: success.directory_path.clone(),
-                    }
-                }
-                Some(api::fetch_conversation_result::Result::Error(error)) => {
-                    FetchConversationResult::Error(error.message.clone())
-                }
-                None => FetchConversationResult::Cancelled,
-            };
-
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::FetchConversation(fetch_result),
-                },
-                context,
-            })
+        Some(ToolCallResultType::FetchConversation(_)) => {
+            // 云端工具已物理切除
+            None
         }
         Some(ToolCallResultType::Server(_)) => {
             // Server results should not create exchanges - return None
@@ -1430,57 +1306,9 @@ pub(crate) fn convert_tool_call_result_to_input(
             create_cancelled_result_for_tool_call(task_id, &tool_call_id, tool_call_map, context)
         }
         Some(ToolCallResultType::Subagent(_)) => None,
-        Some(ToolCallResultType::StartAgent(result)) => {
-            let start_agent_result = match &result.result {
-                Some(api::start_agent_result::Result::Success(success)) => {
-                    StartAgentResult::Success {
-                        agent_id: success.agent_id.clone(),
-                        version: StartAgentVersion::V1,
-                    }
-                }
-                Some(api::start_agent_result::Result::Error(error)) => StartAgentResult::Error {
-                    error: error.error.clone(),
-                    version: StartAgentVersion::V1,
-                },
-                None => StartAgentResult::Cancelled {
-                    version: StartAgentVersion::V1,
-                },
-            };
-
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::StartAgent(start_agent_result),
-                },
-                context,
-            })
-        }
-        Some(ToolCallResultType::StartAgentV2(result)) => {
-            let start_agent_result = match &result.result {
-                Some(api::start_agent_v2_result::Result::Success(success)) => {
-                    StartAgentResult::Success {
-                        agent_id: success.agent_id.clone(),
-                        version: StartAgentVersion::V2,
-                    }
-                }
-                Some(api::start_agent_v2_result::Result::Error(error)) => StartAgentResult::Error {
-                    error: error.error.clone(),
-                    version: StartAgentVersion::V2,
-                },
-                None => StartAgentResult::Cancelled {
-                    version: StartAgentVersion::V2,
-                },
-            };
-
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::StartAgent(start_agent_result),
-                },
-                context,
-            })
+        Some(ToolCallResultType::StartAgent(_)) | Some(ToolCallResultType::StartAgentV2(_)) => {
+            // 云端工具已物理切除
+            None
         }
         Some(ToolCallResultType::AskUserQuestion(result)) => {
             let ask_result = match &result.result {
@@ -1521,97 +1349,9 @@ pub(crate) fn convert_tool_call_result_to_input(
                 context,
             })
         }
-        Some(ToolCallResultType::SendMessageToAgent(result)) => {
-            let send_message_result = match &result.result {
-                Some(api::send_message_to_agent_result::Result::Success(success)) => {
-                    SendMessageToAgentResult::Success {
-                        message_id: success.message_id.clone(),
-                    }
-                }
-                Some(api::send_message_to_agent_result::Result::Error(error)) => {
-                    SendMessageToAgentResult::Error(error.message.clone())
-                }
-                None => SendMessageToAgentResult::Cancelled,
-            };
-
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::SendMessageToAgent(send_message_result),
-                },
-                context,
-            })
-        }
-        Some(ToolCallResultType::RunAgentsResult(result)) => {
-            use ai::agent::action_result::{
-                RunAgentsAgentOutcome, RunAgentsAgentOutcomeKind, RunAgentsLaunchedExecutionMode,
-                RunAgentsResult,
-            };
-            let run_agents_result = match &result.outcome {
-                Some(api::run_agents_result::Outcome::Launched(launched)) => {
-                    let execution_mode = match &launched.resolved_execution_mode {
-                        Some(api::run_agents_result::launched::ResolvedExecutionMode::Remote(
-                            remote,
-                        )) => RunAgentsLaunchedExecutionMode::Remote {
-                            environment_id: remote.environment_id.clone(),
-                            worker_host: remote.worker_host.clone(),
-                            computer_use_enabled: remote.computer_use_enabled,
-                        },
-                        Some(api::run_agents_result::launched::ResolvedExecutionMode::Local(_))
-                        | None => RunAgentsLaunchedExecutionMode::Local,
-                    };
-                    let agents = launched
-                        .agents
-                        .iter()
-                        .map(|outcome| RunAgentsAgentOutcome {
-                            name: outcome.name.clone(),
-                            kind: match &outcome.result {
-                                Some(api::run_agents_result::agent_outcome::Result::Launched(
-                                    launched_agent,
-                                )) => RunAgentsAgentOutcomeKind::Launched {
-                                    agent_id: launched_agent.agent_id.clone(),
-                                },
-                                Some(api::run_agents_result::agent_outcome::Result::Failed(
-                                    failed,
-                                )) => RunAgentsAgentOutcomeKind::Failed {
-                                    error: failed.error.clone(),
-                                },
-                                None => RunAgentsAgentOutcomeKind::Failed {
-                                    error: String::new(),
-                                },
-                            },
-                        })
-                        .collect();
-                    RunAgentsResult::Launched {
-                        model_id: launched.resolved_model_id.clone(),
-                        harness_type:
-                            crate::ai::agent::api::convert_from::convert_run_agents_harness(
-                                launched.resolved_harness.as_ref(),
-                            )
-                            .unwrap_or_default(),
-                        execution_mode,
-                        agents,
-                    }
-                }
-                Some(api::run_agents_result::Outcome::Denied(denied)) => RunAgentsResult::Denied {
-                    reason: denied.reason.clone(),
-                },
-                Some(api::run_agents_result::Outcome::Failure(failure)) => {
-                    RunAgentsResult::Failure {
-                        error: failure.error.clone(),
-                    }
-                }
-                None => RunAgentsResult::Cancelled,
-            };
-            Some(AIAgentInput::ActionResult {
-                result: AIAgentActionResult {
-                    id: tool_call_id.into(),
-                    task_id: task_id.clone(),
-                    result: AIAgentActionResultType::RunAgents(run_agents_result),
-                },
-                context,
-            })
+        Some(ToolCallResultType::SendMessageToAgent(_)) => {
+            // 云端工具已物理切除
+            None
         }
         // Deprecated/unused result types or absent result.
         Some(ToolCallResultType::SuggestCreatePlan(..))
@@ -1670,9 +1410,7 @@ fn create_cancelled_result_for_tool_call(
             )
         }
         ToolType::ReadFiles(_) => AIAgentActionResultType::ReadFiles(ReadFilesResult::Cancelled),
-        ToolType::UploadFileArtifact(_) => {
-            AIAgentActionResultType::UploadArtifact(UploadArtifactResult::Cancelled)
-        }
+        ToolType::UploadFileArtifact(_) => return None,
         ToolType::SearchCodebase(_) => {
             AIAgentActionResultType::SearchCodebase(SearchCodebaseResult::Cancelled)
         }
@@ -1718,38 +1456,18 @@ fn create_cancelled_result_for_tool_call(
                 TransferShellCommandControlToUserResult::Cancelled,
             )
         }
-        ToolType::UseComputer(_) => {
-            AIAgentActionResultType::UseComputer(UseComputerResult::Cancelled)
-        }
-        ToolType::RequestComputerUse(_) => {
-            AIAgentActionResultType::RequestComputerUse(RequestComputerUseResult::Cancelled)
-        }
-        ToolType::FetchConversation(_) => {
-            AIAgentActionResultType::FetchConversation(FetchConversationResult::Cancelled)
-        }
-        ToolType::Server(_) => {
+        ToolType::UseComputer(_) | ToolType::RequestComputerUse(_) => {
+            // Computer Use 已被移除,转换路径不应再被命中。
             return None;
         }
+        ToolType::FetchConversation(_) => return None,
+        ToolType::Server(_) => return None,
         ToolType::Subagent(_) => return None,
-        ToolType::StartAgent(_) => {
-            AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled {
-                version: StartAgentVersion::V1,
-            })
-        }
-        ToolType::StartAgentV2(_) => {
-            AIAgentActionResultType::StartAgent(StartAgentResult::Cancelled {
-                version: StartAgentVersion::V2,
-            })
-        }
+        ToolType::StartAgent(_) | ToolType::StartAgentV2(_) => return None,
         ToolType::AskUserQuestion(_) => {
             AIAgentActionResultType::AskUserQuestion(AskUserQuestionResult::Cancelled)
         }
-        ToolType::SendMessageToAgent(_) => {
-            AIAgentActionResultType::SendMessageToAgent(SendMessageToAgentResult::Cancelled)
-        }
-        ToolType::RunAgents(_) => {
-            AIAgentActionResultType::RunAgents(ai::agent::action_result::RunAgentsResult::Cancelled)
-        }
+        ToolType::SendMessageToAgent(_) => return None,
         // These tools are deprecated.
         ToolType::SuggestCreatePlan(_) | ToolType::SuggestPlan(_) => return None,
     };
@@ -1951,8 +1669,7 @@ where
                 | api::message::Message::DebugOutput(_)
                 | api::message::Message::ArtifactEvent(_)
                 | api::message::Message::InvokeSkill(_)
-                | api::message::Message::ModelUsed(_)
-                | api::message::Message::OrchestrationConfigSnapshot(_) => {
+                | api::message::Message::ModelUsed(_) => {
                     message.timestamp.as_ref().map(|timestamp| {
                         proto_timestamp_to_local_datetime(timestamp.seconds, timestamp.nanos)
                     })
@@ -2072,21 +1789,3 @@ impl From<String> for crate::ai::agent::MessageId {
         crate::ai::agent::MessageId(s)
     }
 }
-
-fn convert_api_platform(platform: i32) -> Option<computer_use::Platform> {
-    use api::request_computer_use_result::approved::Platform;
-    match Platform::try_from(platform) {
-        Ok(Platform::Macos) => Some(computer_use::Platform::Mac),
-        Ok(Platform::Windows) => Some(computer_use::Platform::Windows),
-        Ok(Platform::LinuxX11) => Some(computer_use::Platform::LinuxX11),
-        Ok(Platform::LinuxWayland) => Some(computer_use::Platform::LinuxWayland),
-        Err(_) => {
-            log::warn!("Unknown platform value: {platform}");
-            None
-        }
-    }
-}
-
-#[cfg(test)]
-#[path = "convert_conversation_tests.rs"]
-mod tests;

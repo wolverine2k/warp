@@ -40,7 +40,7 @@ pub fn default_navigation_message_items<A: InlineMenuAction, T>(
     let mut items = vec![
         MessageItem::keystroke(navigation_keystrokes.0),
         MessageItem::keystroke(navigation_keystrokes.1),
-        MessageItem::text(" to navigate"),
+        MessageItem::text(crate::t!("terminal-message-to-navigate")),
     ];
 
     if args.inline_menu_model.tab_configs().len() > 1 {
@@ -49,7 +49,9 @@ pub fn default_navigation_message_items<A: InlineMenuAction, T>(
             shift: true,
             ..Default::default()
         }));
-        items.push(MessageItem::text(" to cycle tabs"));
+        items.push(MessageItem::text(crate::t!(
+            "terminal-message-to-cycle-tabs"
+        )));
     }
 
     items.push(MessageItem::clickable(
@@ -58,7 +60,7 @@ pub fn default_navigation_message_items<A: InlineMenuAction, T>(
                 key: "escape".to_owned(),
                 ..Default::default()
             }),
-            MessageItem::text(" to dismiss"),
+            MessageItem::text(crate::t!("terminal-message-to-dismiss")),
         ],
         |ctx| {
             ctx.dispatch_typed_action(InlineMenuRowAction::<A>::Dismiss);

@@ -142,16 +142,16 @@ impl CloudObjectNamingDialog {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let title = match object_type {
-            DriveObjectType::Notebook { .. } => NOTEBOOK_TITLE,
-            DriveObjectType::Folder => FOLDER_TITLE,
-            DriveObjectType::EnvVarCollection => ENV_VAR_COLLECTION_TITLE,
+            DriveObjectType::Notebook { .. } => crate::t!("drive-naming-notebook-name"),
+            DriveObjectType::Folder => crate::t!("drive-naming-folder-name"),
+            DriveObjectType::EnvVarCollection => crate::t!("drive-naming-collection-name"),
             // workflows and ai facts aren't a part of this dialog
             DriveObjectType::Workflow
             | DriveObjectType::AgentModeWorkflow
             | DriveObjectType::AIFact
             | DriveObjectType::AIFactCollection
             | DriveObjectType::MCPServer
-            | DriveObjectType::MCPServerCollection => "",
+            | DriveObjectType::MCPServerCollection => String::new(),
         };
 
         Text::new_inline(
@@ -226,8 +226,8 @@ impl CloudObjectNamingDialog {
         };
 
         let primary_button_text = match self.is_rename {
-            true => RENAME_BUTTON_TEXT,
-            false => CREATE_BUTTON_TEXT,
+            true => crate::t!("drive-naming-rename"),
+            false => crate::t!("drive-naming-create"),
         };
 
         let primary_button_action = self.current_primary_action();
@@ -264,7 +264,7 @@ impl CloudObjectNamingDialog {
                                 padding: Some(Coords::uniform(BUTTON_PADDING)),
                                 ..Default::default()
                             })
-                            .with_text_label(CANCEL_BUTTON_TEXT.into())
+                            .with_text_label(crate::t!("drive-naming-cancel"))
                             .build()
                             .with_cursor(Cursor::PointingHand)
                             .on_click(move |ctx, _, _| {

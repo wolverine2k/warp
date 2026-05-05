@@ -377,11 +377,13 @@ impl ThinkingDisplayMode {
         }
     }
 
-    pub fn command_palette_description(&self) -> &'static str {
+    pub fn command_palette_description(&self) -> String {
         match self {
-            ThinkingDisplayMode::ShowAndCollapse => "Set agent thinking display: show & collapse",
-            ThinkingDisplayMode::AlwaysShow => "Set agent thinking display: always show",
-            ThinkingDisplayMode::NeverShow => "Set agent thinking display: never show",
+            ThinkingDisplayMode::ShowAndCollapse => {
+                crate::t!("agent-thinking-display-show-collapse")
+            }
+            ThinkingDisplayMode::AlwaysShow => crate::t!("agent-thinking-display-always-show"),
+            ThinkingDisplayMode::NeverShow => crate::t!("agent-thinking-display-never-show"),
         }
     }
 
@@ -627,6 +629,375 @@ cfg_if! {
 }
 
 /// Maps custom toolbar command regex patterns to CLI agent names.
+// ---------------------------------------------------------------------------
+// 自定义 Agent 提供商配置(进程内 Provider)
+// ---------------------------------------------------------------------------
+
+/// Agent 提供商支持的协议类型。
+///
+/// 第一阶段仅支持 OpenAI 兼容协议(适用于 OpenAI、DeepSeek、智谱 GLM、
+/// Moonshot、通义千问 DashScope-OpenAI 兼容端点、SiliconFlow、OpenRouter、
+/// 任何 OpenAI 兼容的本地服务等)。后续可在此扩展 Anthropic、Google、Bedrock。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProviderKind {
+    /// OpenAI 兼容的 Chat Completions / `/v1/models` 协议。
+    OpenAiCompatible,
+}
+
+impl Default for AgentProviderKind {
+    fn default() -> Self {
+        Self::OpenAiCompatible
+    }
+}
+
+/// BYOP provider 实际使用的 API 协议类型 — 显式指定,
+/// 由 chat_stream 通过 genai `ServiceTargetResolver` 一对一映射到对应的
+/// `AdapterKind`,完全绕过"按模型名识别"的默认行为,避免误识别。
+///
+/// **注意**:这是相对 [`AgentProviderKind`] 的更细粒度维度。
+/// `AgentProviderKind` 目前只有 `OpenAiCompatible`(语义"用户自管 endpoint"),
+/// `AgentProviderApiType` 决定 genai 用哪种原生协议序列化请求 / 解析响应。
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, EnumIter, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProviderApiType {
+    /// OpenAI Chat Completions(`POST /v1/chat/completions`)。
+    /// 适用于:OpenAI 官方、DeepSeek、SiliconFlow、OpenRouter、智谱 GLM、
+    /// Moonshot、DashScope-OpenAI 兼容、本地 vLLM/llama.cpp 等。
+    OpenAi,
+    /// OpenAI Responses API(`POST /v1/responses`)。
+    /// 适用于:GPT-5 / Codex / Pro 等较新模型。
+    OpenAiResp,
+    /// Google Gemini 原生协议(generativelanguage.googleapis.com)。
+    Gemini,
+    /// Anthropic Messages API 原生协议(api.anthropic.com)。
+    Anthropic,
+    /// Ollama 原生协议(本地或自建 Ollama)。
+    Ollama,
+    /// DeepSeek 原生协议。与 OpenAI 兼容相比:多轮 thinking 模式必须把
+    /// `reasoning_content` 字段带回服务端(否则 400),仅 genai DeepSeek
+    /// adapter 处理这个非标字段。`deepseek-reasoner / deepseek-v4-flash` 等
+    /// thinking-mode 模型必须选这个类型,普通 chat 模型(`deepseek-chat`)
+    /// 选 OpenAI 也可以工作。
+    DeepSeek,
+}
+
+impl Default for AgentProviderApiType {
+    fn default() -> Self {
+        Self::OpenAi
+    }
+}
+
+/// Provider 级别的 reasoning effort(思考深度)偏好。
+///
+/// 语义说明:
+/// - `Auto`(默认):不向 genai 传 effort。OpenAI / Anthropic adapter 内部会按
+///   模型名后缀(`-low` / `-high` / `-zero` 等)自动推断;Gemini / DeepSeek 不推断。
+/// - `Off`:对支持 reasoning 的模型显式发送 `none`,关闭思考链。
+/// - 其他档位:client 端先用 `reasoning::model_supports_reasoning` 判定,**仅在该
+///   模型支持时**注入,避免向 claude-3-5-haiku / gpt-4o / gemini-1.5-pro 等老模型
+///   注入 thinking 参数被上游 400 拒绝。
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+    EnumIter,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningEffortSetting {
+    #[default]
+    Auto,
+    Off,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    XHigh,
+    Max,
+}
+
+impl ReasoningEffortSetting {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Off => "Off",
+            Self::Minimal => "Minimal",
+            Self::Low => "Low",
+            Self::Medium => "Medium",
+            Self::High => "High",
+            Self::XHigh => "XHigh",
+            Self::Max => "Max",
+        }
+    }
+
+    /// 转成 genai `ReasoningEffort`。`Auto` 返回 None(调用方不要 set)。
+    pub fn to_genai(self) -> Option<genai::chat::ReasoningEffort> {
+        use genai::chat::ReasoningEffort as GE;
+        Some(match self {
+            Self::Auto => return None,
+            Self::Off => GE::None,
+            Self::Minimal => GE::Minimal,
+            Self::Low => GE::Low,
+            Self::Medium => GE::Medium,
+            Self::High => GE::High,
+            Self::XHigh => GE::XHigh,
+            Self::Max => GE::Max,
+        })
+    }
+}
+
+impl AgentProviderApiType {
+    /// 设置 UI dropdown 显示文字。
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::OpenAi => "OpenAI",
+            Self::OpenAiResp => "OpenAI-Response",
+            Self::Gemini => "Gemini",
+            Self::Anthropic => "Anthropic",
+            Self::Ollama => "Ollama",
+            Self::DeepSeek => "DeepSeek",
+        }
+    }
+
+    /// 反向解析 Debug 格式名(`OpenAi` / `DeepSeek` 等),用于 BYOPLastUsedReasoningMap
+    /// 这种 `<api_type>:<model_id>` 复合 key 的 hydrate 场景。未知字符串返回 None。
+    pub fn from_debug_str(s: &str) -> Option<Self> {
+        Some(match s {
+            "OpenAi" => Self::OpenAi,
+            "OpenAiResp" => Self::OpenAiResp,
+            "Gemini" => Self::Gemini,
+            "Anthropic" => Self::Anthropic,
+            "Ollama" => Self::Ollama,
+            "DeepSeek" => Self::DeepSeek,
+            _ => return None,
+        })
+    }
+
+    /// 当用户没填 base_url 时使用的默认 endpoint。新建 provider / 切换 ApiType
+    /// 时,UI 可调用此方法预填,便于新手。
+    ///
+    /// **必须以 `/` 结尾**:genai 0.6.x 的 adapter 内部用 `format!("{base_url}messages")` /
+    /// `Url::join` 拼接 service path,缺尾随 `/` 会拼出乱地址(Anthropic 是 `.devmessages` 直接连)
+    /// 或被 `Url::join` 吃掉 path 最后一段。client 端 `build_client` 也会兜底补 `/`,
+    /// 这里依然要求显式尾随 `/`,保证 UI 预填值落到 settings.toml 后即使绕过 client 兜底也是对的。
+    pub fn default_base_url(&self) -> &'static str {
+        match self {
+            Self::OpenAi => "https://api.openai.com/v1/",
+            Self::OpenAiResp => "https://api.openai.com/v1/",
+            Self::Gemini => "https://generativelanguage.googleapis.com/v1beta/",
+            Self::Anthropic => "https://api.anthropic.com/v1/",
+            Self::Ollama => "http://localhost:11434/v1/",
+            Self::DeepSeek => "https://api.deepseek.com/v1/",
+        }
+    }
+}
+
+/// 一条用户自定义的 Agent 提供商配置。
+///
+/// `api_key` **不**保存在这里,而是保存在 `AgentProviderSecrets` 单例(secure storage),
+/// 通过 `id` 关联。这样设置文件 (settings.toml) 不会泄漏敏感信息。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentProvider {
+    /// 提供商唯一 ID,首次创建时生成,持久化到设置中作为 secret 的关联键。
+    #[serde(default = "AgentProvider::default_id")]
+    pub id: String,
+
+    /// 用户给这个提供商起的显示名(例如 "DeepSeek 官方"、"本地 Ollama")。
+    pub name: String,
+
+    /// 协议类型,目前固定为 OpenAI 兼容(语义"用户自管 endpoint")。
+    /// 实际请求/响应序列化协议由 [`AgentProvider::api_type`] 决定。
+    #[serde(default)]
+    pub kind: AgentProviderKind,
+
+    /// 显式指定的 API 协议类型(OpenAI / OpenAI-Response / Gemini / Anthropic / Ollama)。
+    /// 老配置(无此字段)反序列化为 `OpenAi` 兼容老语义。
+    #[serde(default)]
+    pub api_type: AgentProviderApiType,
+
+    /// API base URL,例如 `https://api.deepseek.com/v1`、`http://localhost:11434/v1`。
+    /// 不要带尾随斜杠,但代码侧会做容错。
+    pub base_url: String,
+
+    /// 用户配置的、希望暴露给 Agent 选择的模型列表。
+    /// 每条同时含 `name`(显示名) 与 `id`(发送给上游 API 的 model 字段值)。
+    #[serde(default)]
+    pub models: Vec<AgentProviderModel>,
+}
+
+impl AgentProvider {
+    fn default_id() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+
+    /// 构造一个新的、空的提供商。
+    pub fn new_empty() -> Self {
+        Self {
+            id: Self::default_id(),
+            name: String::new(),
+            kind: AgentProviderKind::default(),
+            api_type: AgentProviderApiType::default(),
+            base_url: String::new(),
+            models: Vec::new(),
+        }
+    }
+}
+
+impl settings_value::SettingsValue for AgentProvider {}
+
+/// 单条模型条目: `name` 是用户在 model picker 中看到的显示名,
+/// `id` 是真正发给上游 OpenAI 兼容 API 的 `model` 字段值。
+///
+/// 序列化为 toml 时形如:
+/// ```toml
+/// [[agent_providers.models]]
+/// name = "DS V3 通用"
+/// id   = "deepseek-chat"
+/// ```
+///
+/// 反序列化兼容老格式 `models = ["deepseek-chat", "deepseek-coder"]`
+/// (每个字符串视为 `{ name = id, id = id }`),便于现有用户无痛升级。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct AgentProviderModel {
+    pub name: String,
+    pub id: String,
+
+    /// 上下文窗口(tokens)。来源:用户填或 models.dev 自动带入。
+    /// 0 表示未知 — chat_stream 退化到不做主动截断,完全交给上游服务报错。
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub context_window: u32,
+
+    /// 单次最大输出 tokens。0 表示未指定。
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub max_output_tokens: u32,
+
+    /// 是否支持 reasoning(思考/CoT)输出。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reasoning: bool,
+
+    /// 是否支持 function/tool calling。
+    /// 默认 `true` — 老配置升级 + 用户手填新 model 时不要默认禁工具,
+    /// 不支持工具调用的模型由 models.dev 数据带入显式 false。
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub tool_call: bool,
+
+    // ----- 多模态附件 capability,三态语义:
+    // - `None`(toml 字段缺省)= Auto: 运行时按 models.dev catalog → substring fallback 推断
+    // - `Some(true)` = Force-On: 用户强制开,绕过推断
+    // - `Some(false)` = Force-Off: 用户强制关
+    //
+    // 字段命名故意用 `image` 而非 `vision`,跟 models.dev `modalities.input: ["image"]`
+    // 字面对应,语义最窄不歧义(避免用户误以为 vision = image+pdf+...)。
+    /// 是否支持图像输入(image/* MIME)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<bool>,
+    /// 是否支持 PDF 文档输入(application/pdf)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf: Option<bool>,
+    /// 是否支持音频输入(audio/* MIME)。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<bool>,
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+fn is_true(v: &bool) -> bool {
+    *v
+}
+fn default_true() -> bool {
+    true
+}
+
+impl AgentProviderModel {
+    pub fn from_id(id: String) -> Self {
+        Self {
+            name: id.clone(),
+            id,
+            context_window: 0,
+            max_output_tokens: 0,
+            reasoning: false,
+            tool_call: true,
+            image: None,
+            pdf: None,
+            audio: None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentProviderModel {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Either {
+            Plain(String),
+            Full {
+                #[serde(default)]
+                name: String,
+                id: String,
+                #[serde(default)]
+                context_window: u32,
+                #[serde(default)]
+                max_output_tokens: u32,
+                #[serde(default)]
+                reasoning: bool,
+                #[serde(default = "default_true")]
+                tool_call: bool,
+                #[serde(default)]
+                image: Option<bool>,
+                #[serde(default)]
+                pdf: Option<bool>,
+                #[serde(default)]
+                audio: Option<bool>,
+            },
+        }
+        match Either::deserialize(deserializer)? {
+            Either::Plain(id) => Ok(AgentProviderModel::from_id(id)),
+            Either::Full {
+                name,
+                id,
+                context_window,
+                max_output_tokens,
+                reasoning,
+                tool_call,
+                image,
+                pdf,
+                audio,
+            } => {
+                let name = if name.is_empty() { id.clone() } else { name };
+                Ok(AgentProviderModel {
+                    name,
+                    id,
+                    context_window,
+                    max_output_tokens,
+                    reasoning,
+                    tool_call,
+                    image,
+                    pdf,
+                    audio,
+                })
+            }
+        }
+    }
+}
+
+impl settings_value::SettingsValue for AgentProviderModel {}
+
 /// Keys are regex patterns (insertion-ordered), values are serialized CLIAgent names (e.g. "Claude").
 /// An empty string value means "Any CLI Agent" (CLIAgent::Unknown).
 ///
@@ -707,6 +1078,59 @@ impl settings_value::SettingsValue for ToolbarCommandMap {
     }
 }
 
+/// 持久化记忆"上次某 (api_type, model) 用过的 reasoning effort 档位"。
+/// key 形式:`<api_type>:<model_id>`,例如 `DeepSeek:deepseek-v4-pro`。
+/// value 是 `ReasoningEffortSetting` 枚举(serde_json snake_case)。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct BYOPLastUsedReasoningMap(pub IndexMap<String, ReasoningEffortSetting>);
+
+impl BYOPLastUsedReasoningMap {
+    pub fn new(map: IndexMap<String, ReasoningEffortSetting>) -> Self {
+        Self(map)
+    }
+
+    /// 拼 key:`<api_type>:<model_id>`。api_type 用 Debug 拼出 `DeepSeek` 等驼峰名,
+    /// 跟 ReasoningEffortSetting 的 serde 形式无关。
+    pub fn make_key(api_type: AgentProviderApiType, model_id: &str) -> String {
+        format!("{api_type:?}:{model_id}")
+    }
+}
+
+impl std::ops::Deref for BYOPLastUsedReasoningMap {
+    type Target = IndexMap<String, ReasoningEffortSetting>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl schemars::JsonSchema for BYOPLastUsedReasoningMap {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "BYOPLastUsedReasoningMap".into()
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<HashMap<String, String>>()
+    }
+}
+
+impl settings_value::SettingsValue for BYOPLastUsedReasoningMap {
+    fn to_file_value(&self) -> serde_json::Value {
+        serde_json::to_value(&self.0).unwrap_or_default()
+    }
+
+    fn from_file_value(value: &serde_json::Value) -> Option<Self> {
+        if value.is_object() {
+            if let Ok(map) =
+                serde_json::from_value::<IndexMap<String, ReasoningEffortSetting>>(value.clone())
+            {
+                return Some(Self::new(map));
+            }
+        }
+        None
+    }
+}
+
 define_settings_group!(AISettings, settings: [
     // If `false`, all AI features are disabled.
     is_any_ai_enabled: IsAnyAIEnabled {
@@ -746,8 +1170,12 @@ define_settings_group!(AISettings, settings: [
     //
     // This is only used when `FeatureFlag::AgentView` is enabled.
     nld_in_terminal_enabled_internal: NLDInTerminalEnabled {
+        // openWarp:NLD in terminal 默认开。HeuristicClassifier 命中 CJK / 自然语言时
+        // 自动切到 AI 输入,这是 openWarp 中文用户能直接在终端写中文当 prompt 的前提。
+        // 上游默认 false 是因为 cloud 路线下用户先进 AgentView 全屏,在 terminal mode
+        // 不期望自动切换;openWarp 没有 cloud 全屏入口,terminal 即主输入区。
         type: bool,
-        default: false,
+        default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
@@ -1424,6 +1852,20 @@ define_settings_group!(AISettings, settings: [
         description: "Whether agent notifications are shown.",
     }
 
+    // OpenWarp T1-2:已完成工具卡默认隐藏(对齐 opencode TUI showDetails 行为)。
+    // true → 默认隐藏 status.is_done() 的 RequestCommandOutput / SearchCodebase /
+    // ReadFiles / Grep / FileGlob / RequestFileEdits 等卡片,只保留 in-progress + error,
+    // 长 session 不被历史卡片堆积淹没新内容。folded 状态可由外观设置面板切换。
+    hide_completed_tool_cards: HideCompletedToolCards {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.appearance.hide_completed_tool_cards",
+        description: "When true, completed tool action cards (read files, grep, search codebase, requested commands, etc.) are hidden after they finish. In-progress and errored cards are always shown. Useful for long sessions to keep focus on the latest activity.",
+    }
+
     // Per-agent, per-host tracking of whether the user dismissed the plugin install chip.
     // Keys are "<agent_prefix>" for local sessions or "<agent_prefix>@<host>" for remote.
     // Local-only so dismissal doesn't sync across devices.
@@ -1447,18 +1889,125 @@ define_settings_group!(AISettings, settings: [
         private: true,
     }
 
-    // Whether Oz should add attribution (co-author line) to commit messages and PRs.
-    // This is the user-level preference; it may be overridden by the team-level
-    // `enable_warp_attribution` AdminEnablementSetting (see
-    // `UserWorkspaces::get_agent_attribution_setting`).
-    agent_attribution_enabled: AgentAttributionEnabled {
+    // 用户自定义 Agent 提供商列表。第一阶段仅支持 OpenAI 兼容协议。
+    //
+    // 注意: 提供商的 `api_key` 不在这里持久化,见 `AgentProviderSecrets`。
+    agent_providers: AgentProviders {
+        type: Vec<AgentProvider>,
+        default: Vec::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.warp_agent.providers",
+        description: "User-configured custom Agent providers (OpenAI-compatible).",
+    }
+
+    // OpenWarp BYOP 本地会话压缩 — 1:1 对齐 opencode `Config.compaction.auto`。
+    // true 时按 token-overflow 自动触发摘要;false 仅手动 /compact /compact-and 触发。
+    byop_compaction_auto: ByopCompactionAuto {
         type: bool,
         default: true,
         supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         private: false,
-        toml_path: "agents.warp_agent.other.agent_attribution_enabled",
-        description: "Whether the Warp Agent adds an attribution co-author line to commit messages and pull requests it creates.",
+        toml_path: "agents.byop_compaction.auto",
+        description: "Enable BYOP automatic conversation compaction on context overflow.",
+    }
+
+    // OpenWarp BYOP 本地会话压缩 — 1:1 对齐 opencode `Config.compaction.prune`。
+    // true 时每次 LLM 请求前清旧 tool output(替换为占位符)。
+    byop_compaction_prune: ByopCompactionPrune {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop_compaction.prune",
+        description: "Auto-prune older tool outputs to free BYOP context.",
+    }
+
+    // OpenWarp BYOP 本地会话压缩 — 1:1 对齐 opencode `Config.compaction.tail_turns`(默认 2)。
+    // 保留最近 N 个 user turn 作 tail,前面的进入 head 给摘要 LLM。0 关闭压缩。
+    byop_compaction_tail_turns: ByopCompactionTailTurns {
+        type: u32,
+        default: 2u32,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop_compaction.tail_turns",
+        description: "Number of recent user turns to keep verbatim during compaction.",
+    }
+
+    // OpenWarp BYOP 本地会话压缩 — 1:1 对齐 `Config.compaction.preserve_recent_tokens`。
+    // 0 = 自动按公式算(min(MAX=8000, max(MIN=2000, usable * 0.25)));> 0 强制覆盖。
+    byop_compaction_preserve_recent_tokens: ByopCompactionPreserveRecentTokens {
+        type: u32,
+        default: 0u32,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop_compaction.preserve_recent_tokens",
+        description: "Override the recent-tokens preservation budget (0 = auto).",
+    }
+
+    // OpenWarp BYOP 本地会话压缩 — 1:1 对齐 `Config.compaction.reserved`。
+    // overflow 判定时 usable = input_limit - reserved。0 = 自动按 min(20_000, max_output) 算。
+    byop_compaction_reserved: ByopCompactionReserved {
+        type: u32,
+        default: 0u32,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop_compaction.reserved",
+        description: "Reserved buffer tokens for compaction overflow check (0 = auto).",
+    }
+
+    // OpenWarp BYOP 本地会话压缩 — 摘要专用模型(可选)。
+    // 设置后:摘要 LLM 调用走这个 provider+model 而非当前 conversation 模型。
+    // 留空两个字段 = 用 conversation 当前模型。
+    byop_compaction_model_provider_id: ByopCompactionModelProviderId {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop_compaction.model.provider_id",
+        description: "Optional dedicated provider id for compaction LLM calls.",
+    }
+
+    byop_compaction_model_id: ByopCompactionModelId {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop_compaction.model.model_id",
+        description: "Optional dedicated model id for compaction LLM calls.",
+    }
+
+    // OpenWarp BYOP 模型 + 思考深度持久化(picker 切换后立即写入,新 tab/重启沿用)。
+    // 模型用 LLMId 字符串形式;空串 = 没有 last_used,落回 profile 默认。
+    byop_last_used_model_id: ByopLastUsedModelId {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop.last_used_model_id",
+        description: "Last selected BYOP model id (picker hydrates new tabs/sessions from this).",
+    }
+
+    // OpenWarp BYOP per-(api_type, model) 思考深度记忆。
+    // key = `<api_type>:<model_id>`,value = ReasoningEffortSetting。picker 切换写入。
+    byop_last_used_reasoning: ByopLastUsedReasoning {
+        type: BYOPLastUsedReasoningMap,
+        default: BYOPLastUsedReasoningMap::default(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop.last_used_reasoning",
+        max_table_depth: 1,
+        description: "Per-(api_type, model) reasoning effort memory for BYOP picker.",
     }
 ]);
 

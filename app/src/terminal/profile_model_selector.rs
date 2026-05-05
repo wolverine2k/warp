@@ -258,7 +258,7 @@ impl ProfileModelSelector {
                 ),
                 is_blurred: false,
             })
-            .with_tooltip("Choose an AI execution profile")
+            .with_tooltip(crate::t!("terminal-choose-execution-profile-tooltip"))
             .with_size(ButtonSize::UDIButton)
             .with_icon(Icon::Psychology)
         });
@@ -286,14 +286,14 @@ impl ProfileModelSelector {
                 ),
                 is_blurred: false,
             })
-            .with_tooltip("Choose an agent model")
+            .with_tooltip(crate::t!("terminal-choose-agent-model-tooltip"))
             .with_size(ButtonSize::UDIButton)
         });
 
         let profile_compact_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("", PromptIconButtonTheme::new(false))
                 .with_icon(Icon::Psychology)
-                .with_tooltip("Choose an AI execution profile")
+                .with_tooltip(crate::t!("terminal-choose-execution-profile-tooltip"))
                 .with_size(ButtonSize::UDIButton)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(ProfileModelSelectorAction::ToggleProfileMenu);
@@ -303,7 +303,7 @@ impl ProfileModelSelector {
         let model_compact_button = ctx.add_typed_action_view(|_| {
             ActionButton::new("", PromptIconButtonTheme::new(false))
                 .with_icon(Icon::Neurology)
-                .with_tooltip("Choose an agent model")
+                .with_tooltip(crate::t!("terminal-choose-agent-model-tooltip"))
                 .with_size(ButtonSize::UDIButton)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(ProfileModelSelectorAction::ToggleModelMenu);
@@ -506,8 +506,8 @@ impl ProfileModelSelector {
         );
 
         let manage_api_key_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Manage", SecondaryTheme)
-                .with_tooltip("Manage API keys")
+            ActionButton::new(crate::t!("common-manage"), SecondaryTheme)
+                .with_tooltip(crate::t!("terminal-manage-api-keys-tooltip"))
                 .with_size(ButtonSize::XSmall)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(WorkspaceAction::ShowSettingsPageWithSearch {
@@ -720,12 +720,13 @@ impl ProfileModelSelector {
         let appearance = Appearance::as_ref(ctx);
         let mut menu_items = vec![
             MenuItem::Header {
-                fields: MenuItemFields::new("Profiles").with_override_text_color(
-                    appearance
-                        .theme()
-                        .sub_text_color(appearance.theme().background())
-                        .into_solid(),
-                ),
+                fields: MenuItemFields::new(crate::t!("terminal-profiles"))
+                    .with_override_text_color(
+                        appearance
+                            .theme()
+                            .sub_text_color(appearance.theme().background())
+                            .into_solid(),
+                    ),
                 clickable: false,
                 right_side_fields: None,
             },
@@ -751,7 +752,7 @@ impl ProfileModelSelector {
 
         menu_items.push(MenuItem::Separator);
         menu_items.push(MenuItem::Item(
-            MenuItemFields::new("Manage profiles")
+            MenuItemFields::new(crate::t!("terminal-manage-profiles"))
                 .with_icon(Icon::Gear)
                 .with_on_select_action(ProfileModelSelectorAction::ManageProfiles),
         ));
@@ -1709,8 +1710,8 @@ impl ProfileModelSelector {
         let appearance = Appearance::as_ref(app);
         let theme = appearance.theme();
         let header = self.render_model_spec_header(
-            "Model Specs".to_string(),
-            "Warp’s benchmarks for how well a model performs in our harness, the rate at which it consumes credits, and task speed.".to_string(),
+            crate::t!("terminal-model-specs-title"),
+            crate::t!("terminal-model-specs-description"),
             app,
         );
         let spec = self.render_all_model_spec_values(
@@ -1749,16 +1750,16 @@ impl ProfileModelSelector {
 
         let (title, description) = match kind {
             ModelSpecSidecarKind::Auto => (
-                "Auto mode",
-                "Auto will select the best model for the task. Cost-efficiency optimizes for cost, Responsiveness optimizes for response speed.",
+                crate::t!("terminal-model-auto-mode-title"),
+                crate::t!("terminal-model-auto-mode-description"),
             ),
             ModelSpecSidecarKind::Reasoning => (
-                "Reasoning level",
-                "Increased reasoning levels consume more credits and have higher latency, but higher performance for complicated tasks.",
+                crate::t!("terminal-model-specs-reasoning-level-title"),
+                crate::t!("terminal-model-specs-reasoning-level-description"),
             ),
         };
 
-        let header = self.render_model_spec_header(title.to_string(), description.to_string(), app);
+        let header = self.render_model_spec_header(title, description, app);
         let sidecar_menu = ChildView::new(&self.model_spec_sidecar.dropdown).finish();
         let spec_values = self.render_all_model_spec_values(
             &spec.clone().unwrap_or_default(),

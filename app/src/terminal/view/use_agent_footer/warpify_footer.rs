@@ -33,34 +33,43 @@ impl WarpifyFooterView {
         let button_size = ButtonSize::XSmall;
 
         let warpify_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Warpify subshell", AgentFooterButtonTheme::new(None))
-                .with_icon(Icon::Warp)
-                .with_size(button_size)
-                .with_tooltip("Enable Warp shell integration in this session")
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(WarpifyFooterViewAction::Warpify);
-                })
+            ActionButton::new(
+                crate::t!("terminal-warpify-subshell"),
+                AgentFooterButtonTheme::new(None),
+            )
+            .with_icon(Icon::Warp)
+            .with_size(button_size)
+            .with_tooltip(crate::t!("terminal-warpify-subshell-tooltip"))
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(WarpifyFooterViewAction::Warpify);
+            })
         });
 
         let use_agent_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("Use agent", AgentFooterButtonTheme::new(None))
-                .with_icon(Icon::Oz)
-                .with_keybinding(KeystrokeSource::Fixed(USE_AGENT_KEYSTROKE.clone()), ctx)
-                .with_size(button_size)
-                .with_tooltip("Ask the Warp agent to assist")
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(WarpifyFooterViewAction::UseAgent);
-                })
+            ActionButton::new(
+                crate::t!("terminal-use-agent"),
+                AgentFooterButtonTheme::new(None),
+            )
+            .with_icon(Icon::Oz)
+            .with_keybinding(KeystrokeSource::Fixed(USE_AGENT_KEYSTROKE.clone()), ctx)
+            .with_size(button_size)
+            .with_tooltip(crate::t!("terminal-use-agent-tooltip"))
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(WarpifyFooterViewAction::UseAgent);
+            })
         });
 
         let dismiss_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Dismiss", AgentFooterButtonTheme::new(None))
-                .with_size(button_size)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(WarpifyFooterViewAction::Dismiss);
-                })
+            ActionButton::new(
+                crate::t!("common-dismiss"),
+                AgentFooterButtonTheme::new(None),
+            )
+            .with_size(button_size)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(WarpifyFooterViewAction::Dismiss);
+            })
         });
 
         Self {

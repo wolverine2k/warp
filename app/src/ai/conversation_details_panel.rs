@@ -467,7 +467,7 @@ pub fn init(app: &mut AppContext) {
     app.register_fixed_bindings([FixedBinding::custom(
         CustomAction::Copy,
         ConversationDetailsPanelAction::CopySelectedText,
-        "Copy",
+        crate::t!("keybinding-desc-conversation-details-copy"),
         id!(ConversationDetailsPanel::ui_name()) & !id!("IMEOpen"),
     )]);
 }
@@ -510,16 +510,16 @@ impl ConversationDetailsPanel {
 
         #[cfg(not(target_family = "wasm"))]
         let continue_locally_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Continue locally", PrimaryTheme)
-                .with_tooltip("Fork this conversation locally")
+            ActionButton::new(crate::t!("terminal-continue-locally"), PrimaryTheme)
+                .with_tooltip(crate::t!("terminal-fork-conversation-locally-tooltip"))
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(ConversationDetailsPanelAction::ContinueLocally);
                 })
         });
         let open_in_oz_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("View in Oz", SecondaryTheme)
-                .with_tooltip("View this run in the Oz web app")
+            ActionButton::new(crate::t!("ai-conversation-view-in-oz"), SecondaryTheme)
+                .with_tooltip(crate::t!("ai-conversation-view-in-oz-tooltip"))
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(ConversationDetailsPanelAction::OpenInOz);

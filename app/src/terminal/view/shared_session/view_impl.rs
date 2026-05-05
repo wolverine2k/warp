@@ -2,7 +2,6 @@
 
 use crate::ai::agent_conversations_model::AgentConversationsModel;
 use crate::ai::ambient_agents::AmbientAgentTaskId;
-use crate::ai::blocklist::BlocklistAIHistoryModel;
 use crate::auth::UserUid;
 use crate::context_chips::ContextChipKind;
 use crate::drive::sharing::ShareableObject;
@@ -416,28 +415,16 @@ impl TerminalView {
         ctx.emit(Event::RoleRequestCancelled(role_request_id.clone()));
     }
 
+    // OpenWarp:Share Session 路径已切断,下面两个方法保留签名但 no-op,
+    // 不再 emit `Event::OpenShareSessionModal{,DeniedModal}`,也不再触达云端协同会话服务。
     pub fn open_share_session_modal(
         &mut self,
-        open_source: SharedSessionActionSource,
-        ctx: &mut ViewContext<Self>,
+        _open_source: SharedSessionActionSource,
+        _ctx: &mut ViewContext<Self>,
     ) {
-        if !matches!(
-            open_source,
-            SharedSessionActionSource::BlocklistContextMenu { .. }
-        ) {
-            let show_accent_border = self
-                .focus_handle()
-                .map(|fh| fh.is_in_split_pane(ctx))
-                .unwrap_or(false);
-            self.set_show_pane_accent_border(show_accent_border, ctx);
-        };
-
-        ctx.emit(Event::OpenShareSessionModal { open_source });
     }
 
-    pub fn open_share_session_denied_modal(&mut self, ctx: &mut ViewContext<Self>) {
-        ctx.emit(Event::OpenShareSessionDeniedModal);
-    }
+    pub fn open_share_session_denied_modal(&mut self, _ctx: &mut ViewContext<Self>) {}
 
     /// Focuses the view by telling the parent view to focus this session.
     /// For example, in the common case, the parent pane group would consume
@@ -465,66 +452,16 @@ impl TerminalView {
     /// 5. Once the session is registered with [`shared_session::manager::Manager`], it
     ///    will emit an event for relevant subscribers (e.g. the Workspace will need to
     ///    re-render when a share starts for tab indicator, share button, etc.)
+    // OpenWarp:Shared Session 网络入口已切断,attempt_to_share_session 整体 no-op,
+    // 不再 set SharePending 状态、不再 emit StartSharingCurrentSession、不再触发遥测。
     pub fn attempt_to_share_session(
         &mut self,
-        scrollback_type: SharedSessionScrollbackType,
-        source: Option<SharedSessionActionSource>,
-        source_type: SessionSourceType,
-        bypass_conversation_guard: bool,
-        ctx: &mut ViewContext<Self>,
+        _scrollback_type: SharedSessionScrollbackType,
+        _source: Option<SharedSessionActionSource>,
+        _source_type: SessionSourceType,
+        _bypass_conversation_guard: bool,
+        _ctx: &mut ViewContext<Self>,
     ) {
-        // We should only be attempting to share a session
-        // if it is bootstrapped.
-        //
-        // For unit tests, we don't actually bootstrap and it
-        // doesn't really matter.
-        #[cfg(not(test))]
-        if !self.model.lock().block_list().is_bootstrapped() {
-            log::warn!("Tried to share session before it was bootstrapped.");
-            return;
-        }
-
-        // Check if we're trying to share without scrollback while agent shared sessions is enabled
-        // and there are active conversations. This would break the viewer experience since they
-        // wouldn't receive the conversation history they need to continue conversations.
-        if !bypass_conversation_guard
-            && FeatureFlag::AgentSharedSessions.is_enabled()
-            && scrollback_type == SharedSessionScrollbackType::None
-        {
-            let has_conversations = BlocklistAIHistoryModel::as_ref(ctx)
-                .all_live_conversations_for_terminal_view(ctx.handle().id())
-                .any(|conv| conv.exchange_count() > 0);
-
-            if has_conversations {
-                log::warn!("Cannot share without scrollback when agent conversations exist. Agent shared sessions require conversation history to be shared.");
-                return;
-            }
-        }
-
-        self.set_show_pane_accent_border(false, ctx);
-
-        self.pending_share_source = source;
-
-        self.model
-            .lock()
-            .set_shared_session_status(SharedSessionStatus::SharePending);
-
-        ctx.emit(Event::StartSharingCurrentSession {
-            scrollback_type,
-            source_type,
-        });
-        if let Some(source) = source {
-            send_telemetry_from_ctx!(
-                TelemetryEvent::StartedSharingCurrentSession {
-                    includes_scrollback: !matches!(
-                        scrollback_type,
-                        SharedSessionScrollbackType::None
-                    ),
-                    source,
-                },
-                ctx
-            );
-        }
     }
 
     /// Sets the PresenceManager and decorates the view accordingly when a shared session has been started.
@@ -1749,7 +1686,7 @@ impl TerminalView {
 
         if !model.shared_session_status().is_sharer_or_viewer() {
             items.push(
-                MenuItemFields::new("Share session...")
+                MenuItemFields::new(crate::t!("terminal-share-session"))
                     .with_on_select_action(TerminalAction::ContextMenu(
                         ContextMenuAction::OpenShareSessionModal,
                     ))
@@ -1758,7 +1695,7 @@ impl TerminalView {
             );
         } else if model.shared_session_status().is_active_sharer() {
             items.push(
-                MenuItemFields::new("Stop sharing")
+                MenuItemFields::new(crate::t!("terminal-stop-sharing"))
                     .with_on_select_action(TerminalAction::ContextMenu(
                         ContextMenuAction::StopSharing,
                     ))
@@ -1768,7 +1705,7 @@ impl TerminalView {
 
         if model.shared_session_status().is_sharer_or_viewer() {
             items.push(
-                MenuItemFields::new("Copy session sharing link")
+                MenuItemFields::new(crate::t!("terminal-copy-session-sharing-link"))
                     .with_on_select_action(TerminalAction::CopySharedSessionLink {
                         source: SharedSessionActionSource::RightClickMenu,
                     })

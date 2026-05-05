@@ -310,6 +310,7 @@ pub enum Icon {
     SwitchHorizontal01,
     HeartHand,
     MessageChatSquare,
+    Server01,
 }
 
 impl From<Icon> for &'static str {
@@ -617,6 +618,7 @@ impl From<Icon> for &'static str {
             Icon::ClockPlus => "bundled/svg/clock-plus.svg",
             Icon::HeartHand => "bundled/svg/heart-hand.svg",
             Icon::MessageChatSquare => "bundled/svg/message-chat-square.svg",
+            Icon::Server01 => "bundled/svg/server-01.svg",
         }
     }
 }

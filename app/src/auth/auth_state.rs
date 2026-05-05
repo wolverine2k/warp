@@ -17,7 +17,6 @@ use crate::{
 };
 
 use super::{
-    anonymous_id::get_or_create_anonymous_id,
     auth_manager::user_persistence::PersistedUser,
     credentials::Credentials,
     user::{AnonymousUserType, FirebaseAuthTokens, PersonalObjectLimits, PrincipalType, User},
@@ -38,12 +37,13 @@ pub(super) enum PersistAction {
 
 /// AuthState holds information about the currently-logged in user.
 /// If you need to access AuthState, you can use the AuthStateProvider singleton model.
+///
+/// openWarp 闭源遥测剥离 P4a:`anonymous_id` 字段已删,P0 阶段已让 `anonymous_id()` 返回
+/// `Uuid::nil()`,字段本身和 `get_or_create_anonymous_id`(已删)/`anonymous_id` 模块
+/// (已删)失去意义。
 pub struct AuthState {
     /// The currently logged-in User. None if the user isn't logged in currently.
     user: RwLock<Option<User>>,
-
-    /// An anonymous UUID. Can be used to consistently identify an anonymous user who is not logged in.
-    anonymous_id: Uuid,
 
     /// State that indicates whether the current user's refresh token has been
     /// invalidated, meaning a reauth is required.
@@ -54,10 +54,9 @@ pub struct AuthState {
 }
 
 impl AuthState {
-    fn new(ctx: &AppContext) -> Self {
+    fn new(_ctx: &AppContext) -> Self {
         Self {
             user: RwLock::new(None),
-            anonymous_id: get_or_create_anonymous_id(ctx),
             needs_reauth: AtomicBool::new(false),
             credentials: RwLock::new(None),
         }
@@ -67,7 +66,6 @@ impl AuthState {
     pub fn new_for_test() -> Self {
         Self {
             user: RwLock::new(Some(User::test())),
-            anonymous_id: Uuid::new_v4(),
             needs_reauth: AtomicBool::new(false),
             credentials: RwLock::new(Some(Credentials::Test)),
         }
@@ -111,24 +109,9 @@ impl AuthState {
             return state;
         }
 
-        // Try reading from secure storage.
-        match PersistedUser::from_secure_storage(ctx) {
-            Ok(persisted) => {
-                if persisted.auth_tokens.refresh_token.is_empty() {
-                    log::warn!(
-                        "Found persisted user with empty refresh token; clearing secure storage entry"
-                    );
-                    let _ = PersistedUser::remove_from_secure_storage(ctx).map_err(|err| {
-                        log::warn!("Unable to clear invalid user from secure storage: {err:?}");
-                    });
-                } else {
-                    state.apply_persisted_user(persisted);
-                }
-            }
-            Err(err) => {
-                log::info!("Unable to read user from secure storage: {err:?}");
-            }
-        }
+        // OpenWarp:不再从 secure storage 读取 Warp Inc 账号条目(USER_STORAGE_KEY)。
+        // BYOP API key 与 MCP credentials 由各自模块独立加载,不依赖此处。
+        let _ = ctx;
 
         state
     }
@@ -229,8 +212,13 @@ impl AuthState {
     }
 
     /// Determines whether the user should be considered as logged in.
+    ///
+    /// 去中心化分支:本地模式下不再依赖远端账号,统一视为已登录。所有原本因
+    /// 未登录而被阻断的功能(AI 入口、设置项、agent driver 启动等)直接放行。
+    /// 真正与云端通信的客户端(`AIClient`、`ObjectClient` 等)由更上层的
+    /// provider 替换为本地实现或返回错误,而不再以登录态作为门禁。
     pub fn is_logged_in(&self) -> bool {
-        self.credentials.read().is_some()
+        true
     }
 
     /// Returns whether the user should be treated as not having a full account.
@@ -240,7 +228,8 @@ impl AuthState {
     /// during the transient state where credentials exist but user data hasn't loaded
     /// yet, the user is conservatively treated as lacking a full account.
     pub fn is_anonymous_or_logged_out(&self) -> bool {
-        !self.is_logged_in() || self.is_user_anonymous().unwrap_or(true)
+        // 去中心化分支:本地用户不被视为匿名,避免 UI 上出现 “请登录/升级” 提示。
+        false
     }
 
     /// Returns the cached access token, if any exists. This method *will not* check if the JWT is
@@ -296,10 +285,8 @@ impl AuthState {
     /// Anonymous users are real Warp users, but have no providers linked in Firebase.
     /// Returns `None` if there is no user data.
     pub fn is_user_anonymous(&self) -> Option<bool> {
-        self.user
-            .read()
-            .as_ref()
-            .map(|user| user.is_user_anonymous())
+        // 去中心化分支:不再有 “匿名 vs 已登录” 的区别,所有本地用户一律视作完整账号。
+        Some(false)
     }
 
     /// Returns whether or not the user is a "web client anonymous user", aka their account
@@ -397,10 +384,14 @@ impl AuthState {
         self.user.read().as_ref().map(|user| user.local_id)
     }
 
-    /// Returns the user's anonymous id.
-    /// The anonymous id will be consistent across the app's lifetime. It is a random UUID.
+    /// Returns a nil UUID string.
+    ///
+    /// openWarp 闭源遥测剥离 P0/P4a:原本用于 Rudder/Sentry/HTTP `X-Experiment-Id`
+    /// 三条外发链路的跨会话追踪 key,P0 已切断、P4a 已删字段。保留函数签名以兼容
+    /// 仍在调用此函数的下游(server_api / lib.rs::record_app_*),P4b/P4c/P4d 后
+    /// 删除最后调用者时一并删除。
     pub fn anonymous_id(&self) -> String {
-        self.anonymous_id.to_string()
+        Uuid::nil().to_string()
     }
 
     /// Returns whether a reauth is required for the current user given the state
@@ -499,7 +490,6 @@ impl AuthStateProvider {
         Self {
             auth_state: Arc::new(AuthState {
                 user: RwLock::new(None),
-                anonymous_id: Uuid::new_v4(),
                 needs_reauth: AtomicBool::new(false),
                 credentials: RwLock::new(None),
             }),

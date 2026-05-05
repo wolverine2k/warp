@@ -31,8 +31,6 @@ use crate::{
 
 use super::model::find::{FindConfig, RegexDFAs};
 
-const FILTER_BLOCK_PLACEHOLDER_TEXT: &str = "Filter block output";
-
 const BLOCK_FILTER_BAR_WIDTH: f32 = 380.;
 const BLOCK_FILTER_BAR_PADDING: f32 = 4.;
 const BLOCK_FILTER_EDITOR_PADDING: f32 = 6.;
@@ -188,7 +186,7 @@ impl BlockFilterEditor {
                 },
                 ctx,
             );
-            editor.set_placeholder_text(FILTER_BLOCK_PLACEHOLDER_TEXT, ctx);
+            editor.set_placeholder_text(crate::t!("terminal-filter-block-output-placeholder"), ctx);
             editor
         });
 

@@ -278,28 +278,11 @@ unsafe fn init_logging() {
             // debug messages are ignored.
             // In local builds without crash reporting, all SQLite messages get logged locally.
 
+            // openWarp 闭源遥测剥离 P2:原会把 SQLite error 以结构化 context 上报到 Warp
+            // 官方 Sentry(grouping by error kind)。剥离后统一走下方 log::log! 路径,
+            // 错误码/描述照常落本地日志,保留诊断价值。
             #[cfg(feature = "crash_reporting")]
-            if level == log::Level::Error {
-                sentry::with_scope(
-                    |scope| {
-                        let mut context = std::collections::BTreeMap::new();
-                        context.insert("message".to_string(), err_message.into());
-                        context.insert("code".to_string(), err_code.into());
-                        context.insert(
-                            "code_description".to_string(),
-                            sqlite3::code_to_str(err_code).into(),
-                        );
-                        scope.set_context("sqlite", sentry::protocol::Context::Other(context));
-                    },
-                    || {
-                        sentry::capture_message(
-                            "Sqlite Error",
-                            sentry_log::convert_log_level(level),
-                        )
-                    },
-                );
-                return;
-            }
+            let _ = level;
 
             log::log!(
                 level,
@@ -498,6 +481,13 @@ fn start_writer(conn: SqliteConnection, database_path: PathBuf) -> Result<Writer
                             }
                         }
                         ModelEvent::Terminate => {
+                            // 退出前主动把 WAL 全部 checkpoint 回主库并清空,
+                            // 避免下次启动时 sqlite3_open 触发 "WAL mode database file was recovered" 恢复。
+                            if let Err(e) =
+                                current_conn.batch_execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                            {
+                                log::warn!("Failed to checkpoint WAL on shutdown: {e:?}");
+                            }
                             log::info!("Shutting down SQLite writer thread");
                             return;
                         }
@@ -1054,7 +1044,9 @@ fn save_pane_state(
         LeafContents::GetStarted => GET_STARTED_PANE_KIND,
         LeafContents::Welcome { .. } => WELCOME_PANE_KIND,
         LeafContents::AIDocument(_) => AI_DOCUMENT_PANE_KIND,
-        LeafContents::EnvironmentManagement(_) | LeafContents::NetworkLog => {
+        LeafContents::EnvironmentManagement(_)
+        | LeafContents::NetworkLog
+        | LeafContents::SshServer { .. } => {
             // These pane types are filtered out before this function is
             // called; see `LeafContents::is_persisted` and the skip in
             // `save_app_state`. Reaching this arm would mean a `pane_nodes`
@@ -1294,6 +1286,9 @@ fn save_pane_state(
                 .execute(conn)?;
         }
         LeafContents::NetworkLog => {
+            // Unreachable: filtered by `is_persisted` in `save_app_state`.
+        }
+        LeafContents::SshServer { .. } => {
             // Unreachable: filtered by `is_persisted` in `save_app_state`.
         }
     }

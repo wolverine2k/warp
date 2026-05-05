@@ -131,20 +131,15 @@ impl TipAction {
 
 // Section item that dispatches an action within the app
 pub struct FeatureItem {
-    pub title: &'static str,
-    pub description: &'static str,
+    pub title: String,
+    pub description: String,
     pub feature: Tip,
     pub editable_binding_name: Option<&'static str>,
     pub shortcut: Option<Keystroke>,
 }
 
 impl FeatureItem {
-    pub fn new(
-        title: &'static str,
-        description: &'static str,
-        feature: Tip,
-        ctx: &mut AppContext,
-    ) -> Self {
+    pub fn new(title: String, description: String, feature: Tip, ctx: &mut AppContext) -> Self {
         let editable_binding_name;
         let shortcut;
 
@@ -172,10 +167,10 @@ impl FeatureItem {
 #[derive(Clone, Debug)]
 // Section item that links to an external URL
 pub struct ContentItem {
-    pub title: &'static str,
-    pub description: &'static str,
+    pub title: String,
+    pub description: String,
     pub url: &'static str,
-    pub button_label: &'static str,
+    pub button_label: String,
 }
 
 pub enum Section {

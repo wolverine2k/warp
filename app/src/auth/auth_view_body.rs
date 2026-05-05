@@ -7,7 +7,7 @@ use crate::{
     network::NetworkStatus,
     report_error, send_telemetry_from_ctx, send_telemetry_sync_from_ctx,
     server::telemetry::{AnonymousUserSignupEntrypoint, LoginEventSource, TelemetryEvent},
-    settings::{AISettings, PrivacySettings},
+    settings::PrivacySettings,
     themes::theme::Fill as ThemeFill,
     util::color::{darken, lighten},
 };
@@ -48,9 +48,6 @@ const TOS_URL: &str = "https://www.warp.dev/terms-of-service";
 
 const COMMON_BODY_UI_FONT_SIZE: f32 = 12.;
 const AUTH_MODAL_GAP: f32 = 16.;
-
-const AUTH_TOKEN_INPUT_PLACEHOLDER_TEXT: &str = "Auth Token";
-const AUTH_TOKEN_INPUT_PLACEHOLDER_TEXT_EXPERIMENTAL: &str = "Browser auth token";
 
 const AUTH_TOKEN_INPUT_BORDER_RADIUS: Radius = Radius::Pixels(4.);
 
@@ -138,7 +135,6 @@ pub enum AuthViewBodyAction {
     HideOverlay,
     ToggleTelemetry,
     ToggleCrashReporting,
-    ToggleCloudConversationStorage,
     Close,
 }
 
@@ -167,9 +163,9 @@ impl AuthViewBody {
 
             let placeholder_text =
                 if matches!(experiment_group, Some(AuthFlowInstructions::Experiment)) {
-                    AUTH_TOKEN_INPUT_PLACEHOLDER_TEXT_EXPERIMENTAL
+                    crate::t!("auth-browser-token-placeholder")
                 } else {
-                    AUTH_TOKEN_INPUT_PLACEHOLDER_TEXT
+                    crate::t!("auth-token-placeholder")
                 };
 
             editor.set_placeholder_text(placeholder_text, ctx);
@@ -249,7 +245,6 @@ impl AuthViewBody {
         PrivacySettingsActions {
             toggle_telemetry: AuthViewBodyAction::ToggleTelemetry,
             toggle_crash_reporting: AuthViewBodyAction::ToggleCrashReporting,
-            toggle_cloud_conversation_storage: AuthViewBodyAction::ToggleCloudConversationStorage,
             hide_overlay: AuthViewBodyAction::HideOverlay,
         }
     }
@@ -974,16 +969,6 @@ impl TypedActionView for AuthViewBody {
                 });
                 ctx.notify();
             }
-            AuthViewBodyAction::ToggleCloudConversationStorage => {
-                let privacy_settings_handle = PrivacySettings::handle(ctx);
-                ctx.update_model(&privacy_settings_handle, |privacy_settings, ctx| {
-                    privacy_settings.set_is_cloud_conversation_storage_enabled(
-                        !privacy_settings.is_cloud_conversation_storage_enabled,
-                        ctx,
-                    );
-                });
-                ctx.notify();
-            }
             AuthViewBodyAction::Close => {
                 ctx.emit(AuthViewBodyEvent::Close);
             }
@@ -1048,10 +1033,6 @@ impl View for AuthViewBody {
         if let Some(overlay) = &self.active_overlay {
             match overlay {
                 AuthViewOverlay::PrivacySettings => {
-                    // The `is_any_ai_enabled` helper also accounts for login /
-                    // remote-session gating, so the cloud-conversation toggle
-                    // hides whenever AI isn't effectively available.
-                    let is_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
                     stack.add_child(
                         Dismiss::new(render_overlay(
                             render_privacy_settings_overlay_body(
@@ -1059,7 +1040,6 @@ impl View for AuthViewBody {
                                 app,
                                 &self.privacy_settings_handles,
                                 &self.privacy_settings_actions(),
-                                is_ai_enabled,
                             ),
                             appearance,
                         ))

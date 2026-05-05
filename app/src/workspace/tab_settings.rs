@@ -497,6 +497,15 @@ define_settings_group!(TabSettings, settings: [
         toml_path: "appearance.vertical_tabs.show_panel_in_restored_windows",
         description: "When restoring a window, open the vertical tabs panel even if it was closed when the session was saved.",
     },
+    show_title_bar_search_bar: ShowTitleBarSearchBar {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "appearance.vertical_tabs.show_title_bar_search_bar",
+        description: "Whether to show the search bar in the title bar between tabs and window controls (vertical tabs only).",
+    },
     use_latest_user_prompt_as_conversation_title_in_tab_names: UseLatestUserPromptAsConversationTitleInTabNames {
         type: bool,
         default: false,

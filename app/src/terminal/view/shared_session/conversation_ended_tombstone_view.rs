@@ -231,8 +231,8 @@ impl ConversationEndedTombstoneView {
         #[cfg(not(target_family = "wasm"))]
         let continue_locally_button = conversation_id.map(|conv_id| {
             ctx.add_typed_action_view(move |_| {
-                ActionButton::new("Continue locally", PrimaryTheme)
-                    .with_tooltip("Fork this conversation locally")
+                ActionButton::new(crate::t!("terminal-continue-locally"), PrimaryTheme)
+                    .with_tooltip(crate::t!("terminal-fork-conversation-locally-tooltip"))
                     .on_click(move |ctx| {
                         ctx.dispatch_typed_action(
                             ConversationEndedTombstoneAction::ContinueLocally(conv_id),
@@ -246,8 +246,8 @@ impl ConversationEndedTombstoneView {
         #[cfg(target_family = "wasm")]
         let open_in_warp_button = conversation_id.map(|conv_id| {
             ctx.add_typed_action_view(move |_| {
-                ActionButton::new("Open in Warp", PrimaryTheme)
-                    .with_tooltip("Open this conversation in the Warp desktop app")
+                ActionButton::new(crate::t!("terminal-open-in-warp"), PrimaryTheme)
+                    .with_tooltip(crate::t!("terminal-open-conversation-in-warp-tooltip"))
                     .on_click(move |ctx| {
                         ctx.dispatch_typed_action(ConversationEndedTombstoneAction::OpenInWarp(
                             conv_id,

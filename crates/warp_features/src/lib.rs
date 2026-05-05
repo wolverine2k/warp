@@ -602,9 +602,6 @@ pub enum FeatureFlag {
     /// Enables team API key creation in the API key management UI.
     TeamApiKeys,
 
-    /// Enables cloud conversation loading via the CLI --conversation flag.
-    CloudConversations,
-
     /// Enables the "New agent" prompt chip in terminal mode when AgentView is enabled.
     ///
     /// When disabled (the default), the terminal message bar is shown instead.
@@ -714,15 +711,6 @@ pub enum FeatureFlag {
     /// opens a persistent SSE connection to the server to receive events in
     /// real time.
     OrchestrationV2,
-
-    /// Gates client-side support for the `orchestrate` tool, which batches
-    /// multiple child agents into a single tool call with an inline
-    /// confirmation card. When enabled, the client advertises
-    /// `RequestSettings.SupportsOrchestrate = true` and the server's
-    /// orchestrate tool replaces `start_agent` / `start_agent_v2` for
-    /// orchestration-capable conversations. Layered on top of
-    /// `OrchestrationV2`; has no effect when v2 is off.
-    RunAgentsTool,
 
     /// Renders a horizontal pill bar in the agent view pane header showing the
     /// orchestrator agent and all of its child agents, with click-to-switch
@@ -924,12 +912,12 @@ pub const DOGFOOD_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::RememberFastForwardState,
     FeatureFlag::HOANotifications,
     FeatureFlag::OrchestrationV2,
-    FeatureFlag::RunAgentsTool,
     FeatureFlag::GeminiNotifications,
     FeatureFlag::LocalDockerSandbox,
     FeatureFlag::VerticalTabsSummaryMode,
     FeatureFlag::CloudModeSetupV2,
     FeatureFlag::ConfigurableContextWindow,
+    FeatureFlag::DragTabsToWindows,
     #[cfg(not(windows))]
     FeatureFlag::SshRemoteServer,
     FeatureFlag::CloudModeInputV2,
@@ -966,6 +954,24 @@ pub const RUNTIME_FEATURE_FLAGS: &[FeatureFlag] = &[];
 
 impl FeatureFlag {
     pub fn is_enabled(&self) -> bool {
+        // 去中心化分支:本地模式下永远关闭以下账号 / 登录 / 云端 Agent 相关 flag,
+        // 不再受 channel / preview 配置影响。
+        if matches!(
+            self,
+            FeatureFlag::ForceLogin
+                | FeatureFlag::AvatarInTabBar
+                | FeatureFlag::AgentModeComputerUse
+                | FeatureFlag::CloudMode
+                | FeatureFlag::CloudModeFromLocalSession
+                | FeatureFlag::CloudModeHostSelector
+                | FeatureFlag::CloudModeImageContext
+                | FeatureFlag::CloudModeSetupV2
+                | FeatureFlag::CloudModeInputV2
+                | FeatureFlag::HOARemoteControl
+        ) {
+            return false;
+        }
+
         #[cfg(all(debug_assertions, not(feature = "test-util")))]
         {
             use std::sync::atomic::Ordering;

@@ -40,7 +40,7 @@ impl InlineMenuAction for AcceptPlan {
                         key: "enter".to_owned(),
                         ..Default::default()
                     }),
-                    MessageItem::text(" open plan"),
+                    MessageItem::text(crate::t!("terminal-message-open-plan")),
                 ],
                 move |ctx| {
                     ctx.dispatch_typed_action(InlineMenuRowAction::Accept {

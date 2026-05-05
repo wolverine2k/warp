@@ -4,6 +4,9 @@ app/frameworks/dev/Carthage
 app/frameworks/**/*.xcframework
 /target
 /app/target
+/lib/*
+!/lib/rust-genai/
+/lib/rust-genai/target/
 /warp.xcworkspace
 .idea/
 .DS_Store
@@ -11,13 +14,13 @@ app/frameworks/**/*.xcframework
 app/src/server/graphql/schema/generated
 crates/command-signatures-v2/js/build
 crates/command-signatures-v2/js/node_modules
-
+/target-check
 # For testing changes to the channel versions file
 channel_versions_test.json
 
 # Don't include any CPU profiling output by accident.
 profile.pb
-
+/nul
 # Don't include any files that we write for testing purposes.
 crates/warp_files/test_data/test_write
 
@@ -59,5 +62,14 @@ desired_behavior.md
 # Don't include the python cache for bundled skills.
 __pycache__/
 
+# 嵌套 vendored 仓库,本地参考用,不入库
+/warp-proto-apis/
+
+# logo 生成脚本的依赖
+/scripts/node_modules/
+
 # Project notes
 .note/
+
+# ProcMon / 临时调试日志
+Logfile.CSV

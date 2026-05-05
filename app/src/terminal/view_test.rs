@@ -490,68 +490,6 @@ fn command_first_word_and_suffix_handles_alias_without_args() {
 }
 
 #[test]
-fn escape_pops_nested_cloud_agent_view_with_long_running_command() {
-    App::test((), |mut app| async move {
-        initialize_app_for_terminal_view(&mut app);
-        let _agent_view = FeatureFlag::AgentView.override_enabled(true);
-        let _cloud_mode = FeatureFlag::CloudMode.override_enabled(true);
-
-        let parent_terminal = add_window_with_terminal(&mut app, None);
-        let cloud_terminal = add_window_with_cloud_mode_terminal(&mut app);
-
-        let parent_view = parent_terminal.clone();
-        let cloud_view = cloud_terminal.clone();
-        let parent_model = parent_terminal.read(&app, |view, _| view.model.clone());
-        let cloud_model = cloud_terminal.read(&app, |view, _| view.model.clone());
-        let pane_stack = app.update(move |ctx| {
-            let parent_manager = ctx.add_model(|_| {
-                let manager: Box<dyn TerminalManager> = Box::new(TestTerminalManager {
-                    model: parent_model,
-                    view: parent_view.clone(),
-                });
-                manager
-            });
-            let cloud_manager = ctx.add_model(|_| {
-                let manager: Box<dyn TerminalManager> = Box::new(TestTerminalManager {
-                    model: cloud_model,
-                    view: cloud_view.clone(),
-                });
-                manager
-            });
-            let pane_stack = ctx.add_model(|ctx| PaneStack::new(parent_manager, parent_view, ctx));
-            pane_stack.update(ctx, |stack, ctx| {
-                stack.push(cloud_manager, cloud_view, ctx);
-            });
-            pane_stack
-        });
-
-        cloud_terminal.update(&mut app, |view, ctx| {
-            view.enter_agent_view_for_new_conversation(None, AgentViewEntryOrigin::CloudAgent, ctx);
-            view.model
-                .lock()
-                .simulate_long_running_block("sleep 10", "running");
-
-            assert!(view.can_pop_nested_cloud_agent_view(ctx));
-            assert_eq!(view.can_exit_agent_view_for_terminal_view(ctx), Ok(()));
-        });
-
-        assert_eq!(
-            app.read_model(&pane_stack, |stack, _| stack.active_view().id()),
-            cloud_terminal.id()
-        );
-
-        cloud_terminal.update(&mut app, |view, ctx| {
-            view.handle_input_event(&InputEvent::Escape, ctx);
-        });
-
-        assert_eq!(
-            app.read_model(&pane_stack, |stack, _| stack.active_view().id()),
-            parent_terminal.id()
-        );
-    })
-}
-
-#[test]
 fn escape_does_not_exit_local_agent_view_with_long_running_command() {
     App::test((), |mut app| async move {
         initialize_app_for_terminal_view(&mut app);

@@ -83,7 +83,7 @@ impl<Args: AttachedContextArgs + Copy> MessageProvider<Args> for AttachedBlocksM
                         key: "escape".to_owned(),
                         ..Default::default()
                     }),
-                    MessageItem::text(" to remove"),
+                    MessageItem::text(crate::t!("terminal-message-to-remove")),
                 ],
                 |ctx| {
                     ctx.dispatch_typed_action(InputAction::ClearAttachedContext);
@@ -120,7 +120,9 @@ impl<Args: AttachedContextArgs + Copy> MessageProvider<Args>
 
         let _ = args.context_model().pending_context_selected_text()?;
 
-        let mut items = vec![MessageItem::text("selected text attached as context")];
+        let mut items = vec![MessageItem::text(crate::t!(
+            "terminal-message-selected-text-attached"
+        ))];
 
         // Always show ESC hint in agent view, make it clickable
         if args.agent_view_controller().is_active() {
@@ -131,7 +133,7 @@ impl<Args: AttachedContextArgs + Copy> MessageProvider<Args>
                         key: "escape".to_owned(),
                         ..Default::default()
                     }),
-                    MessageItem::text(" to remove"),
+                    MessageItem::text(crate::t!("terminal-message-to-remove")),
                 ],
                 |ctx| {
                     ctx.dispatch_typed_action(InputAction::ClearAttachedContext);

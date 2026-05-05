@@ -29,15 +29,12 @@ pub(crate) use execute::apply_edits;
 pub(crate) use execute::coerce_integer_args;
 pub(crate) use execute::FileReadResult;
 pub(crate) use execute::MalformedFinalLineProxyEvent;
-#[cfg(test)]
-pub(crate) use execute::{compose_run_agents_child_prompt, run_agents_to_start_agent_mode};
 pub use execute::{
     read_local_file_context, EditAcceptAndContinueClickedEvent, EditAcceptClickedEvent,
     EditResolvedEvent, EditStats, NewConversationDecision, PromptSuggestionExecutor,
-    ReadFileContextResult, RequestFileEditsExecutor, RequestFileEditsFormatKind,
-    RequestFileEditsTelemetryEvent, RunAgentsExecutor, RunAgentsExecutorEvent,
-    RunAgentsSpawningSnapshot, ShellCommandExecutor, ShellCommandExecutorEvent, StartAgentExecutor,
-    StartAgentExecutorEvent, StartAgentRequest, StartAgentRequestId,
+    PromptSuggestionExecutorEvent, ReadFileContextResult, RequestFileEditsExecutor,
+    RequestFileEditsFormatKind, RequestFileEditsTelemetryEvent, ShellCommandExecutor,
+    ShellCommandExecutorEvent,
 };
 
 use futures::future::{join_all, BoxFuture};
@@ -74,7 +71,6 @@ use self::execute::{
 use super::BlocklistAIHistoryModel;
 use crate::ai::ai_document_view::DEFAULT_PLANNING_DOCUMENT_TITLE;
 use crate::ai::document::ai_document_model::AIDocumentModel;
-use crate::{send_telemetry_from_ctx, TelemetryEvent};
 
 /// The status of an action from an AI output.
 #[derive(Clone, Debug)]
@@ -399,14 +395,6 @@ impl BlocklistAIActionModel {
         self.executor.as_ref(app).suggest_prompt_executor().clone()
     }
 
-    pub fn start_agent_executor(&self, app: &AppContext) -> ModelHandle<StartAgentExecutor> {
-        self.executor.as_ref(app).start_agent_executor().clone()
-    }
-
-    pub fn run_agents_executor(&self, app: &AppContext) -> ModelHandle<RunAgentsExecutor> {
-        self.executor.as_ref(app).run_agents_executor().clone()
-    }
-
     pub fn ask_user_question_executor(
         &self,
         app: &AppContext,
@@ -683,60 +671,6 @@ impl BlocklistAIActionModel {
         }
     }
 
-    /// Dispatches a `RunAgents` action with the user-edited request
-    /// from the confirmation card.
-    pub fn execute_run_agents(
-        &mut self,
-        action_id: &AIAgentActionId,
-        request: ai::agent::action::RunAgentsRequest,
-        ctx: &mut ModelContext<Self>,
-    ) {
-        let mut found: Option<(AIConversationId, AIAgentAction)> = None;
-        for (conv_id, queue) in self.pending_actions.iter_mut() {
-            if let Some(idx) = queue.iter().position(|a| &a.id == action_id) {
-                if let Some(action) = queue.remove(idx) {
-                    found = Some((*conv_id, action));
-                }
-                break;
-            }
-        }
-        let Some((conversation_id, action)) = found else {
-            log::warn!(
-                "BlocklistAIActionModel::execute_run_agents: no pending action for {action_id:?}"
-            );
-            return;
-        };
-        if !matches!(action.action, AIAgentActionType::RunAgents(_)) {
-            log::warn!(
-                "BlocklistAIActionModel::execute_run_agents: pending action {action_id:?} is not RunAgents; re-queueing"
-            );
-            self.pending_actions
-                .entry(conversation_id)
-                .or_default()
-                .push_front(action);
-            return;
-        }
-        let task_id = action.task_id.clone();
-        let action_id_clone = action_id.clone();
-
-        self.executor.update(ctx, |executor, exec_ctx| {
-            executor.execute_run_agents(
-                action_id_clone,
-                request,
-                conversation_id,
-                task_id,
-                exec_ctx,
-            );
-        });
-
-        self.update_conversation_in_progress_status(conversation_id, ctx);
-        self.add_running_action(
-            conversation_id,
-            action_id.clone(),
-            RunningActionPhase::Serial,
-        );
-    }
-
     /// Attempts to execute the next pending action for the active conversation.
     pub fn execute_next_action_for_user(
         &mut self,
@@ -870,21 +804,38 @@ impl BlocklistAIActionModel {
 
         let action_id = action.id.clone();
         let phase = self.action_phase_for_action(&action, ctx);
+        log::info!(
+            "[byop-diag] try_to_execute_action: enter action_id={action_id:?} \
+             is_user_initiated={is_user_initiated} phase={phase:?}"
+        );
         let execute_result = self.executor.update(ctx, |executor, ctx| {
             executor.try_to_execute_action(action, conversation_id, is_user_initiated, ctx)
         });
 
         match execute_result {
             TryExecuteResult::ExecutedAsync => {
+                log::info!(
+                    "[byop-diag] try_to_execute_action: ExecutedAsync action_id={action_id:?}"
+                );
                 self.update_conversation_in_progress_status(conversation_id, ctx);
                 self.add_running_action(conversation_id, action_id, phase);
                 Some(StartedAction::Async { phase })
             }
             TryExecuteResult::ExecutedSync => {
+                log::info!(
+                    "[byop-diag] try_to_execute_action: ExecutedSync action_id={action_id:?}"
+                );
                 self.update_conversation_in_progress_status(conversation_id, ctx);
                 Some(StartedAction::Sync)
             }
             TryExecuteResult::NotExecuted { reason, action } => {
+                log::info!(
+                    "[byop-diag] try_to_execute_action: NotExecuted action_id={:?} reason={:?} \
+                     → 入 pending_actions[{:?}]",
+                    action.id,
+                    reason,
+                    conversation_id
+                );
                 self.pending_actions
                     .entry(conversation_id)
                     .or_default()
@@ -914,6 +865,26 @@ impl BlocklistAIActionModel {
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
+        self.queue_actions_with_options(actions, conversation_id, false, ctx);
+    }
+
+    /// 同 `queue_actions`,但增加 `auto_accept` 参数。
+    ///
+    /// 当 `auto_accept=true` 时,preprocess 完成后(`handle_preprocess_actions_results`)
+    /// 把每个 action push 进 pending_actions 后,**立即对它们逐个调用 `execute_action`**
+    /// (内部走 `is_user_initiated=true` 路径,绕过 `NeedsConfirmation` 检查),
+    /// 而不是默认的 `try_to_execute_available_actions`(`is_user_initiated=false`)。
+    ///
+    /// 用途:OpenWarp BYOP 路径下 LRC tag-in 场景 — 用户主动 SetInputModeAgent 把
+    /// 控制权交给 agent,但 alt-screen 全屏下看不到 RequestedCommand 的 Accept 按钮,
+    /// controller 检测到 LRC 状态后用本方法绕开手动确认死锁。
+    pub(super) fn queue_actions_with_options(
+        &mut self,
+        actions: Vec<AIAgentAction>,
+        conversation_id: AIConversationId,
+        auto_accept: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
         self.action_order.insert(
             conversation_id,
             actions
@@ -937,7 +908,13 @@ impl BlocklistAIActionModel {
             .insert_preprocess_action_batch(action_ids);
 
         ctx.spawn(join_all(preprocess_future), move |me, _, ctx| {
-            me.handle_preprocess_actions_results(conversation_id, preprocess_id, actions, ctx);
+            me.handle_preprocess_actions_results(
+                conversation_id,
+                preprocess_id,
+                actions,
+                auto_accept,
+                ctx,
+            );
         });
     }
 
@@ -946,6 +923,7 @@ impl BlocklistAIActionModel {
         conversation_id: AIConversationId,
         preprocess_id: PreprocessId,
         actions: Vec<AIAgentAction>,
+        auto_accept: bool,
         ctx: &mut ModelContext<Self>,
     ) {
         let actions_to_enqueue = self
@@ -954,6 +932,7 @@ impl BlocklistAIActionModel {
             .or_default()
             .handle_preprocess_actions_result(preprocess_id, actions);
 
+        let mut auto_accept_ids: Vec<AIAgentActionId> = Vec::new();
         for action in actions_to_enqueue {
             let action_id = action.id.clone();
             // Some actions may already have results. This can happen in session sharing when
@@ -986,9 +965,26 @@ impl BlocklistAIActionModel {
                 .entry(conversation_id)
                 .or_default()
                 .push_back(action);
-            ctx.emit(BlocklistAIActionEvent::QueuedAction(action_id));
+            ctx.emit(BlocklistAIActionEvent::QueuedAction(action_id.clone()));
+            if auto_accept {
+                auto_accept_ids.push(action_id);
+            }
         }
-        self.try_to_execute_available_actions(conversation_id, ctx);
+        if auto_accept && !auto_accept_ids.is_empty() {
+            // OpenWarp:LRC tag-in 自动授权路径。Bypass 默认的
+            // try_to_execute_available_actions(is_user_initiated=false),
+            // 直接对每个刚 push 的 action 调用 execute_action(等价用户 Accept)。
+            log::info!(
+                "[byop-diag] queue_actions_with_options(auto_accept=true): \
+                 invoking execute_action for {} action(s)",
+                auto_accept_ids.len()
+            );
+            for action_id in auto_accept_ids {
+                self.execute_action(&action_id, conversation_id, ctx);
+            }
+        } else {
+            self.try_to_execute_available_actions(conversation_id, ctx);
+        }
     }
 
     /// Apply a finished action result to the conversation.
@@ -1104,24 +1100,6 @@ impl BlocklistAIActionModel {
         reason: Option<CancellationReason>,
         ctx: &mut ModelContext<Self>,
     ) {
-        if matches!(
-            pending_action.action,
-            AIAgentActionType::RequestComputerUse(_)
-        ) {
-            let server_conversation_id = BlocklistAIHistoryModel::as_ref(ctx)
-                .conversation(&conversation_id)
-                .and_then(|c| c.server_conversation_token())
-                .map(|t| t.as_str().to_string());
-            send_telemetry_from_ctx!(
-                TelemetryEvent::ComputerUseCancelled {
-                    client_conversation_id: conversation_id,
-                    server_conversation_id,
-                    ambient_agent_task_id: self.ambient_agent_task_id,
-                },
-                ctx
-            );
-        }
-
         let result = Arc::new(AIAgentActionResult {
             id: pending_action.id,
             task_id: pending_action.task_id,
@@ -1187,10 +1165,24 @@ impl BlocklistAIActionModel {
         }
 
         let Some(conversation_id) = found_conversation_id else {
+            log::error!(
+                "[byop-diag] handle_requested_command_accepted: action_id={action_id:?} NOT FOUND \
+                 in pending_actions. pending_conversations=[{}] (action 没正确入 pending_actions,\
+                 chain 在 controller.queue_actions → action_model.try_to_execute_action 这一段断了)",
+                self.pending_actions
+                    .iter()
+                    .map(|(c, q)| format!("{c:?}:{}", q.len()))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
             debug_assert!(false, "Expected action to be requested command.");
             return;
         };
 
+        log::info!(
+            "[byop-diag] handle_requested_command_accepted: action_id={action_id:?} found in \
+             conversation_id={conversation_id:?}, calling execute_action"
+        );
         self.execute_action(action_id, conversation_id, ctx);
     }
 

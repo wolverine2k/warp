@@ -28,6 +28,7 @@ use crate::pane_group::{PaneGroup, WorkingDirectoriesEvent, WorkingDirectoriesMo
 use crate::server::telemetry::CodePanelsFileOpenEntrypoint;
 use crate::server::telemetry::{FileTreeSource, WarpDriveSource};
 use crate::settings_view::keybindings::{KeybindingChangedEvent, KeybindingChangedNotifier};
+use crate::ssh_manager::SshManagerPanel;
 #[cfg(feature = "local_fs")]
 use crate::util::file::external_editor::EditorSettings;
 #[cfg(feature = "local_fs")]
@@ -41,9 +42,10 @@ use crate::workspace::view::global_search::view::{
 };
 use crate::workspace::view::{
     LEFT_PANEL_AGENT_CONVERSATIONS_BINDING_NAME, LEFT_PANEL_GLOBAL_SEARCH_BINDING_NAME,
-    LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME, LEFT_PANEL_WARP_DRIVE_BINDING_NAME,
-    OPEN_GLOBAL_SEARCH_BINDING_NAME, TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME,
-    TOGGLE_PROJECT_EXPLORER_BINDING_NAME, TOGGLE_WARP_DRIVE_BINDING_NAME,
+    LEFT_PANEL_PROJECT_EXPLORER_BINDING_NAME, LEFT_PANEL_SSH_MANAGER_BINDING_NAME,
+    LEFT_PANEL_WARP_DRIVE_BINDING_NAME, OPEN_GLOBAL_SEARCH_BINDING_NAME,
+    TOGGLE_CONVERSATION_LIST_VIEW_BINDING_NAME, TOGGLE_PROJECT_EXPLORER_BINDING_NAME,
+    TOGGLE_WARP_DRIVE_BINDING_NAME,
 };
 use crate::{
     appearance::Appearance,
@@ -67,6 +69,7 @@ struct MouseStateHandles {
     global_search_button: MouseStateHandle,
     warp_drive_button: MouseStateHandle,
     conversation_list_view_button: MouseStateHandle,
+    ssh_manager_button: MouseStateHandle,
 }
 
 #[derive(Clone, Debug)]
@@ -75,6 +78,7 @@ pub enum LeftPanelAction {
     GlobalSearch { entry_focus: GlobalSearchEntryFocus },
     WarpDrive,
     ConversationListView,
+    SshManager,
 }
 
 pub enum LeftPanelEvent {
@@ -93,6 +97,17 @@ pub enum LeftPanelEvent {
         conversation_title: String,
         terminal_view_id: Option<warpui::EntityId>,
     },
+    /// 用户从 SSH 管理器树点击 server / 双击 / 右键 "编辑" → 主窗口应在中央
+    /// 区开/聚焦 `SshServerPane`(具体 `WorkspaceView::open_ssh_server`)。
+    OpenSshServerEditor {
+        node_id: String,
+    },
+    /// 用户从 SSH 管理器右键 "连接" → 主窗口在新 terminal pane 跑 `ssh ...`
+    /// 并启动 SecretInjector(Commit 3 实施;当前为占位事件)。
+    OpenSshTerminal {
+        node_id: String,
+        server: warp_ssh_manager::SshServerInfo,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +116,7 @@ pub enum ToolPanelView {
     GlobalSearch { entry_focus: GlobalSearchEntryFocus },
     WarpDrive,
     ConversationListView,
+    SshManager,
 }
 
 /// Encapsulates the active view state to enforce that all mutations go through
@@ -167,6 +183,7 @@ pub struct LeftPanelView {
     close_button_mouse_state: MouseStateHandle,
     warp_drive_view: ViewHandle<DrivePanel>,
     conversation_list_view: ViewHandle<ConversationListView>,
+    ssh_manager_view: ViewHandle<SshManagerPanel>,
     active_view: active_view_state::ActiveViewState,
     toolbelt_buttons: Vec<ToolbeltButtonConfig>,
     active_pane_group: Option<WeakViewHandle<PaneGroup>>,
@@ -211,6 +228,26 @@ impl LeftPanelView {
         };
         let warp_drive_view = ctx.add_typed_action_view(DrivePanel::new);
         let conversation_list_view = ctx.add_typed_action_view(ConversationListView::new);
+        let ssh_manager_view = ctx.add_typed_action_view(SshManagerPanel::new);
+        ctx.subscribe_to_view(&ssh_manager_view, |_me, _, event, ctx| {
+            use crate::ssh_manager::SshManagerPanelEvent;
+            match event {
+                SshManagerPanelEvent::OpenServerEditor { node_id } => {
+                    ctx.emit(LeftPanelEvent::OpenSshServerEditor {
+                        node_id: node_id.clone(),
+                    });
+                }
+                SshManagerPanelEvent::OpenSshTerminal { node_id, server } => {
+                    ctx.emit(LeftPanelEvent::OpenSshTerminal {
+                        node_id: node_id.clone(),
+                        server: server.clone(),
+                    });
+                }
+                SshManagerPanelEvent::PersistenceError(msg) => {
+                    log::error!("ssh_manager persistence error: {msg}");
+                }
+            }
+        });
 
         ctx.subscribe_to_view(&warp_drive_view, |_me, _, event, ctx| {
             ctx.emit(LeftPanelEvent::WarpDrive(event.clone()));
@@ -308,6 +345,7 @@ impl LeftPanelView {
             close_button_mouse_state: Default::default(),
             warp_drive_view,
             conversation_list_view,
+            ssh_manager_view,
             active_view: active_view_state::new(active_view),
             toolbelt_buttons,
             active_pane_group: None,
@@ -347,6 +385,7 @@ impl LeftPanelView {
             // Use discriminant comparison for GlobalSearch since it has inner data
             match (v, &current_view) {
                 (ToolPanelView::GlobalSearch { .. }, ToolPanelView::GlobalSearch { .. }) => true,
+                (ToolPanelView::SshManager, ToolPanelView::SshManager) => true,
                 _ => std::mem::discriminant(v) == std::mem::discriminant(&current_view),
             }
         });
@@ -383,7 +422,7 @@ impl LeftPanelView {
                 ToolbeltButtonConfig {
                     icon: Icon::FileCopy,
                     active_icon: None,
-                    tooltip_text: "Project explorer".to_string(),
+                    tooltip_text: crate::t!("workspace-left-panel-project-explorer"),
                     action: LeftPanelAction::ProjectExplorer,
                     render_with_active_state: false,
                     tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
@@ -399,7 +438,7 @@ impl LeftPanelView {
                 ToolbeltButtonConfig {
                     icon: Icon::Search,
                     active_icon: None,
-                    tooltip_text: "Global search".to_string(),
+                    tooltip_text: crate::t!("workspace-left-panel-global-search"),
                     action: LeftPanelAction::GlobalSearch {
                         entry_focus: GlobalSearchEntryFocus::QueryEditor,
                     },
@@ -417,7 +456,7 @@ impl LeftPanelView {
                 ToolbeltButtonConfig {
                     icon: Icon::WarpDrive,
                     active_icon: None,
-                    tooltip_text: "Warp Drive".to_string(),
+                    tooltip_text: crate::t!("workspace-left-panel-warp-drive"),
                     action: LeftPanelAction::WarpDrive,
                     render_with_active_state: false,
                     tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
@@ -433,8 +472,20 @@ impl LeftPanelView {
                 ToolbeltButtonConfig {
                     icon: Icon::Conversation,
                     active_icon: Some(Icon::Conversation),
-                    tooltip_text: "Agent conversations".to_string(),
+                    tooltip_text: crate::t!("workspace-left-panel-agent-conversations"),
                     action: LeftPanelAction::ConversationListView,
+                    render_with_active_state: false,
+                    tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
+                    tooltip_keybinding_names,
+                }
+            }
+            ToolPanelView::SshManager => {
+                let tooltip_keybinding_names = vec![LEFT_PANEL_SSH_MANAGER_BINDING_NAME];
+                ToolbeltButtonConfig {
+                    icon: Icon::Server01,
+                    active_icon: None,
+                    tooltip_text: crate::t!("workspace-left-panel-ssh-manager"),
+                    action: LeftPanelAction::SshManager,
                     render_with_active_state: false,
                     tooltip_keybinding: toolbelt_tooltip_keybinding(&tooltip_keybinding_names, ctx),
                     tooltip_keybinding_names,
@@ -682,6 +733,9 @@ impl LeftPanelView {
                     view.on_left_panel_focused(ctx);
                 });
             }
+            ToolPanelView::SshManager => {
+                ctx.focus(&self.ssh_manager_view);
+            }
         }
     }
 
@@ -792,12 +846,12 @@ impl LeftPanelView {
 
         let tooltip = if let Some(keybinding) = tooltip_keybinding {
             ui_builder
-                .tool_tip_with_sublabel("Close panel".to_string(), keybinding)
+                .tool_tip_with_sublabel(crate::t!("workspace-left-panel-close-panel"), keybinding)
                 .build()
                 .finish()
         } else {
             ui_builder
-                .tool_tip("Close panel".to_string())
+                .tool_tip(crate::t!("workspace-left-panel-close-panel"))
                 .build()
                 .finish()
         };
@@ -834,6 +888,7 @@ impl LeftPanelView {
                 LeftPanelAction::ConversationListView => {
                     self.active_view.get() == ToolPanelView::ConversationListView
                 }
+                LeftPanelAction::SshManager => self.active_view.get() == ToolPanelView::SshManager,
             };
         }
     }
@@ -975,6 +1030,9 @@ impl LeftPanelView {
                 active_view_state::set(self, ToolPanelView::ConversationListView, ctx);
                 send_telemetry_from_ctx!(TelemetryEvent::ConversationListViewOpened, ctx);
             }
+            LeftPanelAction::SshManager => {
+                active_view_state::set(self, ToolPanelView::SshManager, ctx);
+            }
         }
     }
 
@@ -1074,6 +1132,7 @@ impl View for LeftPanelView {
                 }
                 ToolPanelView::WarpDrive => ctx.focus(&self.warp_drive_view),
                 ToolPanelView::ConversationListView => ctx.focus(&self.conversation_list_view),
+                ToolPanelView::SshManager => ctx.focus(&self.ssh_manager_view),
             }
         }
     }
@@ -1088,6 +1147,7 @@ impl View for LeftPanelView {
             self.mouse_state_handles
                 .conversation_list_view_button
                 .clone(),
+            self.mouse_state_handles.ssh_manager_button.clone(),
         ];
 
         // If there is only one button in the toolbelt row,
@@ -1146,6 +1206,14 @@ impl View for LeftPanelView {
             ToolPanelView::ConversationListView => {
                 Shrinkable::new(1.0, ChildView::new(&self.conversation_list_view).finish()).finish()
             }
+            ToolPanelView::SshManager => Shrinkable::new(
+                1.0,
+                Container::new(ChildView::new(&self.ssh_manager_view).finish())
+                    .with_padding_left(2.)
+                    .with_padding_right(2.)
+                    .finish(),
+            )
+            .finish(),
         };
 
         let panel_content = Container::new({

@@ -29,33 +29,31 @@ impl CliAgentPluginManager for CodexPluginManager {
     }
 }
 
-static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
-    PluginInstructions {
-    title: "Enable Warp Notifications for Codex",
-    subtitle: "Update Codex to the latest version, then enable in-focus notifications so Warp can display them while you work.",
-    steps: &[
+static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
+    title: crate::t_static!("cli-agent-plugin-codex-install-title"),
+    subtitle: crate::t_static!("cli-agent-plugin-codex-install-subtitle"),
+    steps: vec![
         PluginInstructionStep {
-            description: "Update Codex to the latest version.",
+            description: crate::t_static!("cli-agent-plugin-codex-update-step"),
             command: "",
             executable: false,
             link: Some("https://developers.openai.com/codex/cli#upgrade"),
         },
         PluginInstructionStep {
-            description: "Set the notification condition to \"always\" in your Codex config. Open or create ~/.codex/config.toml and add:",
+            description: crate::t_static!("cli-agent-plugin-codex-notification-step"),
             command: "[tui]\nnotification_condition = \"always\"",
             executable: false,
             link: None,
         },
     ],
-    post_install_notes: &["Restart Codex to apply the changes."],
-}
+    post_install_notes: vec![crate::t_static!("cli-agent-plugin-codex-restart-note")],
 });
 
 static EMPTY_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
     title: "",
     subtitle: "",
-    steps: &[],
-    post_install_notes: &[],
+    steps: vec![],
+    post_install_notes: vec![],
 });
 
 #[cfg(test)]

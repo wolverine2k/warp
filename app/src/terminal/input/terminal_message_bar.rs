@@ -204,7 +204,7 @@ impl MessageProvider<TerminalMessageArgs<'_>> for AgentMessageProducer {
                     key: "enter".to_owned(),
                     ..Default::default()
                 }),
-                MessageItem::text(" new conversation"),
+                MessageItem::text(crate::t!("terminal-message-new-conversation")),
             ])
             .with_color(message_magenta(theme)),
         )
@@ -235,7 +235,7 @@ impl MessageProvider<TerminalMessageArgs<'_>> for PlanMessageProducer {
                     key: "enter".to_owned(),
                     ..Default::default()
                 }),
-                MessageItem::text(" plan with agent"),
+                MessageItem::text(crate::t!("terminal-message-plan-with-agent")),
             ])
             .with_color(message_magenta(theme)),
         )
@@ -257,7 +257,7 @@ impl MessageProvider<TerminalMessageArgs<'_>> for ContinueConversationMessagePro
         let keystroke = keybinding_name_to_keystroke(commands::CONVERSATIONS.name, args.app)?;
         Some(Message::new(vec![
             MessageItem::keystroke(keystroke),
-            MessageItem::text(" to continue conversation"),
+            MessageItem::text(crate::t!("terminal-message-continue-conversation")),
         ]))
     }
 }
@@ -344,12 +344,12 @@ impl MessageProvider<TerminalMessageArgs<'_>> for DefaultMessageProducer {
         if let Some(keystroke) = keystroke {
             Some(Message::new(vec![
                 MessageItem::keystroke(keystroke),
-                MessageItem::text(" new /agent conversation"),
+                MessageItem::text(crate::t!("terminal-message-new-agent-conversation")),
             ]))
         } else {
-            Some(Message::new(vec![MessageItem::text(
-                "/agent for new conversation",
-            )]))
+            Some(Message::new(vec![MessageItem::text(crate::t!(
+                "terminal-message-agent-for-new-conversation"
+            ))]))
         }
     }
 }
@@ -363,13 +363,25 @@ impl MessageProvider<Option<&AcceptHistoryItem>> for InlineHistoryMessageProduce
         });
         let items = match selected {
             Some(AcceptHistoryItem::Command { .. }) => {
-                vec![enter, MessageItem::text(" to execute")]
+                vec![
+                    enter,
+                    MessageItem::text(crate::t!("terminal-message-to-execute")),
+                ]
             }
             Some(AcceptHistoryItem::AIPrompt { .. }) => {
-                vec![enter, MessageItem::text(" to send")]
+                vec![
+                    enter,
+                    MessageItem::text(crate::t!("terminal-message-to-send")),
+                ]
             }
             Some(AcceptHistoryItem::Conversation { title, .. }) => {
-                vec![enter, MessageItem::text(format!(" to open '{title}'"))]
+                vec![
+                    enter,
+                    MessageItem::text(crate::t!(
+                        "terminal-message-open-conversation-title",
+                        title = title
+                    )),
+                ]
             }
             None => {
                 vec![MessageItem::text("")]
@@ -402,9 +414,9 @@ impl MessageTransformer<TerminalMessageArgs<'_>> for AutodetectedPromptMessageTr
                     });
 
             message.items.extend([
-                MessageItem::text(" (autodetected) "),
+                MessageItem::text(crate::t!("terminal-message-autodetected")),
                 MessageItem::keystroke(set_terminal_mode_keystroke),
-                MessageItem::text(" to override"),
+                MessageItem::text(crate::t!("terminal-message-to-override")),
             ]);
         }
         message.set_color(message_magenta(Appearance::as_ref(args.app).theme()));

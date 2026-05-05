@@ -209,7 +209,10 @@ pub(super) fn convert_input(
                     )),
                 });
             }
-            AIAgentInput::SummarizeConversation { prompt } => {
+            AIAgentInput::SummarizeConversation {
+                prompt,
+                overflow: _,
+            } => {
                 return Ok(api::request::Input {
                     context: None,
                     r#type: Some(api::request::input::Type::SummarizeConversation(
@@ -615,9 +618,6 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
             AIAgentActionResultType::ReadFiles(read_files_result) => {
                 Some(read_files_result.try_into()?)
             }
-            AIAgentActionResultType::UploadArtifact(upload_artifact_result) => {
-                Some(upload_artifact_result.try_into()?)
-            }
             AIAgentActionResultType::SearchCodebase(search_codebase_result) => {
                 Some(search_codebase_result.try_into()?)
             }
@@ -671,29 +671,11 @@ impl TryFrom<AIAgentActionResult> for api::request::input::user_inputs::user_inp
             AIAgentActionResultType::ReadShellCommandOutput(read_shell_command_output_result) => {
                 Some(read_shell_command_output_result.try_into()?)
             }
-            AIAgentActionResultType::UseComputer(use_computer_result) => {
-                Some(use_computer_result.try_into()?)
-            }
-            AIAgentActionResultType::RequestComputerUse(request_computer_use_result) => {
-                Some(request_computer_use_result.try_into()?)
-            }
-            AIAgentActionResultType::FetchConversation(fetch_conversation_result) => {
-                Some(fetch_conversation_result.try_into()?)
-            }
-            AIAgentActionResultType::StartAgent(start_agent_result) => {
-                Some(start_agent_result.into())
-            }
-            AIAgentActionResultType::SendMessageToAgent(send_message_result) => {
-                Some(send_message_result.into())
-            }
             AIAgentActionResultType::TransferShellCommandControlToUser(transfer_control_result) => {
                 Some(transfer_control_result.try_into()?)
             }
             AIAgentActionResultType::AskUserQuestion(ask_user_question_result) => {
                 Some(ask_user_question_result.into())
-            }
-            AIAgentActionResultType::RunAgents(orchestrate_result) => {
-                Some(orchestrate_result.try_into()?)
             }
         };
         Ok(

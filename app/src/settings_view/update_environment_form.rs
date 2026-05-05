@@ -343,8 +343,6 @@ pub struct UpdateEnvironmentForm {
 }
 
 const DESCRIPTION_MAX_CHARS: usize = 240;
-const REPOS_PLACEHOLDER_AUTHED: &str = "Enter repos (owner/repo format)";
-const REPOS_PLACEHOLDER_UNAUTHED: &str = "Paste repo URL(s)";
 const FORM_FIELD_SPACING: f32 = 20.;
 const FORM_LABEL_SPACING: f32 = 6.;
 const FORM_INPUT_HEIGHT: f32 = 36.;
@@ -387,15 +385,26 @@ impl UpdateEnvironmentForm {
             form.update_editor_text_colors(ctx);
         });
         // Create editors
-        let name_editor = Self::create_single_line_editor("Environment name", ctx);
+        let name_editor = Self::create_single_line_editor(
+            crate::t_static!("settings-update-environment-name-placeholder"),
+            ctx,
+        );
         let description_editor = Self::create_description_editor(ctx);
-        let docker_image_editor =
-            Self::create_single_line_editor("e.g. python:3.11, node:20-alpine", ctx);
-        let repos_input_editor = Self::create_single_line_editor(REPOS_PLACEHOLDER_AUTHED, ctx);
+        let docker_image_editor = Self::create_single_line_editor(
+            crate::t_static!("settings-update-environment-docker-image-placeholder"),
+            ctx,
+        );
+        let repos_input_editor = Self::create_single_line_editor(
+            crate::t_static!("settings-update-environment-repos-placeholder-authed"),
+            ctx,
+        );
 
         let setup_commands_input = ctx.add_typed_action_view(|ctx| {
             let mut input = SubmittableTextInput::new(ctx);
-            input.set_placeholder_text("e.g. cd my-repo && pip install -r requirements.txt", ctx);
+            input.set_placeholder_text(
+                crate::t!("settings-update-environment-setup-command-placeholder"),
+                ctx,
+            );
             // Keep this consistent with other form inputs (e.g. repos): caller controls spacing.
             input.set_outer_margins(0., 0., ctx);
             input
@@ -441,7 +450,7 @@ impl UpdateEnvironmentForm {
 
         // Create buttons
         let submit_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Create", PrimaryTheme)
+            ActionButton::new(crate::t!("common-create"), PrimaryTheme)
                 .with_icon(Icon::Check)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Submit);
@@ -449,11 +458,14 @@ impl UpdateEnvironmentForm {
         });
 
         let delete_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Delete environment", DangerSecondaryTheme)
-                .with_icon(Icon::Trash)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Delete);
-                })
+            ActionButton::new(
+                crate::t!("settings-environment-delete-button"),
+                DangerSecondaryTheme,
+            )
+            .with_icon(Icon::Trash)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(UpdateEnvironmentFormAction::Delete);
+            })
         });
 
         // Set up editor subscriptions
@@ -832,9 +844,9 @@ impl UpdateEnvironmentForm {
 
     fn update_repos_input_placeholder(&mut self, ctx: &mut ViewContext<Self>) {
         let placeholder = if self.github_dropdown_state.auth_url.is_some() {
-            REPOS_PLACEHOLDER_UNAUTHED
+            crate::t_static!("settings-update-environment-repos-placeholder-unauthenticated")
         } else {
-            REPOS_PLACEHOLDER_AUTHED
+            crate::t_static!("settings-update-environment-repos-placeholder-authed")
         };
         self.repos_input_editor.update(ctx, |editor, ctx| {
             editor.set_placeholder_text(placeholder, ctx);
@@ -915,7 +927,7 @@ impl UpdateEnvironmentForm {
             };
             let mut editor = EditorView::new(options, ctx);
             editor.set_placeholder_text(
-                "e.g., this environment is for all front end focused agents",
+                crate::t!("settings-update-environment-description-placeholder"),
                 ctx,
             );
             editor
@@ -2115,7 +2127,7 @@ impl UpdateEnvironmentForm {
                             )
                             .with_child(
                                 Text::new(
-                                    "Retry",
+                                    crate::t!("common-retry"),
                                     appearance.ui_font_family(),
                                     appearance.ui_font_size(),
                                 )

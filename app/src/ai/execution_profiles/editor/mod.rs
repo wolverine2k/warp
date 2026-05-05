@@ -4,9 +4,7 @@ use crate::ai::execution_profiles::{
     profiles::{AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId},
     AIExecutionProfile, ActionPermission, WriteToPtyPermission,
 };
-use crate::ai::llms::{
-    DisableReason, LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent,
-};
+use crate::ai::llms::{LLMContextWindow, LLMId, LLMInfo, LLMPreferences, LLMPreferencesEvent};
 use crate::ai::paths::host_native_absolute_path;
 use crate::editor::InteractionState;
 use crate::editor::{EditorView, Event as EditorEvent, SingleLineEditorOptions, TextOptions};
@@ -17,7 +15,6 @@ use crate::view_components::{
     action_button::{ActionButton, DangerSecondaryTheme},
     Dropdown, DropdownItem, FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
 };
-use crate::workspace::WorkspaceAction;
 use crate::workspaces::user_workspaces::UserWorkspacesEvent;
 use crate::TemplatableMCPServerManager;
 use crate::UserWorkspaces;
@@ -29,18 +26,14 @@ use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent};
 use itertools::Itertools;
 use regex::Regex;
 use thousands::Separable;
-use warp_core::ui::theme::color::internal_colors;
-use warpui::fonts::Properties;
-use warpui::platform::Cursor;
 use warpui::ui_components::slider::SliderStateHandle;
 use warpui::ui_components::switch::SwitchStateHandle;
 
 use std::path::{Path, PathBuf};
 use warpui::{
     elements::{
-        Align, Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-        Container, CrossAxisAlignment, Expanded, Flex, Highlight, MouseStateHandle, ParentElement,
-        PartialClickableElement, ScrollbarWidth, Text,
+        Align, ChildView, ClippedScrollStateHandle, ClippedScrollable, Container, Flex,
+        MouseStateHandle, ParentElement, ScrollbarWidth,
     },
     AppContext, Element, Entity, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
@@ -48,71 +41,8 @@ use warpui::{
 
 const MODEL_MENU_WIDTH: f32 = 250.;
 
-/// Renders a footer banner for model dropdowns informing free-plan users that
-/// frontier models require an upgrade, with a clickable "Upgrade" link.
-fn render_upgrade_footer(
-    upgrade_mouse_state: MouseStateHandle,
-    app: &AppContext,
-) -> Box<dyn Element> {
-    let appearance = Appearance::as_ref(app);
-    let theme = appearance.theme();
-    let surface = theme.surface_2();
-    let text_color = theme.main_text_color(surface);
-
-    let info_icon = ConstrainedBox::new(
-        warp_core::ui::Icon::Info
-            .to_warpui_icon(text_color)
-            .finish(),
-    )
-    .with_width(16.)
-    .with_height(16.)
-    .finish();
-
-    let label = "Frontier models are unavailable on free plans. Upgrade";
-    let upgrade_start = label.len() - "Upgrade".len();
-    let info_text = Text::new(
-        label,
-        appearance.ui_font_family(),
-        appearance.ui_font_size(),
-    )
-    .with_color(text_color.into())
-    .with_single_highlight(
-        Highlight::new()
-            .with_properties(Properties::default())
-            .with_foreground_color(internal_colors::accent_fg(theme).into()),
-        (upgrade_start..label.len()).collect(),
-    )
-    .with_hoverable_char_range(
-        upgrade_start..label.len(),
-        upgrade_mouse_state,
-        Some(Cursor::PointingHand),
-        |_is_hovered, _ctx, _app| {},
-    )
-    .with_clickable_char_range(upgrade_start..label.len(), move |_modifiers, ctx, _app| {
-        ctx.dispatch_typed_action(WorkspaceAction::ShowUpgrade);
-    })
-    .finish();
-
-    let inner = Container::new(
-        Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Start)
-            .with_child(
-                Container::new(info_icon)
-                    .with_margin_right(6.)
-                    .with_margin_top(2.)
-                    .finish(),
-            )
-            .with_child(Expanded::new(1., info_text).finish())
-            .finish(),
-    )
-    .with_horizontal_padding(16.)
-    .with_vertical_padding(6.)
-    .with_background(internal_colors::fg_overlay_1(theme))
-    .with_border(Border::top(1.).with_border_color(internal_colors::neutral_3(theme)))
-    .finish();
-
-    Container::new(inner).with_background(surface).finish()
-}
+// 去中心化分支:原 `render_upgrade_footer` 用于在模型下拉菜单底部展示 "前沿模型
+// 需要升级到付费计划" 的 banner;本地模式下不再有付费 / 免费区分,整段已删除。
 
 #[derive(Default)]
 struct TooltipMouseStateHandles {
@@ -134,7 +64,9 @@ struct TooltipMouseStateHandles {
 pub mod manager;
 pub use manager::*;
 
-pub const HEADER_TEXT: &str = "Profile Editor";
+pub fn header_text() -> String {
+    crate::t!("settings-exec-profile-editor-header")
+}
 
 #[derive(Debug, Clone)]
 pub enum ExecutionProfileEditorViewEvent {
@@ -161,6 +93,15 @@ pub enum ExecutionProfileEditorViewAction {
         id: LLMId,
     },
     SetFullTerminalUseModel {
+        id: LLMId,
+    },
+    SetTitleModel {
+        id: LLMId,
+    },
+    SetActiveAiModel {
+        id: LLMId,
+    },
+    SetNextCommandModel {
         id: LLMId,
     },
     SetComputerUseModel {
@@ -220,9 +161,6 @@ pub enum ExecutionProfileEditorViewAction {
         id: uuid::Uuid,
     },
     DeleteProfile,
-    SetPlanAutoSync {
-        enabled: bool,
-    },
     SetWebSearchEnabled {
         enabled: bool,
     },
@@ -240,6 +178,9 @@ pub struct ExecutionProfileEditorView {
     coding_model_dropdown: ViewHandle<Dropdown<ExecutionProfileEditorViewAction>>,
     full_terminal_use_model_dropdown:
         ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
+    title_model_dropdown: ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
+    active_ai_model_dropdown: ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
+    next_command_model_dropdown: ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
     computer_use_model_dropdown: ViewHandle<FilterableDropdown<ExecutionProfileEditorViewAction>>,
     apply_code_diffs_dropdown: ViewHandle<Dropdown<ExecutionProfileEditorViewAction>>,
     read_files_dropdown: ViewHandle<Dropdown<ExecutionProfileEditorViewAction>>,
@@ -262,14 +203,13 @@ pub struct ExecutionProfileEditorView {
     profile_name_editor: ViewHandle<EditorView>,
     delete_button: ViewHandle<ActionButton>,
     tooltip_mouse_state_handles: TooltipMouseStateHandles,
-    plan_auto_sync_switch: SwitchStateHandle,
     web_search_switch: SwitchStateHandle,
     upgrade_footer_mouse_state: MouseStateHandle,
 }
 
 impl ExecutionProfileEditorView {
     pub fn new(profile_id: ClientProfileId, ctx: &mut ViewContext<Self>) -> Self {
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(HEADER_TEXT));
+        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new(header_text()));
 
         let apply_code_diffs_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = Dropdown::new(ctx);
@@ -530,6 +470,21 @@ impl ExecutionProfileEditorView {
             dropdown.set_menu_width(MODEL_MENU_WIDTH, ctx);
             dropdown
         });
+        let title_model_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = FilterableDropdown::new(ctx);
+            dropdown.set_menu_width(MODEL_MENU_WIDTH, ctx);
+            dropdown
+        });
+        let active_ai_model_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = FilterableDropdown::new(ctx);
+            dropdown.set_menu_width(MODEL_MENU_WIDTH, ctx);
+            dropdown
+        });
+        let next_command_model_dropdown = ctx.add_typed_action_view(|ctx| {
+            let mut dropdown = FilterableDropdown::new(ctx);
+            dropdown.set_menu_width(MODEL_MENU_WIDTH, ctx);
+            dropdown
+        });
         let computer_use_model_dropdown = ctx.add_typed_action_view(|ctx| {
             let mut dropdown = FilterableDropdown::new(ctx);
             dropdown.set_menu_width(MODEL_MENU_WIDTH, ctx);
@@ -538,7 +493,7 @@ impl ExecutionProfileEditorView {
         let command_allowlist_editor = ctx.add_typed_action_view(|ctx| {
             let mut input =
                 SubmittableTextInput::new(ctx).validate_on_edit(|s| Regex::new(s).is_ok());
-            input.set_placeholder_text("e.g. ls .*", ctx);
+            input.set_placeholder_text(crate::t!("settings-ai-regex-example-placeholder"), ctx);
             input
         });
 
@@ -551,7 +506,7 @@ impl ExecutionProfileEditorView {
         let command_denylist_editor = ctx.add_typed_action_view(|ctx| {
             let mut input =
                 SubmittableTextInput::new(ctx).validate_on_edit(|s| Regex::new(s).is_ok());
-            input.set_placeholder_text("e.g. rm .*", ctx);
+            input.set_placeholder_text(crate::t!("settings-ai-regex-example-placeholder"), ctx);
             input
         });
 
@@ -566,7 +521,7 @@ impl ExecutionProfileEditorView {
                 let expanded = host_native_absolute_path(s, &None, &None);
                 Path::new(&expanded).is_dir()
             });
-            input.set_placeholder_text("e.g. ~/code-repos/repo", ctx);
+            input.set_placeholder_text(crate::t!("settings-ai-repo-placeholder"), ctx);
             input
         });
 
@@ -584,7 +539,7 @@ impl ExecutionProfileEditorView {
                 },
                 ctx,
             );
-            editor.set_placeholder_text("e.g. \"YOLO code\"", ctx);
+            editor.set_placeholder_text(crate::t!("ai-execution-profile-name-placeholder"), ctx);
             editor
         });
 
@@ -598,11 +553,14 @@ impl ExecutionProfileEditorView {
         Self::update_profile_name_editor(&profile_name_editor, &profile_data, ctx);
 
         let delete_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Delete profile", DangerSecondaryTheme)
-                .with_icon(Icon::Trash)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(ExecutionProfileEditorViewAction::DeleteProfile);
-                })
+            ActionButton::new(
+                crate::t!("ai-execution-profile-delete-profile"),
+                DangerSecondaryTheme,
+            )
+            .with_icon(Icon::Trash)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(ExecutionProfileEditorViewAction::DeleteProfile);
+            })
         });
 
         let mut view = Self {
@@ -616,6 +574,9 @@ impl ExecutionProfileEditorView {
             last_synced_context_window_editor_value,
             coding_model_dropdown,
             full_terminal_use_model_dropdown,
+            title_model_dropdown,
+            active_ai_model_dropdown,
+            next_command_model_dropdown,
             computer_use_model_dropdown,
             apply_code_diffs_dropdown,
             read_files_dropdown,
@@ -642,7 +603,6 @@ impl ExecutionProfileEditorView {
             profile_name_editor,
             delete_button,
             tooltip_mouse_state_handles: Default::default(),
-            plan_auto_sync_switch: Default::default(),
             web_search_switch: Default::default(),
             upgrade_footer_mouse_state: Default::default(),
         };
@@ -737,6 +697,33 @@ impl ExecutionProfileEditorView {
                         ctx,
                     );
                     Self::refresh_filterable_model_dropdown(
+                        &me.title_model_dropdown,
+                        current_permissions.title_model.clone(),
+                        |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+                        |id| ExecutionProfileEditorViewAction::SetTitleModel { id },
+                        |prefs| prefs.get_default_base_model().id.clone(),
+                        &me.upgrade_footer_mouse_state,
+                        ctx,
+                    );
+                    Self::refresh_filterable_model_dropdown(
+                        &me.active_ai_model_dropdown,
+                        current_permissions.active_ai_model.clone(),
+                        |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+                        |id| ExecutionProfileEditorViewAction::SetActiveAiModel { id },
+                        |prefs| prefs.get_default_base_model().id.clone(),
+                        &me.upgrade_footer_mouse_state,
+                        ctx,
+                    );
+                    Self::refresh_filterable_model_dropdown(
+                        &me.next_command_model_dropdown,
+                        current_permissions.next_command_model.clone(),
+                        |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+                        |id| ExecutionProfileEditorViewAction::SetNextCommandModel { id },
+                        |prefs| prefs.get_default_base_model().id.clone(),
+                        &me.upgrade_footer_mouse_state,
+                        ctx,
+                    );
+                    Self::refresh_filterable_model_dropdown(
                         &me.computer_use_model_dropdown,
                         current_permissions.computer_use_model.clone(),
                         |prefs| prefs.get_computer_use_llm_choices().collect_vec(),
@@ -757,6 +744,34 @@ impl ExecutionProfileEditorView {
                         &me.upgrade_footer_mouse_state,
                         ctx,
                     );
+                    // title / active_ai 模型 fallback 到 base,base 变更时也要刷新展示。
+                    Self::refresh_filterable_model_dropdown(
+                        &me.title_model_dropdown,
+                        current_permissions.title_model.clone(),
+                        |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+                        |id| ExecutionProfileEditorViewAction::SetTitleModel { id },
+                        |prefs| prefs.get_default_base_model().id.clone(),
+                        &me.upgrade_footer_mouse_state,
+                        ctx,
+                    );
+                    Self::refresh_filterable_model_dropdown(
+                        &me.active_ai_model_dropdown,
+                        current_permissions.active_ai_model.clone(),
+                        |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+                        |id| ExecutionProfileEditorViewAction::SetActiveAiModel { id },
+                        |prefs| prefs.get_default_base_model().id.clone(),
+                        &me.upgrade_footer_mouse_state,
+                        ctx,
+                    );
+                    Self::refresh_filterable_model_dropdown(
+                        &me.next_command_model_dropdown,
+                        current_permissions.next_command_model.clone(),
+                        |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+                        |id| ExecutionProfileEditorViewAction::SetNextCommandModel { id },
+                        |prefs| prefs.get_default_base_model().id.clone(),
+                        &me.upgrade_footer_mouse_state,
+                        ctx,
+                    );
                     me.sync_context_window_editor(ctx, false);
                 }
                 LLMPreferencesEvent::UpdatedActiveCodingLLM => {
@@ -766,6 +781,7 @@ impl ExecutionProfileEditorView {
                         ctx,
                     );
                 }
+                LLMPreferencesEvent::UpdatedReasoningEffort => {}
             }
         });
 
@@ -781,6 +797,33 @@ impl ExecutionProfileEditorView {
                     current_permissions.base_model.clone(),
                     |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
                     |id| ExecutionProfileEditorViewAction::SetBaseModel { id },
+                    |prefs| prefs.get_default_base_model().id.clone(),
+                    &me.upgrade_footer_mouse_state,
+                    ctx,
+                );
+                Self::refresh_filterable_model_dropdown(
+                    &me.title_model_dropdown,
+                    current_permissions.title_model.clone(),
+                    |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+                    |id| ExecutionProfileEditorViewAction::SetTitleModel { id },
+                    |prefs| prefs.get_default_base_model().id.clone(),
+                    &me.upgrade_footer_mouse_state,
+                    ctx,
+                );
+                Self::refresh_filterable_model_dropdown(
+                    &me.active_ai_model_dropdown,
+                    current_permissions.active_ai_model.clone(),
+                    |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+                    |id| ExecutionProfileEditorViewAction::SetActiveAiModel { id },
+                    |prefs| prefs.get_default_base_model().id.clone(),
+                    &me.upgrade_footer_mouse_state,
+                    ctx,
+                );
+                Self::refresh_filterable_model_dropdown(
+                    &me.next_command_model_dropdown,
+                    current_permissions.next_command_model.clone(),
+                    |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+                    |id| ExecutionProfileEditorViewAction::SetNextCommandModel { id },
                     |prefs| prefs.get_default_base_model().id.clone(),
                     &me.upgrade_footer_mouse_state,
                     ctx,
@@ -911,6 +954,33 @@ impl ExecutionProfileEditorView {
             |prefs| prefs.get_cli_agent_llm_choices().collect_vec(),
             |id| ExecutionProfileEditorViewAction::SetFullTerminalUseModel { id },
             |prefs| prefs.get_default_cli_agent_model().id.clone(),
+            &self.upgrade_footer_mouse_state,
+            ctx,
+        );
+        Self::refresh_filterable_model_dropdown(
+            &self.title_model_dropdown,
+            current_permissions.title_model.clone(),
+            |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+            |id| ExecutionProfileEditorViewAction::SetTitleModel { id },
+            |prefs| prefs.get_default_base_model().id.clone(),
+            &self.upgrade_footer_mouse_state,
+            ctx,
+        );
+        Self::refresh_filterable_model_dropdown(
+            &self.active_ai_model_dropdown,
+            current_permissions.active_ai_model.clone(),
+            |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+            |id| ExecutionProfileEditorViewAction::SetActiveAiModel { id },
+            |prefs| prefs.get_default_base_model().id.clone(),
+            &self.upgrade_footer_mouse_state,
+            ctx,
+        );
+        Self::refresh_filterable_model_dropdown(
+            &self.next_command_model_dropdown,
+            current_permissions.next_command_model.clone(),
+            |prefs| prefs.get_base_llm_choices_for_agent_mode().collect_vec(),
+            |id| ExecutionProfileEditorViewAction::SetNextCommandModel { id },
+            |prefs| prefs.get_default_base_model().id.clone(),
             &self.upgrade_footer_mouse_state,
             ctx,
         );
@@ -1112,10 +1182,8 @@ impl ExecutionProfileEditorView {
             let llm_prefs = llm_prefs.as_ref(ctx);
             let choices = get_choices(llm_prefs);
 
-            let has_upgrade_gated_models = choices
-                .iter()
-                .any(|llm| matches!(llm.disable_reason, Some(DisableReason::RequiresUpgrade)));
-
+            // 去中心化分支:不再根据 RequiresUpgrade 状态展示升级 footer。
+            let _ = upgrade_mouse_state;
             let items = available_model_menu_items(
                 choices,
                 |llm| create_action(llm.id.clone()).into(),
@@ -1126,16 +1194,7 @@ impl ExecutionProfileEditorView {
                 ctx,
             );
             dropdown.set_rich_items(items, ctx);
-
-            if has_upgrade_gated_models {
-                let mouse_state = upgrade_mouse_state.clone();
-                dropdown.set_footer(
-                    move |app| render_upgrade_footer(mouse_state.clone(), app),
-                    ctx,
-                );
-            } else {
-                dropdown.clear_footer(ctx);
-            }
+            dropdown.clear_footer(ctx);
 
             let llm_prefs = LLMPreferences::handle(ctx);
             let llm_prefs = llm_prefs.as_ref(ctx);
@@ -1542,6 +1601,24 @@ impl TypedActionView for ExecutionProfileEditorView {
                 });
                 ctx.notify();
             }
+            ExecutionProfileEditorViewAction::SetTitleModel { id } => {
+                AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
+                    profiles_model.set_title_model(self.profile_id, Some(id.clone()), ctx);
+                });
+                ctx.notify();
+            }
+            ExecutionProfileEditorViewAction::SetActiveAiModel { id } => {
+                AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
+                    profiles_model.set_active_ai_model(self.profile_id, Some(id.clone()), ctx);
+                });
+                ctx.notify();
+            }
+            ExecutionProfileEditorViewAction::SetNextCommandModel { id } => {
+                AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
+                    profiles_model.set_next_command_model(self.profile_id, Some(id.clone()), ctx);
+                });
+                ctx.notify();
+            }
             ExecutionProfileEditorViewAction::SetComputerUseModel { id } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
                     profiles_model.set_computer_use_model(self.profile_id, Some(id.clone()), ctx);
@@ -1656,12 +1733,6 @@ impl TypedActionView for ExecutionProfileEditorView {
                 });
                 ctx.emit(ExecutionProfileEditorViewEvent::Pane(PaneEvent::Close));
             }
-            ExecutionProfileEditorViewAction::SetPlanAutoSync { enabled } => {
-                AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
-                    profiles_model.set_autosync_plans_to_warp_drive(self.profile_id, *enabled, ctx);
-                });
-                ctx.notify();
-            }
             ExecutionProfileEditorViewAction::SetWebSearchEnabled { enabled } => {
                 AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles_model, ctx| {
                     profiles_model.set_web_search_enabled(self.profile_id, *enabled, ctx);
@@ -1700,7 +1771,7 @@ impl BackingView for ExecutionProfileEditorView {
         _app: &AppContext,
     ) -> view::HeaderContent {
         view::HeaderContent::Standard(view::StandardHeader {
-            title: HEADER_TEXT.into(),
+            title: header_text(),
             title_secondary: None,
             title_style: None,
             title_clip_config: warpui::text_layout::ClipConfig::start(),

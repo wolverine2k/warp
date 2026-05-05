@@ -416,7 +416,12 @@ impl FileUpload {
         let ui_builder = appearance.ui_builder().clone();
         Container::new(
             icon_button(appearance, Icon::X, true, file.clear_button.clone())
-                .with_tooltip(move || ui_builder.tool_tip("Clear upload".into()).build().finish())
+                .with_tooltip(move || {
+                    ui_builder
+                        .tool_tip(crate::t!("terminal-clear-upload"))
+                        .build()
+                        .finish()
+                })
                 .build()
                 .on_click(move |event_ctx, _, _| {
                     event_ctx

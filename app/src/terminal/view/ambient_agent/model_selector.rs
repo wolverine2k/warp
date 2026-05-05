@@ -49,12 +49,6 @@ const SEARCH_VERTICAL_PADDING: f32 = 4.;
 // of total breathing room above the divider line.
 const SEARCH_FOOTER_TOP_MARGIN: f32 = 4.;
 
-const SEARCH_PLACEHOLDER_TEXT: &str = "Search models";
-
-const BUTTON_TOOLTIP: &str = "Choose agent model";
-
-const NO_RESULTS_LABEL: &str = "No results";
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ModelSelectorAction {
     ToggleMenu,
@@ -84,7 +78,7 @@ impl ModelSelector {
         let button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_size(ButtonSize::AgentInputButton)
-                .with_tooltip(BUTTON_TOOLTIP)
+                .with_tooltip(crate::t!("terminal-input-choose-agent-model"))
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(ModelSelectorAction::ToggleMenu);
                 })
@@ -104,7 +98,7 @@ impl ModelSelector {
                 },
                 ctx,
             );
-            editor.set_placeholder_text(SEARCH_PLACEHOLDER_TEXT, ctx);
+            editor.set_placeholder_text(crate::t!("terminal-input-search-models"), ctx);
             editor
         });
         ctx.subscribe_to_view(&search_editor, |me, _, event, ctx| {
@@ -143,7 +137,8 @@ impl ModelSelector {
                     me.refresh_button(ctx);
                     me.refresh_menu(ctx);
                 }
-                LLMPreferencesEvent::UpdatedActiveCodingLLM => {}
+                LLMPreferencesEvent::UpdatedActiveCodingLLM
+                | LLMPreferencesEvent::UpdatedReasoningEffort => {}
             },
         );
 
@@ -276,7 +271,7 @@ impl ModelSelector {
         if items.is_empty() {
             let no_results_text_color = internal_colors::text_sub(theme, theme.surface_2());
             items.push(MenuItem::Item(
-                MenuItemFields::new(NO_RESULTS_LABEL)
+                MenuItemFields::new(crate::t!("common-no-results"))
                     .with_font_size_override(ITEM_FONT_SIZE)
                     .with_padding_override(ITEM_VERTICAL_PADDING, MENU_HORIZONTAL_PADDING)
                     .with_override_text_color(no_results_text_color)

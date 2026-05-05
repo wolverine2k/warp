@@ -86,9 +86,6 @@ use crate::ai::blocklist::inline_action::ask_user_question_view::{
 use crate::ai::blocklist::inline_action::aws_bedrock_credentials_error::{
     AwsBedrockCredentialsErrorEvent, AwsBedrockCredentialsErrorView,
 };
-use crate::ai::blocklist::inline_action::run_agents_card_view::{
-    self, RunAgentsCardView, RunAgentsCardViewEvent,
-};
 use crate::ai::blocklist::inline_action::search_codebase::{
     SearchCodebaseView, SearchCodebaseViewEvent,
 };
@@ -143,10 +140,8 @@ use warp_editor::{
     content::buffer::InitialBufferState, render::element::VerticalExpansionBehavior,
 };
 use warpui::{
-    assets::asset_cache::AssetCache,
     clipboard::ClipboardContent,
     elements::{MouseStateHandle, SelectionBound, SelectionHandle},
-    image_cache::ImageType,
     keymap::FixedBinding,
     r#async::{SpawnedFutureHandle, Timer},
     text::SelectionType,
@@ -183,7 +178,7 @@ use crate::terminal::{ShellLaunchData, TerminalView};
 use crate::view_components::DismissibleToast;
 use crate::workspace::{ForkAIConversationParams, ForkedConversationDestination, WorkspaceAction};
 use crate::{report_error, report_if_error, ToastStack};
-use ai::agent::action::{AskUserQuestionItem, InsertReviewComment, RunAgentsRequest};
+use ai::agent::action::{AskUserQuestionItem, InsertReviewComment};
 
 use crate::editor::InteractionState;
 use crate::server::telemetry::{AutonomySettingToggleSource, InteractionSource};
@@ -267,7 +262,6 @@ pub fn init(app: &mut AppContext) {
     ask_user_question_view::init(app);
     code_diff_view::init(app);
     requested_command::init(app);
-    run_agents_card_view::init(app);
     cli::init(app);
 }
 
@@ -307,22 +301,6 @@ pub enum TextLocation {
         action_index: usize,
         line_index: usize,
     },
-}
-
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AIBlockResponseRating {
-    Positive,
-    Negative,
-}
-
-impl AIBlockResponseRating {
-    pub fn name(&self) -> &'static str {
-        match self {
-            AIBlockResponseRating::Positive => "positive",
-            AIBlockResponseRating::Negative => "negative",
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -407,10 +385,6 @@ pub(super) struct AIBlockStateHandles {
     codebase_search_speedbump_option_handles: Vec<MouseStateHandle>,
     codebase_search_speedbump_radio_button_handle: RadioButtonStateHandle,
     manage_autonomy_settings_link_handle: MouseStateHandle,
-
-    /// Mouse state handles for rating the AI block.
-    thumbs_up_handle: MouseStateHandle,
-    thumbs_down_handle: MouseStateHandle,
 
     /// Mouse state handle for the overflow menu button
     overflow_menu_handle: MouseStateHandle,
@@ -541,7 +515,7 @@ impl ImportedCommentElementState {
                 ActionButton::new("", NakedTheme)
                     .with_icon(Icon::Github)
                     .with_size(ButtonSize::Small)
-                    .with_tooltip("Open in GitHub")
+                    .with_tooltip(crate::t!("ai-block-open-in-github"))
                     .on_click({
                         let url = url.clone();
                         move |ctx| {
@@ -555,7 +529,7 @@ impl ImportedCommentElementState {
 
         let action_id_for_open_button = action_id.clone();
         let open_in_code_review_button = ctx.add_typed_action_view(move |_| {
-            ActionButton::new("Open in code review", SecondaryTheme)
+            ActionButton::new(crate::t!("ai-block-open-in-code-review"), SecondaryTheme)
                 .with_size(ButtonSize::Small)
                 .on_click(move |ctx| {
                     ctx.dispatch_typed_action(AIBlockAction::OpenImportedCommentInCodeReview {
@@ -894,11 +868,7 @@ pub struct AIBlock {
     /// This UI is used for the new conversation suggestion multi-select.
     keyboard_navigable_buttons: Option<ViewHandle<KeyboardNavigableButtons>>,
 
-    /// The thumbs up/down rating of the AI block response.
-    response_rating: OnceCell<AIBlockResponseRating>,
-
     /// The number of requests that have been refunded.
-    /// Right now, this happens when a user thumbs down a response.
     request_refunded_count: Option<i32>,
 
     /// Requested commands that were auto-expanded,
@@ -913,9 +883,6 @@ pub struct AIBlock {
 
     /// Rewind button to revert to before this block.
     rewind_button: ViewHandle<ActionButton>,
-
-    /// Per-action button components for "View screenshot" buttons on UseComputer actions.
-    view_screenshot_buttons: HashMap<AIAgentActionId, ui_components::button::Button>,
 
     /// Stores the last command that was right-clicked by a child component.
     /// When set, CopyCommand will copy this specific command instead of all commands.
@@ -935,9 +902,6 @@ pub struct AIBlock {
 
     imported_comments: HashMap<AIAgentActionId, ImportedCommentGroup>,
     has_imported_comments: bool,
-
-    /// Per-action `RunAgentsCardView`, lazily created.
-    run_agents_card_views: HashMap<AIAgentActionId, ViewHandle<RunAgentsCardView>>,
 
     /// Handle for the background link detection task, kept so we can abort a previous
     /// detection when a new one is spawned (e.g. on shell data change).
@@ -1100,7 +1064,7 @@ impl AIBlock {
         });
 
         let manage_rules_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Manage rules", NakedTheme)
+            ActionButton::new(crate::t!("ai-block-manage-rules"), NakedTheme)
                 .on_click(|ctx| ctx.dispatch_typed_action(AIBlockAction::OpenAIFactCollection))
         });
 
@@ -1214,7 +1178,7 @@ impl AIBlock {
         });
 
         let review_changes_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Review changes", SecondaryTheme)
+            ActionButton::new(crate::t!("ai-block-review-changes"), SecondaryTheme)
                 .with_icon(Icon::Diff)
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
@@ -1223,15 +1187,18 @@ impl AIBlock {
         });
 
         let open_all_comments_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Open all in code review", SecondaryTheme)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AIBlockAction::OpenAllImportedCommentsInCodeReview);
-                })
+            ActionButton::new(
+                crate::t!("ai-block-open-all-in-code-review"),
+                SecondaryTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AIBlockAction::OpenAllImportedCommentsInCodeReview);
+            })
         });
 
         let dismiss_suggestion_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Dismiss", SuggestionDismissButtonTheme)
+            ActionButton::new(crate::t!("common-dismiss"), SuggestionDismissButtonTheme)
                 .with_icon(Icon::X)
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
@@ -1240,20 +1207,23 @@ impl AIBlock {
         });
 
         let disable_rule_suggestions_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Don't show again", SuggestionDismissButtonTheme)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AIBlockAction::DisableRuleSuggestions);
-                })
+            ActionButton::new(
+                crate::t!("ai-block-dont-show-again"),
+                SuggestionDismissButtonTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AIBlockAction::DisableRuleSuggestions);
+            })
         });
 
         let ai_block_view_id = ctx.view_id();
         let exchange_id = client_ids.client_exchange_id;
         let conversation_id = client_ids.conversation_id;
         let rewind_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new("Rewind", RewindButtonTheme)
+            ActionButton::new(crate::t!("ai-block-rewind"), RewindButtonTheme)
                 .with_size(ButtonSize::XSmall)
-                .with_tooltip("Rewind to before this block")
+                .with_tooltip(crate::t!("ai-block-rewind-tooltip"))
                 .on_click(move |ctx| {
                     ctx.dispatch_typed_action(TerminalAction::RewindAIConversation {
                         ai_block_view_id,
@@ -1334,7 +1304,6 @@ impl AIBlock {
             suggested_agent_mode_workflow: Default::default(),
             manage_rules_button,
             keyboard_navigable_buttons: None,
-            response_rating: OnceCell::new(),
             terminal_view_id,
             request_refunded_count: None,
             action_buttons: Default::default(),
@@ -1347,14 +1316,12 @@ impl AIBlock {
             dismiss_suggestion_button,
             disable_rule_suggestions_button,
             rewind_button,
-            view_screenshot_buttons: Default::default(),
             last_right_clicked_command: None,
             is_usage_footer_expanded: false,
             agent_view_controller,
             aws_bedrock_credentials_error_view: None,
             imported_comments: Default::default(),
             has_imported_comments: false,
-            run_agents_card_views: Default::default(),
             link_detection_handle: None,
             #[cfg(feature = "local_fs")]
             resolved_code_block_paths: Default::default(),
@@ -1843,13 +1810,6 @@ impl AIBlock {
                     },
                 );
             }
-            if matches!(&action.action, AIAgentActionType::StartAgent { .. }) {
-                self.state_handles
-                    .orchestration_navigation_card_handles
-                    .entry(action.id.clone())
-                    .or_default();
-            }
-
             if matches!(&action.action, AIAgentActionType::ReadSkill(_)) {
                 self.state_handles
                     .open_skill_button_handles
@@ -1866,18 +1826,6 @@ impl AIBlock {
                     .entry(action.id.clone())
                     .or_default();
             }
-
-            if let AIAgentActionType::RunAgents(req) = &action.action {
-                self.ensure_run_agents_card_view(&action.id, req, ctx);
-            }
-
-            // Ensure a button component exists for UseComputer actions.
-            if matches!(&action.action, AIAgentActionType::UseComputer(_)) {
-                self.view_screenshot_buttons
-                    .entry(action.id.clone())
-                    .or_default();
-            }
-
             match action {
                 AIAgentAction {
                     id: action_id,
@@ -2051,11 +1999,7 @@ impl AIBlock {
             if FeatureFlag::Orchestration.is_enabled()
                 && matches!(
                     &message.message,
-                    AIAgentOutputMessageType::Action(AIAgentAction {
-                        action: AIAgentActionType::StartAgent { .. }
-                            | AIAgentActionType::SendMessageToAgent { .. },
-                        ..
-                    }) | AIAgentOutputMessageType::MessagesReceivedFromAgents { .. }
+                    AIAgentOutputMessageType::MessagesReceivedFromAgents { .. }
                 )
             {
                 self.collapsible_block_states
@@ -4464,14 +4408,6 @@ impl AIBlock {
         {
             ctx.focus(ask_user_question_view);
             did_focus_subview = true;
-        } else if let Some(card_view) =
-            pending_action_id.and_then(|id| self.run_agents_card_views.get(id))
-        {
-            // If there's a blocking RunAgents card, focus it so its
-            // own keybindings (`enter -> Accept`, `cmdorctrl-e ->
-            // ToggleEdit`, etc.) resolve.
-            ctx.focus(card_view);
-            did_focus_subview = true;
         } else if let Some(keyboard_navigable_buttons) = self.keyboard_navigable_buttons.as_ref() {
             // If there's buttons to take action on, focus those.
             ctx.focus(keyboard_navigable_buttons);
@@ -5687,9 +5623,6 @@ pub enum AIBlockAction {
         action_id: AIAgentActionId,
         server_output_id: Option<ServerOutputId>,
     },
-    Rated {
-        is_positive: bool,
-    },
     /// Clear the selections of all other views **except** for the source view that dispatched the event.
     /// The `source_view_id` will be `None` if the event is dispatched by the [`warpui::elements::SelectableArea`]
     /// instead of a nested view (i.e. code block, requested command, etc.), which means all nested views
@@ -5852,34 +5785,9 @@ impl TypedActionView for AIBlock {
                 self.cancel_action(action_id, ctx);
             }
             AIBlockAction::ExecuteNextPendingAction => {
-                // If the next pending action is a RunAgents tool call,
-                // delegate to the per-card view's Accept handler so
-                // Enter routes through the executor-backed dispatch
-                // path. (Focus normally goes to the card view via
-                // `focus_subview_if_necessary`, in which case the
-                // card's own keybinding fires; this handler covers
-                // the case where focus is still on AIBlock.)
-                let run_agents_id = self
-                    .action_model
-                    .as_ref(ctx)
-                    .get_pending_actions_for_conversation(&self.client_ids.conversation_id)
-                    .filter(|action| matches!(action.action, AIAgentActionType::RunAgents(_)))
-                    .last()
-                    .map(|action| action.id.clone());
-                if let Some(run_agents_id) = run_agents_id {
-                    if let Some(card_view) = self.run_agents_card_views.get(&run_agents_id).cloned()
-                    {
-                        card_view.update(ctx, |view, ctx_view| view.accept(ctx_view));
-                    } else {
-                        log::warn!(
-                            "ExecuteNextPendingAction: no RunAgentsCardView for {run_agents_id:?}"
-                        );
-                    }
-                } else {
-                    self.action_model.update(ctx, |action_model, ctx| {
-                        action_model.execute_next_action_for_user(self.conversation_id(), ctx)
-                    });
-                }
+                self.action_model.update(ctx, |action_model, ctx| {
+                    action_model.execute_next_action_for_user(self.conversation_id(), ctx)
+                });
             }
             AIBlockAction::ExecuteRequestedAction { action_id } => {
                 self.action_model.update(ctx, |action_model, ctx| {
@@ -6112,49 +6020,6 @@ impl TypedActionView for AIBlock {
                     action_model.execute_action(action_id, self.client_ids.conversation_id, ctx);
                 });
             }
-            AIBlockAction::Rated { is_positive } => {
-                let output_id = self.model.server_output_id(ctx);
-                let rating = if *is_positive {
-                    AIBlockResponseRating::Positive
-                } else {
-                    AIBlockResponseRating::Negative
-                };
-                if self.response_rating.set(rating).is_err() {
-                    // A rating was already set for this block. This should be unreachable.
-                    return;
-                }
-
-                if matches!(rating, AIBlockResponseRating::Negative) {
-                    if let Some(output_id) = output_id.clone() {
-                        let request_usage_model = AIRequestUsageModel::handle(ctx);
-                        request_usage_model.update(ctx, |request_usage_model, ctx| {
-                            request_usage_model
-                                .provide_negative_feedback_response_for_ai_conversation(
-                                    self.client_ids.conversation_id,
-                                    output_id.to_string(),
-                                    self.client_ids.client_exchange_id,
-                                    ctx,
-                                );
-                        });
-                    }
-                }
-
-                let window_id = ctx.window_id();
-                ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
-                    let toast =
-                        DismissibleToast::default(String::from("Thank you for the feedback!"));
-                    toast_stack.add_ephemeral_toast(toast, window_id, ctx);
-                });
-
-                send_telemetry_from_ctx!(
-                    TelemetryEvent::AgentModeRatedResponse {
-                        server_output_id: output_id,
-                        conversation_id: self.client_ids.conversation_id,
-                        rating,
-                    },
-                    ctx
-                );
-            }
             AIBlockAction::ClearOtherSelections {
                 source_view_id,
                 source_window_id,
@@ -6362,128 +6227,14 @@ impl TypedActionView for AIBlock {
             AIBlockAction::OpenCommentInGitHub { url } => {
                 ctx.open_url(url);
             }
-            AIBlockAction::ViewScreenshot { action_id } => {
-                // Collect all UseComputer action IDs across the entire conversation
-                // so the lightbox can navigate between their screenshots.
-                let conversation_id = self.client_ids.conversation_id;
-
-                let use_computer_action_ids: Vec<AIAgentActionId> =
-                    BlocklistAIHistoryModel::as_ref(ctx)
-                        .conversation(&conversation_id)
-                        .into_iter()
-                        .flat_map(|c| c.use_computer_action_ids())
-                        .collect();
-
-                // Build lightbox images for each action that has a screenshot result.
-                // We Arc::clone the result each iteration to release the immutable
-                // borrow on ctx, allowing the mutable AssetCache update in the same
-                // loop body. Arc::clone is just a refcount bump (no data copied).
-                let mut screenshot_action_ids: Vec<&AIAgentActionId> = Vec::new();
-                let mut images: Vec<ui_components::lightbox::LightboxImage> = Vec::new();
-                for action_id in &use_computer_action_ids {
-                    let Some(result) = self
-                        .action_model
-                        .as_ref(ctx)
-                        .get_action_result(action_id)
-                        .map(Arc::clone)
-                    else {
-                        continue;
-                    };
-                    let AIAgentActionResultType::UseComputer(
-                        crate::ai::agent::UseComputerResult::Success(computer_use::ActionResult {
-                            screenshot: Some(screenshot),
-                            ..
-                        }),
-                    ) = &result.result
-                    else {
-                        continue;
-                    };
-                    let asset_id = format!("screenshot-{action_id}");
-                    AssetCache::handle(ctx).update(ctx, |asset_cache, ctx| {
-                        asset_cache.insert_raw_asset_bytes::<ImageType>(
-                            asset_id.clone(),
-                            &screenshot.data,
-                            ctx,
-                        );
-                    });
-                    images.push(ui_components::lightbox::LightboxImage {
-                        source: ui_components::lightbox::LightboxImageSource::Resolved {
-                            asset_source: warpui::assets::asset_cache::AssetSource::Raw {
-                                id: asset_id,
-                            },
-                        },
-                        description: None,
-                    });
-                    screenshot_action_ids.push(action_id);
-                }
-
-                if images.is_empty() {
-                    return;
-                }
-
-                let initial_index = screenshot_action_ids
-                    .iter()
-                    .position(|id| *id == action_id)
-                    .unwrap_or(0);
-
-                ctx.dispatch_typed_action(&WorkspaceAction::OpenLightbox {
-                    images,
-                    initial_index,
-                });
+            AIBlockAction::ViewScreenshot { action_id: _ } => {
+                // Computer Use 已被移除,screenshot lightbox 不再可用。
             }
         }
         ctx.notify();
     }
 }
 
-impl AIBlock {
-    /// Lazily create the per-action `RunAgentsCardView` so the
-    /// orchestrate confirmation card can render on its first frame.
-    /// Idempotent: re-running with an already-populated entry leaves
-    /// it unchanged. The view drives Accept dispatch through
-    /// [`BlocklistAIActionModel::execute_run_agents`] itself; only
-    /// `RejectRequested` flows back here so the existing
-    /// [`Self::cancel_action`] entry point handles cancellation.
-    fn ensure_run_agents_card_view(
-        &mut self,
-        action_id: &AIAgentActionId,
-        request: &RunAgentsRequest,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        if let Some(existing_view) = self.run_agents_card_views.get(action_id) {
-            // The view was created on an earlier streaming chunk that may
-            // have carried a partial/empty request. Re-sync the edit state
-            // from the latest (potentially more complete) request so the
-            // card renders the correct agent count, summary, etc.
-            existing_view.update(ctx, |view, ctx| {
-                view.update_request(request, ctx);
-            });
-            return;
-        }
-        let action_id_clone = action_id.clone();
-        let request_clone = request.clone();
-        let action_model = self.action_model.clone();
-        let run_agents_executor = self.action_model.as_ref(ctx).run_agents_executor(ctx);
-        let block_model = self.model.clone();
-        let view = ctx.add_typed_action_view(move |ctx_view| {
-            RunAgentsCardView::new(
-                action_id_clone,
-                &request_clone,
-                action_model,
-                run_agents_executor,
-                block_model,
-                ctx_view,
-            )
-        });
-        let action_id_for_event = action_id.clone();
-        ctx.subscribe_to_view(&view, move |me, _, event, ctx| match event {
-            RunAgentsCardViewEvent::RejectRequested => {
-                me.cancel_action(&action_id_for_event, ctx);
-            }
-        });
-        self.run_agents_card_views.insert(action_id.clone(), view);
-    }
-}
 #[cfg(test)]
 #[path = "block_tests.rs"]
 mod tests;

@@ -389,7 +389,6 @@ pub enum TerminalAction {
         skill_reference: SkillReference,
     },
     OpenAddPromptPane,
-    OpenBillingAndUsagePane,
     OpenConversationsPalette,
     PickRepoToOpen,
     OpenFilesPalette {
@@ -409,7 +408,6 @@ pub enum TerminalAction {
     ToggleLongRunningCommandControl,
     ToggleHideCliResponses,
     ExitAgentView,
-    EnterCloudAgentView,
     StartNewAgentConversation,
     /// Toggle the cloud mode conversation details panel
     ToggleConversationDetailsPanel,
@@ -683,7 +681,6 @@ impl fmt::Debug for TerminalAction {
             OpenRulesPane => write!(f, "OpenRulesPane"),
             OpenEditSkillPane { .. } => write!(f, "OpenEditSkillPane"),
             OpenAddPromptPane => write!(f, "OpenAddPromptPane"),
-            OpenBillingAndUsagePane => write!(f, "OpenBillingAndUsagePane"),
             OpenConversationsPalette => write!(f, "OpenConversationsPalette"),
             PickRepoToOpen => write!(f, "PickRepoToOpen"),
             OpenFilesPalette { .. } => write!(f, "OpenFilesPalette"),
@@ -699,7 +696,6 @@ impl fmt::Debug for TerminalAction {
             }
             ToggleHideCliResponses => write!(f, "ToggleHideCliResponses"),
             ExitAgentView => write!(f, "ExitAgentView"),
-            EnterCloudAgentView => write!(f, "EnterCloudAgentView"),
             StartNewAgentConversation => write!(f, "StartNewAgentConversation"),
             ToggleConversationDetailsPanel => write!(f, "ToggleConversationDetailsPanel"),
             CancelAmbientAgentTask => write!(f, "CancelAmbientAgentTask"),

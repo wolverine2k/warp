@@ -11,9 +11,8 @@ use crate::ai::agent::todos::AIAgentTodoList;
 use crate::ai::agent::{
     util::parse_markdown_into_text_and_code_sections, AIAgentAction, AIAgentActionType,
     AIAgentCitation, AIAgentInput, AIAgentOutputMessage, AIAgentText, AIAgentTodo,
-    ArtifactCreatedData, MessageId, RunAgentsAgentRunConfig, RunAgentsExecutionMode,
-    RunAgentsRequest, StartAgentExecutionMode, SuggestedAgentModeWorkflow, SuggestedRule,
-    Suggestions, TodoOperation,
+    ArtifactCreatedData, MessageId, SuggestedAgentModeWorkflow, SuggestedRule, Suggestions,
+    TodoOperation,
 };
 use crate::ai::agent::{
     CloneRepositoryURL, SubagentCall, SubagentType, SummarizationType, WebFetchStatus,
@@ -21,11 +20,8 @@ use crate::ai::agent::{
 };
 use crate::ai::artifact_download::sanitized_basename;
 use crate::ai::document::ai_document_model::{AIDocumentId, AIDocumentVersion};
-use ai::agent::action::LifecycleEventType as StartAgentLifecycleEventType;
-use ai::agent::action_result::StartAgentVersion;
 use ai::agent::convert::ToolToAIAgentActionError;
 use ai::agent::UnknownCitationTypeError;
-use ai::skills::SkillReference;
 use api::ask_user_question::question::QuestionType;
 use warp_core::channel::ChannelState;
 use warp_multi_agent_api as api;
@@ -64,133 +60,6 @@ pub(crate) fn convert_user_query_mode(mode: Option<&api::UserQueryMode>) -> User
         Some(api::user_query_mode::Type::Plan(_)) => UserQueryMode::Plan,
         Some(api::user_query_mode::Type::Orchestrate(_)) => UserQueryMode::Orchestrate,
         None => UserQueryMode::Normal,
-    }
-}
-
-fn convert_start_agent_lifecycle_event_type(
-    event_type: i32,
-) -> Option<StartAgentLifecycleEventType> {
-    let event_type = StartAgentLifecycleEventType::try_from(event_type).ok()?;
-    (event_type != StartAgentLifecycleEventType::Unspecified).then_some(event_type)
-}
-
-fn convert_start_agent_v2_harness_type(
-    harness: Option<api::start_agent_v2::execution_mode::Harness>,
-) -> Option<String> {
-    harness
-        .map(|harness| harness.r#type)
-        .filter(|harness_type| !harness_type.trim().is_empty())
-}
-
-/// Maps the proto `Harness` oneof to a client-side string identifier
-/// (e.g. "oz", "claude"). Returns `None` for an unset variant.
-pub(crate) fn convert_run_agents_harness(harness: Option<&api::Harness>) -> Option<String> {
-    let variant = harness?.variant.as_ref()?;
-    Some(
-        match variant {
-            api::harness::Variant::Oz(_) => "oz",
-            api::harness::Variant::ClaudeCode(_) => "claude",
-            api::harness::Variant::OpenCode(_) => "opencode",
-            api::harness::Variant::Gemini(_) => "gemini",
-            api::harness::Variant::Codex(_) => "codex",
-        }
-        .to_string(),
-    )
-}
-
-fn convert_start_agent_execution_mode(
-    execution_mode: Option<api::start_agent::ExecutionMode>,
-) -> StartAgentExecutionMode {
-    match execution_mode.and_then(|execution_mode| execution_mode.mode) {
-        Some(api::start_agent::execution_mode::Mode::Remote(remote)) => {
-            StartAgentExecutionMode::remote_with_defaults(remote.environment_id)
-        }
-        Some(api::start_agent::execution_mode::Mode::Local(_)) | None => {
-            StartAgentExecutionMode::local_with_defaults()
-        }
-    }
-}
-
-fn convert_run_agents_execution_mode(
-    execution_mode: Option<api::run_agents::ExecutionMode>,
-) -> RunAgentsExecutionMode {
-    match execution_mode {
-        Some(api::run_agents::ExecutionMode::Remote(remote)) => RunAgentsExecutionMode::Remote {
-            environment_id: remote.environment_id,
-            worker_host: remote.worker_host,
-            computer_use_enabled: remote.computer_use_enabled,
-        },
-        Some(api::run_agents::ExecutionMode::Local(_)) | None => RunAgentsExecutionMode::Local,
-    }
-}
-
-fn convert_run_agents(run_agents: api::RunAgents) -> AIAgentActionType {
-    let api::RunAgents {
-        summary,
-        base_prompt,
-        skills,
-        model_id,
-        harness,
-        agent_run_configs,
-        execution_mode,
-    } = run_agents;
-    AIAgentActionType::RunAgents(RunAgentsRequest {
-        summary,
-        base_prompt,
-        skills: skills
-            .into_iter()
-            .filter_map(convert_skill_reference)
-            .collect(),
-        model_id,
-        harness_type: convert_run_agents_harness(harness.as_ref()).unwrap_or_default(),
-        execution_mode: convert_run_agents_execution_mode(execution_mode),
-        agent_run_configs: agent_run_configs
-            .into_iter()
-            .map(|config| RunAgentsAgentRunConfig {
-                name: config.name,
-                prompt: config.prompt,
-                title: config.title,
-            })
-            .collect(),
-    })
-}
-
-fn convert_start_agent_v2_execution_mode(
-    execution_mode: Option<api::start_agent_v2::ExecutionMode>,
-) -> StartAgentExecutionMode {
-    match execution_mode.and_then(|execution_mode| execution_mode.mode) {
-        Some(api::start_agent_v2::execution_mode::Mode::Remote(remote)) => {
-            StartAgentExecutionMode::Remote {
-                environment_id: remote.environment_id,
-                skill_references: remote
-                    .skills
-                    .into_iter()
-                    .filter_map(convert_skill_reference)
-                    .collect(),
-                model_id: remote.model_id,
-                computer_use_enabled: remote.computer_use_enabled,
-                worker_host: remote.worker_host,
-                harness_type: convert_start_agent_v2_harness_type(remote.harness)
-                    .unwrap_or_default(),
-                title: remote.title,
-            }
-        }
-        Some(api::start_agent_v2::execution_mode::Mode::Local(local)) => {
-            convert_start_agent_v2_harness_type(local.harness)
-                .map(StartAgentExecutionMode::local_harness)
-                .unwrap_or_else(StartAgentExecutionMode::local_with_defaults)
-        }
-        None => StartAgentExecutionMode::local_with_defaults(),
-    }
-}
-
-fn convert_skill_reference(skill_ref: api::SkillRef) -> Option<SkillReference> {
-    match skill_ref.skill_reference {
-        Some(api::skill_ref::SkillReference::Path(path)) => Some(SkillReference::Path(path.into())),
-        Some(api::skill_ref::SkillReference::BundledSkillId(id)) => {
-            Some(SkillReference::BundledSkillId(id))
-        }
-        None => None,
     }
 }
 
@@ -630,11 +499,7 @@ impl ConvertAPIMessageToClientOutputMessage for api::Message {
             | api::message::Message::CodeReview(_)
             | api::message::Message::ServerEvent(_)
             | api::message::Message::InvokeSkill(_)
-            | api::message::Message::PassiveSuggestionResult(_)
-            // Stage 2 plan-card config snapshot: hydrated separately by the
-            // plan card's `AIDocumentModel` subscription, not via the
-            // exchange/output stream. No client output message representation.
-            | api::message::Message::OrchestrationConfigSnapshot(_) => {
+            | api::message::Message::PassiveSuggestionResult(_) => {
                 Ok(MaybeAIAgentOutputMessage::NoClientRepresentation)
             }
         }
@@ -675,7 +540,15 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
         params: ConversionParams,
     ) -> Result<MaybeAIAgentAction, ToolToAIAgentActionError> {
         let Some(tool) = self.tool else {
-            return Err(ToolToAIAgentActionError::MissingTool);
+            // OpenWarp BYOP:`make_tool_call_carrier_message` 在 from_args 解析失败时
+            // 故意 emit `tool: None` 的 ToolCall,仅作为下一轮 build_chat_request 还原
+            // 原 fn_name + args_str 给上游模型的载体(server_message_data 携带原始内容),
+            // 紧随其后的 synthetic error ToolCallResult 才是要展示给用户看的内容。
+            // 返回 MissingTool 会让整个 conversation 更新被拒(`UpdateTask(ConversionError)`),
+            // 紧跟的 ToolCallResult 也无法应用 → exchange 永远卡在 "Warping..."。
+            // 这里改为 NoClientRepresentation:UI 不渲染这条空 ToolCall,
+            // task.messages 仍持久化(server_message_data 完整),下轮上游重发链路完整。
+            return Ok(MaybeAIAgentAction::NoClientRepresentation);
         };
 
         let create_standard_action = |action: AIAgentActionType| {
@@ -696,9 +569,6 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
             ) => create_standard_action(write_to_long_running_shell_command.into()),
             api::message::tool_call::Tool::ReadFiles(read_files) => {
                 create_standard_action(read_files.into())
-            }
-            api::message::tool_call::Tool::UploadFileArtifact(upload_file_artifact) => {
-                create_standard_action(upload_file_artifact.try_into()?)
             }
             api::message::tool_call::Tool::SearchCodebase(search_codebase) => {
                 create_standard_action(search_codebase.into())
@@ -749,11 +619,10 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
             api::message::tool_call::Tool::TransferShellCommandControlToUser(
                 transfer_shell_command_control_to_user,
             ) => create_standard_action(transfer_shell_command_control_to_user.into()),
-            api::message::tool_call::Tool::UseComputer(use_computer) => {
-                create_standard_action(use_computer.try_into()?)
-            }
-            api::message::tool_call::Tool::RequestComputerUse(request_computer_use) => {
-                create_standard_action(request_computer_use.into())
+            api::message::tool_call::Tool::UseComputer(_)
+            | api::message::tool_call::Tool::RequestComputerUse(_) => {
+                // Computer Use 已被移除,模型即便发起这两类调用也不 dispatch。
+                return Err(ToolToAIAgentActionError::UnexpectedTool);
             }
             api::message::tool_call::Tool::Subagent(subagent) => {
                 use api::message::tool_call::subagent::Metadata;
@@ -789,60 +658,11 @@ impl ConvertAPIToolCallToAIAgentAction for api::message::ToolCall {
                     subagent_type,
                 }))
             }
-            api::message::tool_call::Tool::StartAgent(start_agent) => {
-                create_standard_action(AIAgentActionType::StartAgent {
-                    version: StartAgentVersion::V1,
-                    name: start_agent.name,
-                    prompt: start_agent.prompt,
-                    execution_mode: convert_start_agent_execution_mode(start_agent.execution_mode),
-                    lifecycle_subscription: start_agent.lifecycle_subscription.map(
-                        |subscription| {
-                            subscription
-                                .event_types
-                                .into_iter()
-                                .filter_map(convert_start_agent_lifecycle_event_type)
-                                .collect()
-                        },
-                    ),
-                })
-            }
-            api::message::tool_call::Tool::StartAgentV2(start_agent) => {
-                create_standard_action(AIAgentActionType::StartAgent {
-                    version: StartAgentVersion::V2,
-                    name: start_agent.name,
-                    prompt: start_agent.prompt,
-                    execution_mode: convert_start_agent_v2_execution_mode(
-                        start_agent.execution_mode,
-                    ),
-                    lifecycle_subscription: start_agent.lifecycle_subscription.map(
-                        |subscription| {
-                            subscription
-                                .event_types
-                                .into_iter()
-                                .filter_map(convert_start_agent_lifecycle_event_type)
-                                .collect()
-                        },
-                    ),
-                })
-            }
-            api::message::tool_call::Tool::RunAgents(orchestrate) => {
-                create_standard_action(convert_run_agents(orchestrate))
-            }
-            api::message::tool_call::Tool::SendMessageToAgent(send_message) => {
-                create_standard_action(AIAgentActionType::SendMessageToAgent {
-                    addresses: send_message.addresses,
-                    subject: send_message.subject,
-                    message: send_message.message,
-                })
-            }
             api::message::tool_call::Tool::InsertReviewComments(insert_review_comments) => {
                 create_standard_action(insert_review_comments.into())
             }
             api::message::tool_call::Tool::ReadSkill(read_skill) => {
                 create_standard_action(read_skill.try_into()?)
-            }
-            api::message::tool_call::Tool::FetchConversation(fetch_conversation) => {
-                create_standard_action(fetch_conversation.into())
             }
             api::message::tool_call::Tool::AskUserQuestion(ask) => {
                 let questions = ask
@@ -1006,7 +826,3 @@ fn convert_api_question(
         },
     })
 }
-
-#[cfg(test)]
-#[path = "convert_from_tests.rs"]
-mod tests;

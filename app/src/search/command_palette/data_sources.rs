@@ -9,6 +9,7 @@ use crate::search::command_palette::launch_config;
 use crate::search::command_palette::mixer::{CommandPaletteItemAction, ItemSummary};
 use crate::search::command_palette::new_session::NewSessionDataSource;
 use crate::search::command_palette::repos::RepoDataSource;
+use crate::search::command_palette::ssh_servers::SshServersDataSource;
 use crate::search::command_palette::{navigation, CommandPaletteMixer};
 use crate::search::data_source::QueryResult;
 use crate::search::files::model::FileSearchModel;
@@ -34,6 +35,7 @@ pub struct DataSourceStore {
     historical_conversation_data_source: ModelHandle<conversations::DataSource>,
     all_conversation_data_source: ModelHandle<conversations::DataSource>,
     repo_data_source: ModelHandle<RepoDataSource>,
+    ssh_servers_data_source: ModelHandle<SshServersDataSource>,
 }
 
 impl DataSourceStore {
@@ -63,6 +65,7 @@ impl DataSourceStore {
             ctx.add_model(|_| conversations::DataSource::new());
 
         let repo_data_source = ctx.add_model(|_| RepoDataSource::new());
+        let ssh_servers_data_source = ctx.add_model(|_| SshServersDataSource::new());
 
         Self {
             actions_data_source,
@@ -73,6 +76,7 @@ impl DataSourceStore {
             historical_conversation_data_source,
             all_conversation_data_source,
             repo_data_source,
+            ssh_servers_data_source,
         }
     }
 
@@ -164,6 +168,11 @@ impl DataSourceStore {
             mixer.add_sync_source(
                 self.repo_data_source.clone(),
                 HashSet::from([QueryFilter::Repos]),
+            );
+
+            mixer.add_sync_source(
+                self.ssh_servers_data_source.clone(),
+                HashSet::from([QueryFilter::SshServers]),
             );
 
             ctx.notify();
@@ -268,6 +277,11 @@ impl DataSourceStore {
                 None
             }
 
+            ItemSummary::SshServer { node_id: _ } => {
+                // SSH 服务器选项的 recents 暂不展示 — 用户从 SSH 管理器树打开
+                // 才是主要路径,palette 选项是补充。返 None 不影响搜索能命中。
+                None
+            }
             ItemSummary::NoOp => {
                 // No-op action (used for non-interactable separator items that don't do anything on click).
                 None

@@ -11,7 +11,6 @@ use crate::settings_view::flags;
 use crate::terminal::input::{
     SET_INPUT_MODE_AGENT_ACTION_NAME, SET_INPUT_MODE_TERMINAL_ACTION_NAME,
 };
-use crate::terminal::shared_session::SharedSessionActionSource;
 use crate::terminal::ssh::error::{SshErrorBlockAction, SSH_ERROR_BLOCK_VISIBLE_KEY};
 use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
 use crate::terminal::view::{
@@ -31,7 +30,6 @@ use crate::{
     terminal::TerminalView,
     util::bindings::CustomAction,
 };
-use warp_core::context_flag::ContextFlag;
 use warpui::keymap::ContextPredicate;
 use warpui::keymap::{BindingDescription, PerPlatformKeystroke};
 use warpui::platform::OperatingSystem;
@@ -286,7 +284,7 @@ pub fn init(app: &mut AppContext) {
     #[cfg(windows)]
     app.register_editable_bindings([EditableBinding::new(
         "terminal:alternate_terminal_paste",
-        "Alternate terminal paste",
+        crate::t!("keybinding-desc-terminal-alternate-paste"),
         TerminalAction::Paste,
     )
     .with_key_binding("ctrl-v")
@@ -319,7 +317,7 @@ pub fn init(app: &mut AppContext) {
         // Ctrl-G: open rich input for CLI agents before the keystroke reaches the PTY.
         EditableBinding::new(
             OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING,
-            "Toggle CLI Agent Rich Input",
+            crate::t!("keybinding-desc-terminal-toggle-cli-agent-rich-input"),
             TerminalAction::OpenCLIAgentRichInput,
         )
         .with_key_binding("ctrl-g")
@@ -332,7 +330,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:warpify_subshell",
-            "Warpify subshell",
+            crate::t!("keybinding-desc-terminal-warpify-subshell"),
             TerminalAction::TriggerSubshellBootstrap,
         )
         .with_key_binding("ctrl-i")
@@ -341,7 +339,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:warpify_ssh_session",
-            "Warpify ssh session",
+            crate::t!("keybinding-desc-terminal-warpify-ssh-session"),
             TerminalAction::WarpifySSHSession,
         )
         .with_key_binding("ctrl-i")
@@ -353,7 +351,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             ACCEPT_PROMPT_SUGGESTION_KEYBINDING,
-            "Accept Prompt Suggestion",
+            crate::t!("keybinding-desc-terminal-accept-prompt-suggestion"),
             TerminalAction::ResolvePromptSuggestion(PromptSuggestionResolution::Accept {
                 interaction_source: InteractionSource::Keybinding,
             }),
@@ -374,9 +372,9 @@ pub fn init(app: &mut AppContext) {
         EditableBinding::new(
             CANCEL_COMMAND_KEYBINDING,
             if cfg!(windows) {
-                "Copy text or cancel active process"
+                crate::t!("keybinding-desc-terminal-cancel-process-windows")
             } else {
-                "Cancel active process"
+                crate::t!("keybinding-desc-terminal-cancel-process")
             },
             TerminalAction::CtrlC,
         )
@@ -384,22 +382,30 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),
         EditableBinding::new(
             "terminal:focus_input",
-            "Focus terminal input",
+            crate::t!("keybinding-desc-terminal-focus-input"),
             TerminalAction::FocusInputAndClearSelection,
         )
         .with_custom_action(CustomAction::FocusInput)
         .with_context_predicate(id!("Terminal")),
         // Paste is not rebindable on the web.
         #[cfg(not(target_family = "wasm"))]
-        EditableBinding::new("terminal:paste", "Paste", TerminalAction::Paste)
-            .with_custom_action(CustomAction::Paste)
-            .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),
-        EditableBinding::new("terminal:copy", "Copy", TerminalAction::Copy)
-            .with_custom_action(CustomAction::Copy)
-            .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),
+        EditableBinding::new(
+            "terminal:paste",
+            crate::t!("keybinding-desc-terminal-paste"),
+            TerminalAction::Paste,
+        )
+        .with_custom_action(CustomAction::Paste)
+        .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),
+        EditableBinding::new(
+            "terminal:copy",
+            crate::t!("keybinding-desc-terminal-copy"),
+            TerminalAction::Copy,
+        )
+        .with_custom_action(CustomAction::Copy)
+        .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),
         EditableBinding::new(
             "terminal:reinput_commands",
-            "Reinput selected commands",
+            crate::t!("keybinding-desc-terminal-reinput-commands"),
             TerminalAction::ReinputCommands,
         )
         .with_context_predicate(
@@ -407,7 +413,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:reinput_commands_with_sudo",
-            "Reinput selected commands as root",
+            crate::t!("keybinding-desc-terminal-reinput-commands-sudo"),
             TerminalAction::ReinputCommandsWithSudo,
         )
         .with_context_predicate(
@@ -415,7 +421,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:find",
-            "Find in Terminal",
+            crate::t!("keybinding-desc-terminal-find"),
             TerminalAction::ShowFindBar,
         )
         .with_key_binding(cmd_or_ctrl_shift("f"))
@@ -423,21 +429,21 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Terminal")),
         EditableBinding::new(
             "terminal:select_bookmark_up",
-            "Select the closest bookmark up",
+            crate::t!("keybinding-desc-terminal-select-bookmark-up"),
             TerminalAction::SelectBookmarkUp,
         )
         .with_key_binding("alt-up")
         .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),
         EditableBinding::new(
             "terminal:select_bookmark_down",
-            "Select the closest bookmark down",
+            crate::t!("keybinding-desc-terminal-select-bookmark-down"),
             TerminalAction::SelectBookmarkDown,
         )
         .with_key_binding("alt-down")
         .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),
         EditableBinding::new(
             "terminal:open_block_list_context_menu_via_keybinding",
-            "Open block context menu",
+            crate::t!("keybinding-desc-terminal-open-block-context-menu"),
             TerminalAction::OpenBlockListContextMenu,
         )
         .with_mac_key_binding("ctrl-m")
@@ -446,7 +452,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:toggle_teams_modal",
-            "Toggle team workflows modal",
+            crate::t!("keybinding-desc-terminal-toggle-team-workflows-modal"),
             TerminalAction::OpenWorkflowModal,
         )
         .with_key_binding(cmd_or_ctrl_shift("s"))
@@ -457,7 +463,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:copy_git_branch",
-            "Copy git branch",
+            crate::t!("keybinding-desc-terminal-copy-git-branch"),
             TerminalAction::CopyGitBranch,
         )
         .with_context_predicate(
@@ -467,7 +473,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:clear_blocks",
-            "Clear Blocks",
+            crate::t!("keybinding-desc-terminal-clear-blocks"),
             TerminalAction::ClearBuffer,
         )
         .with_custom_action(CustomAction::ClearBlocks)
@@ -476,7 +482,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:executing_command_move_cursor_word_left",
-            "Move cursor one word to the left within an executing command",
+            crate::t!("keybinding-desc-terminal-cursor-word-left"),
             TerminalAction::ControlSequence(Vec::from(EscCodes::WORD_LEFT)),
         )
         .with_mac_key_binding("alt-left")
@@ -484,7 +490,7 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand")),
         EditableBinding::new(
             "terminal:executing_command_move_cursor_word_right",
-            "Move cursor one word to the right within an executing command",
+            crate::t!("keybinding-desc-terminal-cursor-word-right"),
             TerminalAction::ControlSequence(Vec::from(EscCodes::WORD_RIGHT)),
         )
         .with_mac_key_binding("alt-right")
@@ -492,7 +498,7 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand")),
         EditableBinding::new(
             "terminal:executing_command_move_cursor_home",
-            "Move cursor home within an executing command",
+            crate::t!("keybinding-desc-terminal-cursor-home"),
             TerminalAction::ControlSequence(vec![escape_sequences::C0::SOH]),
         )
         // We already have bindings for home/end (the keybindings for this on Linux and Mac) that
@@ -501,14 +507,14 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand")),
         EditableBinding::new(
             "terminal:executing_command_move_cursor_end",
-            "Move cursor end within an executing command",
+            crate::t!("keybinding-desc-terminal-cursor-end"),
             TerminalAction::ControlSequence(vec![escape_sequences::C0::ENQ]),
         )
         .with_mac_key_binding("cmd-right")
         .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand")),
         EditableBinding::new(
             "terminal:executing_command_delete_word_left",
-            "Delete word left within an executing command",
+            crate::t!("keybinding-desc-terminal-delete-word-left"),
             TerminalAction::ControlSequence(vec![escape_sequences::C0::ETB]),
         )
         .with_mac_key_binding("alt-backspace")
@@ -516,7 +522,7 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand")),
         EditableBinding::new(
             "terminal:executing_command_delete_line_start",
-            "Delete to line start within an executing command",
+            crate::t!("keybinding-desc-terminal-delete-line-start"),
             TerminalAction::ControlSequence(vec![escape_sequences::C0::NAK]),
         )
         .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand"))
@@ -525,7 +531,7 @@ pub fn init(app: &mut AppContext) {
         .with_mac_key_binding("cmd-backspace"),
         EditableBinding::new(
             "terminal:executing_command_delete_line_end",
-            "Delete to line end within an executing command",
+            crate::t!("keybinding-desc-terminal-delete-line-end"),
             TerminalAction::ControlSequence(vec![escape_sequences::C0::VT]),
         )
         .with_context_predicate(id!("Terminal") & !id!("IMEOpen") & id!("LongRunningCommand"))
@@ -533,7 +539,7 @@ pub fn init(app: &mut AppContext) {
         .with_mac_key_binding("cmd-delete"),
         EditableBinding::new(
             "terminal:backward_tabulation",
-            "Backward tabulation within an executing command",
+            crate::t!("keybinding-desc-terminal-backward-tabulation"),
             TerminalAction::ControlSequence(EscCodes::build_escape_sequence_with_c1(
                 escape_sequences::C1::CSI,
                 EscCodes::BACKWARD_TABULATION,
@@ -548,7 +554,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             SELECT_PREVIOUS_BLOCK_ACTION_NAME,
-            "Select previous block",
+            crate::t!("keybinding-desc-terminal-select-previous-block"),
             TerminalAction::SelectPriorBlock,
         )
         .with_custom_action(CustomAction::SelectBlockAbove)
@@ -557,25 +563,17 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             SELECT_NEXT_BLOCK_ACTION_NAME,
-            "Select next block",
+            crate::t!("keybinding-desc-terminal-select-next-block"),
             TerminalAction::SelectNextBlock,
         )
         .with_custom_action(CustomAction::SelectBlockBelow)
         .with_context_predicate(
             id!("Terminal") & id!("TerminalView_NonEmptyBlockList") & !id!("AltScreen"),
         ),
-        EditableBinding::new(
-            "terminal:open_share_block_modal",
-            "Share selected block",
-            TerminalAction::OpenShareModal,
-        )
-        .with_custom_action(CustomAction::CreateBlockPermalink)
-        .with_context_predicate(
-            id!("Terminal") & eq!("TerminalView_BlockSelectionCardinality", "One"),
-        ),
+        // OpenWarp:删除 terminal:open_share_block_modal keybinding(云端 share block)
         EditableBinding::new(
             "terminal:bookmark_selected_block",
-            "Bookmark selected block",
+            crate::t!("keybinding-desc-terminal-bookmark-selected-block"),
             TerminalAction::BookmarkSelectedBlock,
         )
         .with_custom_action(CustomAction::ToggleBookmarkBlock)
@@ -584,7 +582,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:find",
-            "Find within selected block",
+            crate::t!("keybinding-desc-terminal-find-within-selected-block"),
             TerminalAction::ShowFindBar,
         )
         .with_custom_action(CustomAction::FindWithinBlock)
@@ -593,7 +591,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:copy",
-            "Copy command and output",
+            crate::t!("keybinding-desc-terminal-copy-command-and-output"),
             TerminalAction::Copy,
         )
         .with_custom_action(CustomAction::CopyBlock)
@@ -602,7 +600,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:copy_outputs",
-            "Copy command output",
+            crate::t!("keybinding-desc-terminal-copy-command-output"),
             TerminalAction::CopyOutputs,
         )
         .with_custom_action(CustomAction::CopyBlockOutput)
@@ -611,7 +609,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:copy_commands",
-            "Copy command",
+            crate::t!("keybinding-desc-terminal-copy-command"),
             TerminalAction::CopyCommands,
         )
         .with_custom_action(CustomAction::CopyBlockCommand)
@@ -623,7 +621,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "terminal:scroll_up_one_line",
-            "Scroll terminal output up one line",
+            crate::t!("keybinding-desc-terminal-scroll-up-one-line"),
             TerminalAction::Scroll {
                 delta: 1.0.into_lines(),
             },
@@ -631,7 +629,7 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Terminal") & id!("TerminalView_NonEmptyBlockList")),
         EditableBinding::new(
             "terminal:scroll_down_one_line",
-            "Scroll terminal output down one line",
+            crate::t!("keybinding-desc-terminal-scroll-down-one-line"),
             TerminalAction::Scroll {
                 delta: -(1.0.into_lines()),
             },
@@ -668,7 +666,7 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         "terminal:scroll_to_top_of_selected_block",
-        "Scroll to top of selected block",
+        crate::t!("keybinding-desc-terminal-scroll-to-top-of-block"),
         TerminalAction::ScrollToTopOfSelectedBlocks,
     )
     .with_custom_action(CustomAction::ScrollToTopOfSelectedBlocks)
@@ -677,7 +675,7 @@ pub fn init(app: &mut AppContext) {
     )]);
     app.register_editable_bindings([EditableBinding::new(
         "terminal:scroll_to_bottom_of_selected_block",
-        "Scroll to bottom of selected block",
+        crate::t!("keybinding-desc-terminal-scroll-to-bottom-of-block"),
         TerminalAction::ScrollToBottomOfSelectedBlocks,
     )
     .with_custom_action(CustomAction::ScrollToBottomOfSelectedBlocks)
@@ -696,7 +694,7 @@ pub fn init(app: &mut AppContext) {
             // from the menus and doesn't conflict with cmd-A in the editor.
             EditableBinding::new(
                 "terminal:select_all_blocks",
-                "Select all blocks",
+                crate::t!("keybinding-desc-terminal-select-all-blocks"),
                 TerminalAction::SelectAllBlocks,
             )
             .with_context_predicate(
@@ -705,7 +703,7 @@ pub fn init(app: &mut AppContext) {
             .with_custom_action(CustomAction::SelectAll),
             EditableBinding::new(
                 "terminal:select_all_blocks",
-                "Select all blocks",
+                crate::t!("keybinding-desc-terminal-select-all-blocks"),
                 TerminalAction::SelectAllBlocks,
             )
             .with_context_predicate(
@@ -716,7 +714,7 @@ pub fn init(app: &mut AppContext) {
     } else {
         app.register_editable_bindings([EditableBinding::new(
             "terminal:select_all_blocks",
-            "Select all blocks",
+            crate::t!("keybinding-desc-terminal-select-all-blocks"),
             TerminalAction::SelectAllBlocks,
         )
         .with_context_predicate(
@@ -727,7 +725,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "terminal:expand_block_selection_above",
-            "Expand selected blocks above",
+            crate::t!("keybinding-desc-terminal-expand-blocks-above"),
             TerminalAction::ExpandBlockSelectionAbove,
         )
         .with_key_binding("shift-up")
@@ -739,7 +737,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:expand_block_selection_below",
-            "Expand selected blocks below",
+            crate::t!("keybinding-desc-terminal-expand-blocks-below"),
             TerminalAction::ExpandBlockSelectionBelow,
         )
         .with_key_binding("shift-down")
@@ -754,11 +752,13 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "terminal:ask_ai_assistant",
-            BindingDescription::new("Attach Selected Block as Agent Context")
-                .with_custom_description(
-                    bindings::MAC_MENUS_CONTEXT,
-                    "Attach Selection as Agent Context",
-                ),
+            BindingDescription::new(crate::t!(
+                "keybinding-desc-terminal-attach-block-as-context"
+            ))
+            .with_custom_description(
+                bindings::MAC_MENUS_CONTEXT,
+                crate::t!("keybinding-desc-terminal-attach-as-context-menu"),
+            ),
             TerminalAction::ContextMenu(ContextMenuAction::AskAI(AskAISource::SelectedBlocks)),
         )
         .with_enabled(|| FeatureFlag::AgentMode.is_enabled())
@@ -775,10 +775,10 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:ask_ai_assistant",
-            BindingDescription::new("Attach Selected Text as Agent Context")
+            BindingDescription::new(crate::t!("keybinding-desc-terminal-attach-text-as-context"))
                 .with_custom_description(
                     bindings::MAC_MENUS_CONTEXT,
-                    "Attach Selection as Agent Context",
+                    crate::t!("keybinding-desc-terminal-attach-as-context-menu"),
                 ),
             TerminalAction::ContextMenu(ContextMenuAction::AskAI(
                 AskAISource::SelectedTerminalText,
@@ -798,7 +798,7 @@ pub fn init(app: &mut AppContext) {
         // this is a block selection or text selection later on.
         EditableBinding::new(
             "terminal:ask_ai_assistant",
-            "Ask Warp AI about Selection",
+            crate::t!("keybinding-desc-terminal-ask-ai-selection"),
             TerminalAction::ContextMenu(ContextMenuAction::AskAI(AskAISource::SelectedBlockOrText)),
         )
         .with_enabled(|| !FeatureFlag::AgentMode.is_enabled())
@@ -816,7 +816,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "terminal:ask_ai_assistant_last_block",
-            "Ask Warp AI about last block",
+            crate::t!("keybinding-desc-terminal-ask-ai-last-block"),
             TerminalAction::ContextMenu(ContextMenuAction::AskAI(AskAISource::LastBlock)),
         )
         .with_enabled(|| !FeatureFlag::AgentMode.is_enabled())
@@ -827,7 +827,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:ask_ai_assistant",
-            "Ask Warp AI",
+            crate::t!("keybinding-desc-terminal-ask-ai"),
             TerminalAction::ContextMenu(ContextMenuAction::AskAI(AskAISource::SelectedInputText)),
         )
         .with_enabled(|| !FeatureFlag::AgentMode.is_enabled())
@@ -839,7 +839,7 @@ pub fn init(app: &mut AppContext) {
     if FeatureFlag::CommandCorrectionKey.is_enabled() {
         app.register_editable_bindings([EditableBinding::new(
             "input:insert_command_correction",
-            "Insert Command Correction",
+            crate::t!("keybinding-desc-terminal-insert-command-correction"),
             TerminalAction::InsertMostRecentCommandCorrection,
         )
         .with_context_predicate(id!("Terminal"))]);
@@ -848,7 +848,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             "terminal:onboarding_flow",
-            "Setup Guide",
+            crate::t!("keybinding-desc-terminal-setup-guide"),
             TerminalAction::OnboardingFlow(OnboardingVersion::Legacy),
         )
         .with_context_predicate(
@@ -857,7 +857,7 @@ pub fn init(app: &mut AppContext) {
         // UniversalInput callout debug bindings
         EditableBinding::new(
             "terminal:agent_onboarding_flow_legacy_terminal",
-            "[Debug] Onboarding Callout: WarpInput - Terminal",
+            crate::t!("keybinding-desc-terminal-onboarding-warp-input-terminal"),
             TerminalAction::OnboardingFlow(OnboardingVersion::Legacy),
         )
         .with_enabled(|| {
@@ -868,7 +868,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:agent_onboarding_flow_universal_input_project",
-            "[Debug] Onboarding Callout: WarpInput - Project",
+            crate::t!("keybinding-desc-terminal-onboarding-warp-input-project"),
             TerminalAction::OnboardingFlow(OnboardingVersion::Agent(
                 AgentOnboardingVersion::UniversalInput { has_project: true },
             )),
@@ -881,7 +881,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:agent_onboarding_flow_universal_input_no_project",
-            "[Debug] Onboarding Callout: WarpInput - No Project",
+            crate::t!("keybinding-desc-terminal-onboarding-warp-input-no-project"),
             TerminalAction::OnboardingFlow(OnboardingVersion::Agent(
                 AgentOnboardingVersion::UniversalInput { has_project: false },
             )),
@@ -895,7 +895,7 @@ pub fn init(app: &mut AppContext) {
         // AgentModality callout debug bindings
         EditableBinding::new(
             "terminal:agent_onboarding_flow_modality_project",
-            "[Debug] Onboarding Callout: Modality - Project",
+            crate::t!("keybinding-desc-terminal-onboarding-modality-project"),
             TerminalAction::OnboardingFlow(OnboardingVersion::Agent(
                 AgentOnboardingVersion::AgentModality {
                     has_project: true,
@@ -911,7 +911,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:agent_onboarding_flow_modality_no_project",
-            "[Debug] Onboarding Callout: Modality - No Project",
+            crate::t!("keybinding-desc-terminal-onboarding-modality-no-project"),
             TerminalAction::OnboardingFlow(OnboardingVersion::Agent(
                 AgentOnboardingVersion::AgentModality {
                     has_project: false,
@@ -927,7 +927,7 @@ pub fn init(app: &mut AppContext) {
         ),
         EditableBinding::new(
             "terminal:agent_onboarding_flow_modality_terminal",
-            "[Debug] Onboarding Callout: Modality - Terminal",
+            crate::t!("keybinding-desc-terminal-onboarding-modality-terminal"),
             TerminalAction::OnboardingFlow(OnboardingVersion::Agent(
                 AgentOnboardingVersion::AgentModality {
                     has_project: false,
@@ -945,42 +945,16 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         "workspace:open_settings_import_page",
-        "Import External Settings",
+        crate::t!("keybinding-desc-terminal-import-external-settings"),
         TerminalAction::ImportSettings,
     )
     .with_context_predicate(id!("Terminal") & id!(flags::HAS_SETTINGS_TO_IMPORT_FLAG))]);
 
-    app.register_editable_bindings([
-        EditableBinding::new(
-            "terminal:share_current_session",
-            "Share current session",
-            TerminalAction::OpenShareSessionModal {
-                source: SharedSessionActionSource::CommandPalette,
-            },
-        )
-        .with_context_predicate(
-            id!("Terminal") & id!(SharedSessionStatus::NotShared.as_keymap_context()),
-        )
-        .with_custom_action(CustomAction::ShareCurrentSession)
-        .with_enabled(|| {
-            FeatureFlag::CreatingSharedSessions.is_enabled()
-                && ContextFlag::CreateSharedSession.is_enabled()
-        }),
-        EditableBinding::new(
-            "terminal:stop_sharing_current_session",
-            "Stop sharing current session",
-            TerminalAction::StopSharingCurrentSession {
-                source: SharedSessionActionSource::CommandPalette,
-            },
-        )
-        .with_context_predicate(
-            id!("Terminal") & id!(SharedSessionStatus::ActiveSharer.as_keymap_context()),
-        ),
-    ]);
+    // OpenWarp:删除 terminal:share_current_session / terminal:stop_sharing_current_session keybindings(云端 shared session)
 
     app.register_editable_bindings([EditableBinding::new(
         TOGGLE_BLOCK_FILTER_KEYBINDING,
-        "Toggle block filter on selected or last block",
+        crate::t!("keybinding-desc-terminal-toggle-block-filter"),
         TerminalAction::ToggleBlockFilterOnSelectedOrLastBlock(ToggleBlockFilterSource::Binding),
     )
     .with_mac_key_binding("shift-alt-F")
@@ -988,7 +962,7 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         "terminal:toggle_snackbar_in_active_pane",
-        "Toggle Sticky Command Header in Active Pane",
+        crate::t!("keybinding-desc-terminal-toggle-sticky-command-header"),
         TerminalAction::ToggleSnackbarInActivePane,
     )
     .with_context_predicate(id!("Terminal"))]);
@@ -996,7 +970,7 @@ pub fn init(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             TOGGLE_AUTOEXECUTE_MODE_KEYBINDING,
-            "Toggle Auto-execute Mode",
+            crate::t!("keybinding-desc-terminal-toggle-autoexecute-mode"),
             TerminalAction::ToggleAutoexecuteMode,
         )
         .with_key_binding("cmdorctrl-shift-I")
@@ -1005,7 +979,7 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| FeatureFlag::FastForwardAutoexecuteButton.is_enabled()),
         EditableBinding::new(
             TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING,
-            "Toggle Queue Next Prompt",
+            crate::t!("keybinding-desc-terminal-toggle-queue-next-prompt"),
             TerminalAction::ToggleQueueNextPrompt,
         )
         .with_key_binding("cmdorctrl-shift-J")
@@ -1014,7 +988,7 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| FeatureFlag::QueueSlashCommand.is_enabled()),
         EditableBinding::new(
             "terminal:generate_codebase_index",
-            "[Debug] Generate codebase index",
+            crate::t!("keybinding-desc-terminal-generate-codebase-index"),
             TerminalAction::GenerateCodebaseIndex,
         )
         .with_group(bindings::BindingGroup::WarpAi.as_str())
@@ -1050,7 +1024,7 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         "workspace:write_codebase_index",
-        BindingDescription::new("Write current codebase index snapshot"),
+        BindingDescription::new(crate::t!("keybinding-desc-workspace-write-codebase-index")),
         TerminalAction::WriteCodebaseIndex,
     )
     .with_enabled(|| FeatureFlag::CodebaseIndexPersistence.is_enabled())
@@ -1058,7 +1032,7 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         "terminal:load_agent_mode_conversation",
-        "Load agent mode conversation (from debug link in clipboard)",
+        crate::t!("keybinding-desc-terminal-load-agent-conversation"),
         TerminalAction::LoadAgentModeConversation,
     )
     .with_enabled(ChannelState::enable_debug_features)
@@ -1066,7 +1040,7 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         "terminal:toggle_session_recording",
-        "Toggle PTY Recording for Session",
+        crate::t!("keybinding-desc-terminal-toggle-session-recording"),
         TerminalAction::ToggleSessionRecording,
     )
     .with_enabled(|| cfg!(feature = "local_fs") && ChannelState::enable_debug_features())
@@ -1074,14 +1048,14 @@ pub fn init(app: &mut AppContext) {
 
     app.register_editable_bindings([EditableBinding::new(
         "workspace:init_project_rules",
-        BindingDescription::new("Initiate project for warp"),
+        BindingDescription::new(crate::t!("keybinding-desc-workspace-init-project")),
         TerminalAction::InitProject,
     )
     .with_context_predicate(id!("Workspace") & id!(flags::IS_ANY_AI_ENABLED))]);
 
     app.register_editable_bindings([EditableBinding::new(
         "workspace:add_current_dir_as_project",
-        BindingDescription::new("Add current folder as project"),
+        BindingDescription::new(crate::t!("keybinding-desc-workspace-add-current-folder")),
         TerminalAction::AddProjectAtCurrentDirectory,
     )
     .with_enabled(|| FeatureFlag::Projects.is_enabled())
@@ -1096,35 +1070,6 @@ pub fn init(app: &mut AppContext) {
     .with_group(bindings::BindingGroup::WarpAi.as_str())
     .with_context_predicate(id!("Terminal") & id!(CAN_SHOW_CONVERSATION_DETAILS_KEY))]);
 
-    // Register bindings for starting a new cloud agent conversation.
-    {
-        app.register_fixed_bindings([FixedBinding::new_per_platform(
-            PerPlatformKeystroke {
-                mac: "cmd-alt-enter",
-                linux_and_windows: "ctrl-alt-enter",
-            },
-            TerminalAction::EnterCloudAgentView,
-            id!("Terminal") & id!(flags::IS_ANY_AI_ENABLED),
-        )
-        .with_enabled(|| {
-            FeatureFlag::AgentView.is_enabled()
-                && FeatureFlag::CloudMode.is_enabled()
-                && FeatureFlag::CloudModeFromLocalSession.is_enabled()
-        })
-        .with_group(bindings::BindingGroup::WarpAi.as_str())]);
-        if cfg!(target_os = "macos") {
-            // On MacOS, if the user has the 'Option as meta' setting enabled, the cmd-alt-enter
-            // binding above will not match.
-            //
-            // TODO(zachbai): Consider if, for the purposes of fixed bindings, alt/meta should work
-            // fungibly regardless of underlying setting.
-            app.register_fixed_bindings([FixedBinding::new(
-                "cmd-meta-enter",
-                TerminalAction::EnterCloudAgentView,
-                id!("Terminal") & id!(flags::IS_ANY_AI_ENABLED),
-            )]);
-        }
-    }
 }
 
 /// Registers bindings related to input modes.
@@ -1182,7 +1127,7 @@ fn register_input_mode_bindings(app: &mut AppContext) {
     app.register_editable_bindings([
         EditableBinding::new(
             SET_INPUT_MODE_AGENT_ACTION_NAME,
-            "Set Input Mode to Agent Mode",
+            crate::t!("keybinding-desc-set-input-mode-agent"),
             TerminalAction::SetInputModeAgent,
         )
         .with_group(bindings::BindingGroup::WarpAi.as_str())
@@ -1191,7 +1136,7 @@ fn register_input_mode_bindings(app: &mut AppContext) {
         .with_linux_or_windows_key_binding("ctrl-i"),
         EditableBinding::new(
             SET_INPUT_MODE_TERMINAL_ACTION_NAME,
-            "Set Input Mode to Terminal Mode",
+            crate::t!("keybinding-desc-set-input-mode-terminal"),
             TerminalAction::SetInputModeTerminal,
         )
         .with_group(bindings::BindingGroup::WarpAi.as_str())
@@ -1200,7 +1145,7 @@ fn register_input_mode_bindings(app: &mut AppContext) {
         .with_linux_or_windows_key_binding("ctrl-i"),
         EditableBinding::new(
             TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING,
-            "Toggle Hide CLI Responses",
+            crate::t!("keybinding-desc-toggle-hide-cli-responses"),
             TerminalAction::ToggleHideCliResponses,
         )
         .with_key_binding("cmdorctrl-g")

@@ -4,20 +4,17 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
 use crate::ai::active_agent_views_model::{ActiveAgentViewsModel, ConversationOrTaskId};
-use crate::ai::agent::api::ServerConversationToken;
 use crate::ai::agent::conversation::AIConversationId;
 use crate::ai::agent_conversations_model::{AgentConversationsModel, ConversationOrTask};
 use crate::ai::agent_management::telemetry::{AgentManagementTelemetryEvent, OpenedFrom};
 use crate::ai::blocklist::history_model::BlocklistAIHistoryModel;
 use crate::appearance::Appearance;
 use crate::drive::sharing::dialog::SharingDialog;
-use crate::drive::sharing::ShareableObject;
 use crate::editor::{
     EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys,
     PropagateHorizontalNavigationKeys, SingleLineEditorOptions, TextOptions,
 };
 use crate::menu::{Event as MenuEvent, Menu, MenuItem, MenuItemFields};
-use crate::server::telemetry::SharingDialogSource;
 use crate::view_components::action_button::{ActionButton, ButtonSize, SecondaryTheme};
 use crate::view_components::DismissibleToast;
 use crate::workspace::global_actions::ForkedConversationDestination;
@@ -52,7 +49,6 @@ use warpui::{
     ViewContext, ViewHandle, WindowId,
 };
 
-const VIEW_ALL_LABEL: &str = "View all";
 /// Maximum number of past items to show before the user toggles "view all".
 const INITIAL_MAX_PAST_ITEMS: usize = 10;
 
@@ -226,7 +222,7 @@ impl ConversationListView {
                 ctx,
             );
 
-            editor.set_placeholder_text("Search", ctx);
+            editor.set_placeholder_text(crate::t!("workspace-conversation-list-search"), ctx);
             editor
         });
         ctx.subscribe_to_view(&query_editor, |me, _handle, event, ctx| {
@@ -236,11 +232,14 @@ impl ConversationListView {
         // We use this as both the "view all" and "show less" button
         // (switching out the text on-toggle).
         let toggle_view_all_button = ctx.add_typed_action_view(|_| {
-            ActionButton::new(VIEW_ALL_LABEL, SecondaryTheme)
-                .with_size(ButtonSize::Small)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(ConversationListViewAction::ToggleViewAll);
-                })
+            ActionButton::new(
+                crate::t!("workspace-conversation-list-view-all"),
+                SecondaryTheme,
+            )
+            .with_size(ButtonSize::Small)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(ConversationListViewAction::ToggleViewAll);
+            })
         });
 
         let item_overflow_menu = ctx.add_typed_action_view(|_| {
@@ -660,15 +659,19 @@ fn render_zero_state(
         .with_cross_axis_alignment(CrossAxisAlignment::Center)
         .with_spacing(4.)
         .with_child(
-            Text::new("No conversations yet", appearance.ui_font_family(), 14.)
-                .with_color(theme.sub_text_color(theme.background()).into_solid())
-                .with_style(Properties::default().weight(Weight::Semibold))
-                .finish(),
+            Text::new(
+                crate::t!("workspace-conversation-list-empty-title"),
+                appearance.ui_font_family(),
+                14.,
+            )
+            .with_color(theme.sub_text_color(theme.background()).into_solid())
+            .with_style(Properties::default().weight(Weight::Semibold))
+            .finish(),
         )
         .with_child(
             ConstrainedBox::new(
                 FormattedTextElement::from_str(
-                    "Your active and past conversations with local and ambient agents will appear here.",
+                    crate::t!("workspace-conversation-list-empty-description"),
                     appearance.ui_font_family(),
                     14.,
                 )
@@ -683,9 +686,13 @@ fn render_zero_state(
 
     let new_conversation_button =
         Hoverable::new(zero_state_button_mouse_state, move |mouse_state| {
-            let label = Text::new_inline("New conversation", appearance.ui_font_family(), 12.)
-                .with_color(theme.main_text_color(theme.background()).into_solid())
-                .finish();
+            let label = Text::new_inline(
+                crate::t!("workspace-conversation-list-new-conversation"),
+                appearance.ui_font_family(),
+                12.,
+            )
+            .with_color(theme.main_text_color(theme.background()).into_solid())
+            .finish();
 
             let button_content = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
@@ -784,8 +791,8 @@ fn render_section_header(
 
     let title_text = Text::new_inline(
         match section {
-            ConversationSection::Active => "ACTIVE",
-            ConversationSection::Past => "PAST",
+            ConversationSection::Active => crate::t!("workspace-conversation-list-active"),
+            ConversationSection::Past => crate::t!("workspace-conversation-list-past"),
         },
         appearance.ui_font_family(),
         11.,
@@ -857,9 +864,9 @@ impl TypedActionView for ConversationListView {
                 if !conversation_is_done {
                     ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                         toast_stack.add_ephemeral_toast(
-                            DismissibleToast::error(
-                                "Conversations cannot be deleted while in progress.".to_string(),
-                            ),
+                            DismissibleToast::error(crate::t!(
+                                "workspace-conversation-list-delete-in-progress-error"
+                            )),
                             window_id,
                             ctx,
                         );
@@ -873,7 +880,7 @@ impl TypedActionView for ConversationListView {
                     .as_ref(ctx)
                     .get_item_by_id(&id, ctx)
                     .map(|c| c.title(ctx).to_string())
-                    .unwrap_or_else(|| "Conversation".to_string());
+                    .unwrap_or_else(|| crate::t!("workspace-conversation-list-fallback-title"));
                 ctx.emit(Event::ShowDeleteConfirmationDialog {
                     conversation_id: *conversation_id,
                     conversation_title,
@@ -899,15 +906,19 @@ impl TypedActionView for ConversationListView {
                     let is_ambient_agent_conversation =
                         matches!(conversation_id, ConversationOrTaskId::TaskId(_));
 
-                    let mut delete_item = MenuItemFields::new("Delete")
-                        .with_override_text_color(Appearance::as_ref(ctx).theme().ansi_fg_red())
-                        .with_on_select_action(ConversationListViewAction::DeleteFromOverflowMenu {
-                            conversation_id,
-                        })
-                        .with_disabled(is_ambient_agent_conversation);
+                    let mut delete_item =
+                        MenuItemFields::new(crate::t!("workspace-conversation-list-delete"))
+                            .with_override_text_color(Appearance::as_ref(ctx).theme().ansi_fg_red())
+                            .with_on_select_action(
+                                ConversationListViewAction::DeleteFromOverflowMenu {
+                                    conversation_id,
+                                },
+                            )
+                            .with_disabled(is_ambient_agent_conversation);
                     if is_ambient_agent_conversation {
-                        delete_item = delete_item
-                            .with_tooltip("Ambient agent conversations cannot be deleted");
+                        delete_item = delete_item.with_tooltip(crate::t!(
+                            "workspace-conversation-list-delete-ambient-tooltip"
+                        ));
                     }
 
                     // Check if conversation is shareable:
@@ -932,11 +943,13 @@ impl TypedActionView for ConversationListView {
                     // Only show share item if the conversation is shareable
                     let share_item = if is_shareable {
                         Some(
-                            MenuItemFields::new("Share conversation")
-                                .with_on_select_action(
-                                    ConversationListViewAction::OpenShareDialog { conversation_id },
-                                )
-                                .into_item(),
+                            MenuItemFields::new(crate::t!(
+                                "workspace-conversation-list-share-conversation"
+                            ))
+                            .with_on_select_action(ConversationListViewAction::OpenShareDialog {
+                                conversation_id,
+                            })
+                            .into_item(),
                         )
                     } else {
                         None
@@ -946,7 +959,9 @@ impl TypedActionView for ConversationListView {
                         // Forking from a closed ambient agent conversation is not supported at this point.
                         if !is_ambient_agent_conversation {
                             Some([
-                                MenuItemFields::new("Fork in new pane")
+                                MenuItemFields::new(crate::t!(
+                                    "workspace-conversation-list-fork-new-pane"
+                                ))
                                     .with_on_select_action(
                                         ConversationListViewAction::ForkConversation {
                                             conversation_id,
@@ -954,7 +969,9 @@ impl TypedActionView for ConversationListView {
                                         },
                                     )
                                     .into_item(),
-                                MenuItemFields::new("Fork in new tab")
+                                MenuItemFields::new(crate::t!(
+                                    "workspace-conversation-list-fork-new-tab"
+                                ))
                                     .with_on_select_action(
                                         ConversationListViewAction::ForkConversation {
                                             conversation_id,
@@ -985,45 +1002,8 @@ impl TypedActionView for ConversationListView {
                 }
                 ctx.notify();
             }
-            ConversationListViewAction::OpenShareDialog { conversation_id } => {
-                // Clear selection state when opening share dialog
-                self.selected_index = None;
-
-                // Resolve the AIConversationId for the shareable object
-                let ai_conversation_id: Option<AIConversationId> = match conversation_id {
-                    ConversationOrTaskId::TaskId(task_id) => {
-                        // For tasks, look up the associated conversation_id by server token
-                        if let Some(ConversationOrTask::Task(task)) =
-                            AgentConversationsModel::as_ref(ctx).get_task(task_id)
-                        {
-                            task.conversation_id().and_then(|token_str| {
-                                let server_token =
-                                    ServerConversationToken::new(token_str.to_string());
-                                BlocklistAIHistoryModel::as_ref(ctx)
-                                    .find_conversation_id_by_server_token(&server_token)
-                            })
-                        } else {
-                            None
-                        }
-                    }
-                    ConversationOrTaskId::ConversationId(conv_id) => Some(*conv_id),
-                };
-
-                let Some(ai_conversation_id) = ai_conversation_id else {
-                    return;
-                };
-
-                // Set the share dialog target and open it
-                self.share_dialog_open_for = Some(*conversation_id);
-                self.sharing_dialog.update(ctx, |dialog, ctx| {
-                    dialog.set_target(
-                        Some(ShareableObject::AIConversation(ai_conversation_id)),
-                        ctx,
-                    );
-                    dialog.report_open(SharingDialogSource::ConversationList, ctx);
-                });
-                ctx.focus(&self.sharing_dialog);
-                ctx.notify();
+            ConversationListViewAction::OpenShareDialog { conversation_id: _ } => {
+                // AI conversation sharing was removed alongside the CloudConversations feature.
             }
             ConversationListViewAction::DeleteFromOverflowMenu { conversation_id } => {
                 let ConversationOrTaskId::ConversationId(ai_conversation_id) = conversation_id
@@ -1040,10 +1020,9 @@ impl TypedActionView for ConversationListView {
                         let window_id = ctx.window_id();
                         ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                             toast_stack.add_ephemeral_toast(
-                                DismissibleToast::error(
-                                    "Conversations cannot be deleted while in progress."
-                                        .to_string(),
-                                ),
+                                DismissibleToast::error(crate::t!(
+                                    "workspace-conversation-list-delete-in-progress-error"
+                                )),
                                 window_id,
                                 ctx,
                             );
@@ -1064,7 +1043,7 @@ impl TypedActionView for ConversationListView {
                 let conversation_title = item
                     .as_ref()
                     .map(|c| c.title(ctx).to_string())
-                    .unwrap_or_else(|| "Conversation".to_string());
+                    .unwrap_or_else(|| crate::t!("workspace-conversation-list-fallback-title"));
                 ctx.emit(Event::ShowDeleteConfirmationDialog {
                     conversation_id: *ai_conversation_id,
                     conversation_title,
@@ -1117,9 +1096,9 @@ impl TypedActionView for ConversationListView {
                 self.view_all = !self.view_all;
 
                 let label = if self.view_all {
-                    "Show less"
+                    crate::t!("workspace-conversation-list-show-less")
                 } else {
-                    VIEW_ALL_LABEL
+                    crate::t!("workspace-conversation-list-view-all")
                 };
                 self.toggle_view_all_button
                     .update(ctx, |button, ctx| button.set_label(label, ctx));
@@ -1181,7 +1160,7 @@ impl View for ConversationListView {
         } else if self.item_count() == 0 {
             Container::new(
                 Text::new_inline(
-                    "No matching conversations",
+                    crate::t!("workspace-conversation-list-no-matching"),
                     appearance.ui_font_family(),
                     appearance.ui_font_size(),
                 )

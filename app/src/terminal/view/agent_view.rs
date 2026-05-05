@@ -249,7 +249,7 @@ impl TerminalView {
                         key: "enter".to_owned(),
                         ..Default::default()
                     }),
-                    MessageItem::text("again to send to agent"),
+                    MessageItem::text(crate::t!("agent-message-bar-again-send-to-agent")),
                 ])
                 .with_text_color(appearance.theme().ansi_fg_magenta());
                 self.ephemeral_message_model.update(ctx, |model, ctx| {

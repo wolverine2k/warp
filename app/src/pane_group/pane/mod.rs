@@ -24,6 +24,7 @@ pub(super) mod local_harness_launch;
 pub(super) mod network_log_pane;
 pub(super) mod notebook_pane;
 pub(super) mod settings_pane;
+pub(crate) mod ssh_server_pane;
 pub(super) mod terminal_pane;
 pub mod view;
 pub(super) mod welcome_pane;
@@ -34,6 +35,7 @@ use std::{any::Any, fmt::Display};
 
 use crate::pane_group::focus_state::PaneFocusHandle;
 use crate::pane_group::pane::get_started_view::GetStartedView;
+use crate::ssh_manager::server_view::SshServerView;
 use crate::view_components::action_button::ActionButton;
 use crate::{
     ai::execution_profiles::editor::ExecutionProfileEditorView,
@@ -150,6 +152,7 @@ pub(crate) enum IPaneType {
     ExecutionProfileEditor,
     GetStarted,
     NetworkLog,
+    SshServer,
     Welcome,
     DeferredPlaceholder,
     /// A pane type only for tests.
@@ -174,6 +177,7 @@ impl Display for IPaneType {
             IPaneType::ExecutionProfileEditor => write!(f, "Execution Profile Editor"),
             IPaneType::GetStarted => write!(f, "GetStarted"),
             IPaneType::NetworkLog => write!(f, "Network Log"),
+            IPaneType::SshServer => write!(f, "SSH Server"),
             IPaneType::Welcome => write!(f, "Welcome"),
             IPaneType::DeferredPlaceholder => write!(f, "Placeholder"),
             #[cfg(test)]
@@ -271,6 +275,10 @@ impl PaneId {
         Self::new_from_ctx(IPaneType::GetStarted, ctx)
     }
 
+    pub fn from_ssh_server_pane_ctx(ctx: &ViewContext<PaneView<SshServerView>>) -> Self {
+        Self::new_from_ctx(IPaneType::SshServer, ctx)
+    }
+
     /// Creates a [`PaneId`] from a [`ViewContext<PaneView<NetworkLogView>>`].
     pub fn from_network_log_pane_ctx(ctx: &ViewContext<PaneView<NetworkLogView>>) -> Self {
         Self::new_from_ctx(IPaneType::NetworkLog, ctx)
@@ -364,6 +372,12 @@ impl PaneId {
         get_started_pane_view: &ViewHandle<PaneView<GetStartedView>>,
     ) -> Self {
         Self::new(IPaneType::GetStarted, get_started_pane_view)
+    }
+
+    pub fn from_ssh_server_pane_view(
+        ssh_server_pane_view: &ViewHandle<PaneView<SshServerView>>,
+    ) -> Self {
+        Self::new(IPaneType::SshServer, ssh_server_pane_view)
     }
 
     pub fn from_welcome_pane_view(welcome_pane_view: &ViewHandle<PaneView<WelcomeView>>) -> Self {
@@ -491,6 +505,9 @@ impl PaneId {
             }
             IPaneType::NetworkLog => {
                 ChildView::<PaneView<NetworkLogView>>::with_id(self.0.pane_view_id).finish()
+            }
+            IPaneType::SshServer => {
+                ChildView::<PaneView<SshServerView>>::with_id(self.0.pane_view_id).finish()
             }
             IPaneType::Welcome => {
                 ChildView::<PaneView<WelcomeView>>::with_id(self.0.pane_view_id).finish()

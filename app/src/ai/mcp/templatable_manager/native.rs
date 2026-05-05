@@ -1762,6 +1762,10 @@ async fn spawn_server(
             let cwd_for_log = cli_server.cwd_parameter.clone();
 
             // Try to spawn the child process.
+            // rmcp::transport::TokioChildProcess::builder 强制要求 tokio::process::Command,
+            // 无法换成 command::r#async::Command 包装版;改用下方手动设置 CREATE_NO_WINDOW
+            // 维持 Windows 不闪窗。
+            #[allow(clippy::disallowed_types)]
             let (transport, stderr) = rmcp::transport::TokioChildProcess::builder(
                 tokio::process::Command::new(command).configure(|cmd| {
                     cmd.args(args);

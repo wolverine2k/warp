@@ -124,28 +124,30 @@ impl CliAgentPluginManager for GeminiPluginManager {
 }
 
 static INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
-    title: "Install Warp Plugin for Gemini CLI",
-    subtitle: "Run the following command, then restart Gemini CLI.",
-    steps: &[PluginInstructionStep {
-        description: "Install the Warp extension",
+    title: crate::t_static!("cli-agent-plugin-gemini-install-title"),
+    subtitle: crate::t_static!("cli-agent-plugin-gemini-run-command-restart"),
+    steps: vec![PluginInstructionStep {
+        description: crate::t_static!("cli-agent-plugin-install-warp-extension-step"),
         command:
             "gemini extensions install https://github.com/warpdotdev/gemini-cli-warp --consent",
         executable: true,
         link: None,
     }],
-    post_install_notes: &["Restart Gemini CLI to activate the plugin."],
+    post_install_notes: vec![crate::t_static!("cli-agent-plugin-gemini-restart-note")],
 });
 
 static UPDATE_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| PluginInstructions {
-    title: "Update Warp Plugin for Gemini CLI",
-    subtitle: "Run the following command, then restart Gemini CLI.",
-    steps: &[PluginInstructionStep {
-        description: "Update the Warp extension",
+    title: crate::t_static!("cli-agent-plugin-gemini-update-title"),
+    subtitle: crate::t_static!("cli-agent-plugin-gemini-run-command-restart"),
+    steps: vec![PluginInstructionStep {
+        description: crate::t_static!("cli-agent-plugin-update-warp-extension-step"),
         command: "gemini extensions update gemini-warp",
         executable: true,
         link: None,
     }],
-    post_install_notes: &["Restart Gemini CLI to activate the update."],
+    post_install_notes: vec![crate::t_static!(
+        "cli-agent-plugin-gemini-restart-update-note"
+    )],
 });
 
 fn check_installed(extensions_dir: &Path) -> bool {

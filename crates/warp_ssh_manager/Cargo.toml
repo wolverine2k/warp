@@ -1,0 +1,28 @@
+[package]
+name = "warp_ssh_manager"
+version = "0.1.0"
+edition = "2024"
+authors.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+diesel = { workspace = true, features = ["chrono", "sqlite"] }
+keyring.workspace = true
+log.workspace = true
+persistence.workspace = true
+regex.workspace = true
+serde.workspace = true
+shell-escape.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+zeroize = "1.8"
+
+[dev-dependencies]
+diesel = { workspace = true, features = ["chrono", "sqlite", "returning_clauses_for_sqlite_3_35"] }
+diesel_migrations = "2.2.0"
+# 静态链接 SQLite,避免依赖系统级 sqlite3.lib(Windows 默认没有)。
+libsqlite3-sys = { version = "0.33.0", features = ["bundled"] }
+tempfile.workspace = true

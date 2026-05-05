@@ -27,9 +27,6 @@ pub enum AIAgentActionResultType {
     /// The output of a read files action.
     ReadFiles(ReadFilesResult),
 
-    /// The output of an upload artifact action.
-    UploadArtifact(UploadArtifactResult),
-
     /// The output of a search codebase action.
     SearchCodebase(SearchCodebaseResult),
 
@@ -73,39 +70,13 @@ pub enum AIAgentActionResultType {
     /// The output of reading shell command output.
     ReadShellCommandOutput(ReadShellCommandOutputResult),
 
-    /// The output of using computer.
-    UseComputer(UseComputerResult),
-
     /// The result of inserting code review comments.
     InsertReviewComments(InsertReviewCommentsResult),
-
-    /// The output of requesting computer use.
-    RequestComputerUse(RequestComputerUseResult),
-
-    /// The result of fetching a conversation's tasks.
-    FetchConversation(FetchConversationResult),
-
-    /// The result of starting a child agent.
-    StartAgent(StartAgentResult),
-
-    /// The result of sending a message to another agent.
-    SendMessageToAgent(SendMessageToAgentResult),
 
     /// The output of transferring shell command control to the user.
     TransferShellCommandControlToUser(TransferShellCommandControlToUserResult),
     /// The result of asking the user a question.
     AskUserQuestion(AskUserQuestionResult),
-
-    /// The result of an orchestrate tool call: launched (with per-agent
-    /// outcomes), launch denied (Stage 2), failure, or cancelled.
-    RunAgents(RunAgentsResult),
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub enum StartAgentVersion {
-    #[default]
-    V1,
-    V2,
 }
 
 impl AIAgentActionResultType {
@@ -143,7 +114,6 @@ impl Display for AIAgentActionResultType {
             AIAgentActionResultType::WriteToLongRunningShellCommand(result) => result.fmt(f),
             AIAgentActionResultType::RequestFileEdits(result) => result.fmt(f),
             AIAgentActionResultType::ReadFiles(result) => result.fmt(f),
-            AIAgentActionResultType::UploadArtifact(result) => result.fmt(f),
             AIAgentActionResultType::SearchCodebase(result) => result.fmt(f),
             AIAgentActionResultType::Grep(result) => result.fmt(f),
             AIAgentActionResultType::FileGlob(result) => result.fmt(f),
@@ -157,15 +127,9 @@ impl Display for AIAgentActionResultType {
             AIAgentActionResultType::EditDocuments(result) => result.fmt(f),
             AIAgentActionResultType::CreateDocuments(result) => result.fmt(f),
             AIAgentActionResultType::ReadShellCommandOutput(result) => result.fmt(f),
-            AIAgentActionResultType::UseComputer(result) => result.fmt(f),
             AIAgentActionResultType::InsertReviewComments(result) => result.fmt(f),
-            AIAgentActionResultType::RequestComputerUse(result) => result.fmt(f),
-            AIAgentActionResultType::FetchConversation(result) => result.fmt(f),
-            AIAgentActionResultType::StartAgent(result) => result.fmt(f),
-            AIAgentActionResultType::SendMessageToAgent(result) => result.fmt(f),
             AIAgentActionResultType::TransferShellCommandControlToUser(result) => result.fmt(f),
             AIAgentActionResultType::AskUserQuestion(result) => result.fmt(f),
-            AIAgentActionResultType::RunAgents(result) => result.fmt(f),
             AIAgentActionResultType::OpenCodeReview | AIAgentActionResultType::InitProject => {
                 Ok(())
             }
@@ -412,36 +376,6 @@ impl Display for ReadFilesResult {
             }
             ReadFilesResult::Error(error) => write!(f, "Read files error: {error}"),
             ReadFilesResult::Cancelled => write!(f, "Read files cancelled"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub enum UploadArtifactResult {
-    Success {
-        artifact_uid: String,
-        filepath: Option<String>,
-        mime_type: String,
-        description: Option<String>,
-        size_bytes: i64,
-    },
-    Error(String),
-    Cancelled,
-}
-
-impl Display for UploadArtifactResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            UploadArtifactResult::Success {
-                artifact_uid,
-                filepath,
-                ..
-            } => match filepath {
-                Some(filepath) => write!(f, "Uploaded artifact {artifact_uid} from {filepath}"),
-                None => write!(f, "Uploaded artifact {artifact_uid}"),
-            },
-            UploadArtifactResult::Error(error) => write!(f, "Upload artifact error: {error}"),
-            UploadArtifactResult::Cancelled => write!(f, "Upload artifact cancelled"),
         }
     }
 }
@@ -728,7 +662,6 @@ impl AIAgentActionResultType {
                 "The diff from editing the last file in Agent Mode"
             }
             AIAgentActionResultType::ReadFiles(_) => "The requested file content",
-            AIAgentActionResultType::UploadArtifact(_) => "The uploaded artifact metadata",
             AIAgentActionResultType::SearchCodebase(_) => "The codebase search results",
             AIAgentActionResultType::Grep(_) => "The results of the grep operation",
             AIAgentActionResultType::FileGlob(_) => "The results of the file glob operation",
@@ -747,19 +680,11 @@ impl AIAgentActionResultType {
             AIAgentActionResultType::EditDocuments(_) => "The edited document content",
             AIAgentActionResultType::CreateDocuments(_) => "The newly created documents",
             AIAgentActionResultType::ReadShellCommandOutput(_) => "The shell command output",
-            AIAgentActionResultType::UseComputer(_) => "The computer use result",
-            AIAgentActionResultType::RequestComputerUse(_) => "The computer use request result",
-            AIAgentActionResultType::FetchConversation(_) => "The fetched conversation tasks",
-            AIAgentActionResultType::StartAgent(_) => "The result of starting a child agent",
-            AIAgentActionResultType::SendMessageToAgent(_) => "The result of sending a message",
             AIAgentActionResultType::TransferShellCommandControlToUser(_) => {
                 "The result of transferring shell command control to user"
             }
             AIAgentActionResultType::AskUserQuestion(_) => {
                 "The user's answers to clarifying questions"
-            }
-            AIAgentActionResultType::RunAgents(_) => {
-                "The result of an orchestrate batch of child agents"
             }
         }
     }
@@ -769,7 +694,6 @@ impl AIAgentActionResultType {
             Self::RequestCommandOutput(r) => r.is_successful(),
             Self::RequestFileEdits(RequestFileEditsResult::Success { .. })
             | Self::ReadFiles(ReadFilesResult::Success { .. })
-            | Self::UploadArtifact(UploadArtifactResult::Success { .. })
             | Self::SearchCodebase(SearchCodebaseResult::Success { .. })
             | Self::Grep(GrepResult::Success { .. })
             | Self::FileGlob(FileGlobResult::Success { .. })
@@ -785,20 +709,14 @@ impl AIAgentActionResultType {
                 ReadShellCommandOutputResult::CommandFinished { .. }
                 | ReadShellCommandOutputResult::LongRunningCommandSnapshot { .. },
             )
-            | Self::UseComputer(UseComputerResult::Success(_))
             | Self::InsertReviewComments(InsertReviewCommentsResult::Success { .. })
-            | Self::RequestComputerUse(RequestComputerUseResult::Approved { .. })
             | Self::OpenCodeReview
             | Self::ReadSkill(ReadSkillResult::Success { .. })
-            | Self::FetchConversation(FetchConversationResult::Success { .. })
-            | Self::StartAgent(StartAgentResult::Success { .. })
-            | Self::SendMessageToAgent(SendMessageToAgentResult::Success { .. })
             | Self::TransferShellCommandControlToUser(
                 TransferShellCommandControlToUserResult::Snapshot { .. }
                 | TransferShellCommandControlToUserResult::CommandFinished { .. },
             ) => true,
             Self::AskUserQuestion(AskUserQuestionResult::Success { .. }) => true,
-            Self::RunAgents(RunAgentsResult::Launched { .. }) => true,
             _ => false,
         }
     }
@@ -808,7 +726,6 @@ impl AIAgentActionResultType {
             Self::RequestCommandOutput(r) => r.failed(),
             Self::RequestFileEdits(RequestFileEditsResult::DiffApplicationFailed { .. })
             | Self::ReadFiles(ReadFilesResult::Error(_))
-            | Self::UploadArtifact(UploadArtifactResult::Error(_))
             | Self::SearchCodebase(SearchCodebaseResult::Failed { .. })
             | Self::Grep(GrepResult::Error(_))
             | Self::FileGlob(FileGlobResult::Error(_))
@@ -818,19 +735,11 @@ impl AIAgentActionResultType {
             | Self::ReadDocuments(ReadDocumentsResult::Error(_))
             | Self::EditDocuments(EditDocumentsResult::Error(_))
             | Self::CreateDocuments(CreateDocumentsResult::Error(_))
-            | Self::UseComputer(UseComputerResult::Error(_))
             | Self::InsertReviewComments(InsertReviewCommentsResult::Error { .. })
-            | Self::RequestComputerUse(RequestComputerUseResult::Error(_))
-            | Self::FetchConversation(FetchConversationResult::Error(_))
-            | Self::StartAgent(StartAgentResult::Error { .. })
-            | Self::SendMessageToAgent(SendMessageToAgentResult::Error(_))
             | Self::AskUserQuestion(AskUserQuestionResult::Error(_))
             | Self::TransferShellCommandControlToUser(
                 TransferShellCommandControlToUserResult::Error(_),
-            )
-            | Self::RunAgents(RunAgentsResult::Failure { .. } | RunAgentsResult::Denied { .. }) => {
-                true
-            }
+            ) => true,
             _ => false,
         }
     }
@@ -845,7 +754,6 @@ impl AIAgentActionResultType {
             }) if exit_code.value() == 130 => true,
             Self::RequestFileEdits(RequestFileEditsResult::Cancelled)
             | Self::ReadFiles(ReadFilesResult::Cancelled)
-            | Self::UploadArtifact(UploadArtifactResult::Cancelled)
             | Self::SearchCodebase(SearchCodebaseResult::Cancelled)
             | Self::Grep(GrepResult::Cancelled)
             | Self::FileGlob(FileGlobResult::Cancelled)
@@ -858,9 +766,7 @@ impl AIAgentActionResultType {
             | Self::EditDocuments(EditDocumentsResult::Cancelled)
             | Self::CreateDocuments(CreateDocumentsResult::Cancelled)
             | Self::ReadShellCommandOutput(ReadShellCommandOutputResult::Cancelled)
-            | Self::UseComputer(UseComputerResult::Cancelled)
             | Self::InsertReviewComments(InsertReviewCommentsResult::Cancelled)
-            | Self::RequestComputerUse(RequestComputerUseResult::Cancelled)
             | Self::TransferShellCommandControlToUser(
                 TransferShellCommandControlToUserResult::Cancelled,
             )
@@ -868,12 +774,8 @@ impl AIAgentActionResultType {
                 WriteToLongRunningShellCommandResult::Cancelled,
             )
             | Self::ReadSkill(ReadSkillResult::Cancelled)
-            | Self::FetchConversation(FetchConversationResult::Cancelled)
-            | Self::StartAgent(StartAgentResult::Cancelled { .. })
-            | Self::SendMessageToAgent(SendMessageToAgentResult::Cancelled)
             // SkippedByAutoApprove is intentionally excluded: the agent should continue.
-            | Self::AskUserQuestion(AskUserQuestionResult::Cancelled)
-            | Self::RunAgents(RunAgentsResult::Cancelled) => true,
+            | Self::AskUserQuestion(AskUserQuestionResult::Cancelled) => true,
             _ => false,
         }
     }
@@ -1098,24 +1000,6 @@ impl Display for ReadSkillResult {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq)]
-pub enum UseComputerResult {
-    /// Computer use succeeded, with one result per requested action.
-    Success(computer_use::ActionResult),
-    Error(String),
-    Cancelled,
-}
-
-impl Display for UseComputerResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            UseComputerResult::Success(_) => write!(f, "Use computer completed"),
-            UseComputerResult::Error(error) => write!(f, "Use computer error: {error}"),
-            UseComputerResult::Cancelled => write!(f, "Use computer cancelled"),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InsertReviewCommentsResult {
     Success { repo_path: String },
@@ -1138,202 +1022,6 @@ impl Display for InsertReviewCommentsResult {
             InsertReviewCommentsResult::Cancelled => {
                 write!(f, "Cancelled inserting code review comments")
             }
-        }
-    }
-}
-
-/// Screen dimensions for computer use.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScreenDimensions {
-    pub width_px: i32,
-    pub height_px: i32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RequestComputerUseResult {
-    /// Request was accepted, with the screen dimensions.
-    Approved {
-        screenshot: computer_use::Screenshot,
-        platform: computer_use::Platform,
-    },
-    /// Request errored.
-    Error(String),
-    /// Request was cancelled or rejected by the user.
-    Cancelled,
-}
-
-impl Display for RequestComputerUseResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RequestComputerUseResult::Approved { screenshot, .. } => {
-                write!(
-                    f,
-                    "Request computer use accepted ({}x{})",
-                    screenshot.original_width, screenshot.original_height
-                )
-            }
-            RequestComputerUseResult::Error(error) => {
-                write!(f, "Request computer use error: {error}")
-            }
-            RequestComputerUseResult::Cancelled => write!(f, "Request computer use cancelled"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FetchConversationResult {
-    Success { directory_path: String },
-    Error(String),
-    Cancelled,
-}
-
-impl Display for FetchConversationResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FetchConversationResult::Success { directory_path } => {
-                write!(f, "Fetched conversation to {directory_path}")
-            }
-            FetchConversationResult::Error(error) => {
-                write!(f, "Fetch conversation error: {error}")
-            }
-            FetchConversationResult::Cancelled => write!(f, "Fetch conversation cancelled"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum StartAgentResult {
-    Success {
-        agent_id: String,
-        #[serde(default)]
-        version: StartAgentVersion,
-    },
-    Error {
-        error: String,
-        #[serde(default)]
-        version: StartAgentVersion,
-    },
-    Cancelled {
-        #[serde(default)]
-        version: StartAgentVersion,
-    },
-}
-
-impl StartAgentResult {
-    /// Returns which start-agent tool schema version produced this result.
-    pub fn version(&self) -> StartAgentVersion {
-        match self {
-            StartAgentResult::Success { version, .. }
-            | StartAgentResult::Error { version, .. }
-            | StartAgentResult::Cancelled { version } => *version,
-        }
-    }
-}
-
-impl Display for StartAgentResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            StartAgentResult::Success { agent_id, .. } => {
-                write!(f, "Started agent with id {agent_id}")
-            }
-            StartAgentResult::Error { error, .. } => write!(f, "Start agent error: {error}"),
-            StartAgentResult::Cancelled { .. } => write!(f, "Start agent cancelled"),
-        }
-    }
-}
-
-/// The terminal outcome of an orchestrate tool call.
-///
-/// Mirrors the proto `RunAgentsResult` oneof, with an additional
-/// `Cancelled` variant used internally by the action machinery when the
-/// user clicks Reject. The proto wire form for cancellation is the
-/// generic `ToolCallResult.Cancel` marker; the conversion code emits
-/// `ConvertToAPITypeError::Ignore` for `Cancelled` so the input
-/// interceptor can synthesize the marker on the next outbound input.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum RunAgentsResult {
-    /// Orchestration launched. Carries the resolved configuration and one
-    /// `AgentOutcome` per `agent_run_configs[]` entry, in input order.
-    Launched {
-        model_id: String,
-        harness_type: String,
-        execution_mode: RunAgentsLaunchedExecutionMode,
-        agents: Vec<RunAgentsAgentOutcome>,
-    },
-    /// Declined for a non-error reason (currently disapproval).
-    Denied { reason: String },
-    /// Actual error path: server-side validation rejected the call, or the
-    /// client could not begin the launch sequence at all.
-    Failure { error: String },
-    /// User rejected via the Reject button. Wire form is the generic
-    /// `ToolCallResult.Cancel` marker, synthesized by the server's input
-    /// interceptor on the next user input.
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum RunAgentsLaunchedExecutionMode {
-    Local,
-    Remote {
-        environment_id: String,
-        worker_host: String,
-        computer_use_enabled: bool,
-    },
-}
-
-/// Per-agent outcome reported in `RunAgentsResult::Launched.agents`.
-/// Order mirrors the input order of `RunAgents.agent_run_configs[]`,
-/// regardless of which `CreateAgentTask` call returned first.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RunAgentsAgentOutcome {
-    pub name: String,
-    pub kind: RunAgentsAgentOutcomeKind,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum RunAgentsAgentOutcomeKind {
-    Launched { agent_id: String },
-    Failed { error: String },
-}
-
-impl Display for RunAgentsResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RunAgentsResult::Launched { agents, .. } => {
-                let launched = agents
-                    .iter()
-                    .filter(|a| matches!(a.kind, RunAgentsAgentOutcomeKind::Launched { .. }))
-                    .count();
-                write!(
-                    f,
-                    "Orchestrate launched ({launched}/{} agents started)",
-                    agents.len()
-                )
-            }
-            RunAgentsResult::Denied { reason } => {
-                write!(f, "Orchestrate launch denied: {reason}")
-            }
-            RunAgentsResult::Failure { error } => write!(f, "Orchestrate failure: {error}"),
-            RunAgentsResult::Cancelled => write!(f, "Orchestrate cancelled"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum SendMessageToAgentResult {
-    Success { message_id: String },
-    Error(String),
-    Cancelled,
-}
-
-impl Display for SendMessageToAgentResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SendMessageToAgentResult::Success { message_id } => {
-                write!(f, "Sent message with id {message_id}")
-            }
-            SendMessageToAgentResult::Error(error) => write!(f, "Send message error: {error}"),
-            SendMessageToAgentResult::Cancelled => write!(f, "Send message cancelled"),
         }
     }
 }

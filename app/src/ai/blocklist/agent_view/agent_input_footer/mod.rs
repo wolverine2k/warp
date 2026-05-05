@@ -1,6 +1,7 @@
 pub(super) mod chips;
 pub mod editor;
 mod environment_selector;
+mod reasoning_depth_selector;
 pub mod toolbar_item;
 
 use crate::{
@@ -109,6 +110,9 @@ use warpui::{
 use warpui::r#async::Timer;
 
 pub(crate) use self::environment_selector::{EnvironmentSelector, EnvironmentSelectorEvent};
+pub(crate) use self::reasoning_depth_selector::{
+    ReasoningDepthSelector, ReasoningDepthSelectorEvent,
+};
 #[cfg(not(target_family = "wasm"))]
 use crate::server::telemetry::PluginChipTelemetryAction;
 #[cfg(not(target_family = "wasm"))]
@@ -195,6 +199,7 @@ pub struct AgentInputFooter {
     model_selector: ViewHandle<ProfileModelSelector>,
     ftu_callout_close_button: ViewHandle<ActionButton>,
     environment_selector: Option<ViewHandle<EnvironmentSelector>>,
+    reasoning_depth_selector: ViewHandle<ReasoningDepthSelector>,
     prompt_alert: ViewHandle<PromptAlertView>,
     ambient_agent_view_model: Option<ModelHandle<AmbientAgentViewModel>>,
     left_display_chips: Vec<ViewHandle<DisplayChip>>,
@@ -289,7 +294,7 @@ impl AgentInputFooter {
         let mic_button = ctx.add_typed_action_view(|_ctx| {
             let button = ActionButton::new("", ActiveMicButtonTheme)
                 .with_icon(Icon::Microphone)
-                .with_tooltip("Voice input")
+                .with_tooltip(crate::t!("terminal-voice-input-tooltip"))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left);
             #[cfg(feature = "voice_input")]
@@ -325,7 +330,7 @@ impl AgentInputFooter {
         let file_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::Plus)
-                .with_tooltip("Attach file")
+                .with_tooltip(crate::t!("terminal-attach-file-tooltip"))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -350,9 +355,9 @@ impl AgentInputFooter {
         // CLI agent-specific buttons (only rendered when a CLI agent session is active).
         let cli_button_size = ButtonSize::AgentInputButton;
         let file_explorer_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("File explorer", AgentInputButtonTheme)
+            ActionButton::new(crate::t!("ai-footer-file-explorer"), AgentInputButtonTheme)
                 .with_icon(Icon::FileCopy)
-                .with_tooltip("Open file explorer")
+                .with_tooltip(crate::t!("ai-footer-open-file-explorer"))
                 .with_size(cli_button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .with_keybinding(
@@ -365,9 +370,9 @@ impl AgentInputFooter {
                 })
         });
         let rich_input_button = ctx.add_typed_action_view(|ctx| {
-            ActionButton::new("Rich Input", AgentInputButtonTheme)
+            ActionButton::new(crate::t!("ai-footer-rich-input"), AgentInputButtonTheme)
                 .with_icon(Icon::TextInput)
-                .with_tooltip("Open Rich Input")
+                .with_tooltip(crate::t!("ai-footer-open-rich-input"))
                 .with_size(cli_button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .with_keybinding(
@@ -382,7 +387,7 @@ impl AgentInputFooter {
         let settings_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::Settings)
-                .with_tooltip("Open coding agent settings")
+                .with_tooltip(crate::t!("ai-footer-open-coding-agent-settings"))
                 .with_size(cli_button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -391,64 +396,72 @@ impl AgentInputFooter {
         });
 
         let install_plugin_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Enable notifications", InstallPluginButtonTheme)
-                .with_icon(Icon::Download)
-                .with_tooltip(
-                    "Install the Warp plugin to enable rich agent notifications within Warp",
-                )
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_adjoined_side(AdjoinedSide::Right)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::InstallPlugin);
-                })
+            ActionButton::new(
+                crate::t!("ai-footer-enable-notifications"),
+                InstallPluginButtonTheme,
+            )
+            .with_icon(Icon::Download)
+            .with_tooltip(crate::t!("ai-footer-enable-notifications-tooltip"))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_adjoined_side(AdjoinedSide::Right)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::InstallPlugin);
+            })
         });
 
         let plugin_instructions_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Notifications setup instructions", InstallPluginButtonTheme)
-                .with_icon(Icon::Info)
-                .with_tooltip("View instructions to install the Warp plugin")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_adjoined_side(AdjoinedSide::Right)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(
-                        AgentInputFooterAction::OpenPluginInstallInstructionsPane,
-                    );
-                })
+            ActionButton::new(
+                crate::t!("ai-footer-notifications-setup-instructions"),
+                InstallPluginButtonTheme,
+            )
+            .with_icon(Icon::Info)
+            .with_tooltip(crate::t!("ai-footer-install-plugin-instructions-tooltip"))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_adjoined_side(AdjoinedSide::Right)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(
+                    AgentInputFooterAction::OpenPluginInstallInstructionsPane,
+                );
+            })
         });
 
         let update_plugin_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Update Warp plugin", InstallPluginButtonTheme)
-                .with_icon(Icon::Download)
-                .with_tooltip("A new version of the Warp plugin is available")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_adjoined_side(AdjoinedSide::Right)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::UpdatePlugin);
-                })
+            ActionButton::new(
+                crate::t!("ai-footer-update-warp-plugin"),
+                InstallPluginButtonTheme,
+            )
+            .with_icon(Icon::Download)
+            .with_tooltip(crate::t!("ai-footer-plugin-update-available-tooltip"))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_adjoined_side(AdjoinedSide::Right)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::UpdatePlugin);
+            })
         });
 
         let update_instructions_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Plugin update instructions", InstallPluginButtonTheme)
-                .with_icon(Icon::Info)
-                .with_tooltip("View instructions to update the Warp plugin")
-                .with_size(cli_button_size)
-                .with_tooltip_alignment(TooltipAlignment::Left)
-                .with_adjoined_side(AdjoinedSide::Right)
-                .on_click(|ctx| {
-                    ctx.dispatch_typed_action(
-                        AgentInputFooterAction::OpenPluginUpdateInstructionsPane,
-                    );
-                })
+            ActionButton::new(
+                crate::t!("ai-footer-plugin-update-instructions"),
+                InstallPluginButtonTheme,
+            )
+            .with_icon(Icon::Info)
+            .with_tooltip(crate::t!("ai-footer-plugin-update-instructions-tooltip"))
+            .with_size(cli_button_size)
+            .with_tooltip_alignment(TooltipAlignment::Left)
+            .with_adjoined_side(AdjoinedSide::Right)
+            .on_click(|ctx| {
+                ctx.dispatch_typed_action(AgentInputFooterAction::OpenPluginUpdateInstructionsPane);
+            })
         });
 
         let dismiss_plugin_chip_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", InstallPluginButtonTheme)
                 .with_icon(Icon::X)
                 .with_size(cli_button_size)
-                .with_tooltip("Dismiss")
+                .with_tooltip(crate::t!("common-dismiss"))
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .with_adjoined_side(AdjoinedSide::Left)
                 .on_click(|ctx| {
@@ -559,10 +572,10 @@ impl AgentInputFooter {
         });
 
         let stop_remote_control_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Stop sharing", AgentInputButtonTheme)
+            ActionButton::new(crate::t!("terminal-stop-sharing"), AgentInputButtonTheme)
                 .with_icon(Icon::StopFilled)
                 .with_icon_ansi_color(AnsiColorIdentifier::Red)
-                .with_tooltip("Stop sharing")
+                .with_tooltip(crate::t!("terminal-stop-sharing"))
                 .with_size(cli_button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
@@ -573,7 +586,7 @@ impl AgentInputFooter {
         let context_window_button = ctx.add_typed_action_view(|_ctx| {
             ActionButton::new("", AgentInputButtonTheme)
                 .with_icon(Icon::ConversationContext0)
-                .with_tooltip("Context window usage")
+                .with_tooltip(crate::t!("ai-footer-context-window-usage-tooltip"))
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
         });
@@ -628,6 +641,15 @@ impl AgentInputFooter {
                 ctx.notify();
             });
         }
+
+        let reasoning_depth_selector = ctx.add_typed_action_view(|ctx| {
+            ReasoningDepthSelector::new(menu_positioning_provider.clone(), terminal_view_id, ctx)
+        });
+        ctx.subscribe_to_view(&reasoning_depth_selector, |_, _, event, ctx| match event {
+            ReasoningDepthSelectorEvent::MenuVisibilityChanged { open } => {
+                ctx.emit(AgentInputFooterEvent::ToggledChipMenu { open: *open });
+            }
+        });
 
         let prompt_alert = ctx.add_typed_action_view(PromptAlertView::new);
         ctx.subscribe_to_view(&prompt_alert, |_, _, event, ctx| {
@@ -760,6 +782,7 @@ impl AgentInputFooter {
             context_window_button,
             model_selector: profile_model_selector_full,
             environment_selector,
+            reasoning_depth_selector,
             prompt_alert,
             terminal_model,
             render_ftu_callout: false,
@@ -1910,7 +1933,15 @@ impl AgentInputFooter {
             AgentToolbarItemKind::ModelSelector => {
                 let show = FeatureFlag::ProfilesDesignRevamp.is_enabled()
                     || *SessionSettings::as_ref(app).show_model_selectors_in_prompt;
-                show.then(|| ChildView::new(&self.model_selector).finish())
+                show.then(|| {
+                    Flex::row()
+                        .with_main_axis_size(MainAxisSize::Min)
+                        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                        .with_spacing(4.)
+                        .with_child(ChildView::new(&self.reasoning_depth_selector).finish())
+                        .with_child(ChildView::new(&self.model_selector).finish())
+                        .finish()
+                })
             }
             AgentToolbarItemKind::NLDToggle => Some(ChildView::new(&self.nld_button).finish()),
             AgentToolbarItemKind::VoiceInput => {

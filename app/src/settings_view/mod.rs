@@ -27,7 +27,6 @@ use crate::{
 use about_page::AboutPageView;
 use ai_page::{AISettingsPageAction, AISettingsPageEvent, AISettingsPageView, AISubpage};
 use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
-use billing_and_usage_page::{BillingAndUsagePageEvent, BillingAndUsagePageView};
 use code_page::CodeSubpage;
 use code_page::{CodeSettingsPageAction, CodeSettingsPageEvent};
 use environments_page::EnvironmentsPageView;
@@ -76,10 +75,9 @@ use warpui::{
 mod about_page;
 mod admin_actions;
 mod agent_assisted_environment_modal;
+mod agent_providers_widget;
 mod ai_page;
 mod appearance_page;
-mod billing_and_usage;
-mod billing_and_usage_page;
 mod code_page;
 mod delete_environment_confirmation_dialog;
 mod directory_color_add_picker;
@@ -111,7 +109,6 @@ mod warpify_page;
 
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use ai_page::cli_agent_settings_widget_id;
-pub use billing_and_usage_page::create_discount_badge;
 pub use code_page::CodeSettingsPageView;
 pub use features_page::FeaturesPageAction;
 pub use main_page::handle_experiment_change;
@@ -187,10 +184,9 @@ pub enum SettingsViewEvent {
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SettingsSection {
     About,
-    #[default]
+    // 去中心化分支:Account 不再作为默认页(已从侧栏移除),保留枚举值避免外部引用断裂。
     Account,
     MCPServers,
-    BillingAndUsage,
     Appearance,
     Features,
     Keybindings,
@@ -206,9 +202,13 @@ pub enum SettingsSection {
     /// External callers should navigate to a specific subpage (e.g. `WarpAgent`) instead.
     AI,
     // ── Agents umbrella subpages ──
+    // 去中心化分支:Settings 默认页改为 Warp Agent(本地 AI 设置)。
+    #[default]
     WarpAgent,
     AgentProfiles,
     AgentMCPServers,
+    /// 自定义 AI 提供商配置(BYOP),Agents 二级菜单的 Providers 子页。
+    AgentProviders,
     Knowledge,
     ThirdPartyCLIAgents,
     /// Internal backing-page identifier for CodeSettingsPageView. Multiple subpages
@@ -229,23 +229,37 @@ use std::fmt::{self, Display};
 
 impl Display for SettingsSection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SettingsSection::BillingAndUsage => write!(f, "Billing and usage"),
-            SettingsSection::Keybindings => write!(f, "Keyboard shortcuts"),
-            SettingsSection::SharedBlocks => write!(f, "Shared blocks"),
-            SettingsSection::MCPServers => write!(f, "MCP Servers"),
-            SettingsSection::WarpDrive => write!(f, "Warp Drive"),
-            SettingsSection::WarpAgent => write!(f, "Warp Agent"),
-            SettingsSection::AgentProfiles => write!(f, "Profiles"),
-            SettingsSection::AgentMCPServers => write!(f, "MCP servers"),
-            SettingsSection::Knowledge => write!(f, "Knowledge"),
-            SettingsSection::ThirdPartyCLIAgents => write!(f, "Third party CLI agents"),
-            SettingsSection::CodeIndexing => write!(f, "Indexing and projects"),
-            SettingsSection::EditorAndCodeReview => write!(f, "Editor and Code Review"),
-            SettingsSection::CloudEnvironments => write!(f, "Environments"),
-            SettingsSection::OzCloudAPIKeys => write!(f, "Oz Cloud API Keys"),
-            _ => write!(f, "{self:?}"),
-        }
+        let s: String = match self {
+            SettingsSection::About => crate::t!("settings-section-about"),
+            SettingsSection::Account => crate::t!("settings-section-account"),
+            SettingsSection::MCPServers => crate::t!("settings-section-mcp-servers"),
+            SettingsSection::Appearance => crate::t!("settings-section-appearance"),
+            SettingsSection::Features => crate::t!("settings-section-features"),
+            SettingsSection::Keybindings => crate::t!("settings-section-keybindings"),
+            SettingsSection::Privacy => crate::t!("settings-section-privacy"),
+            SettingsSection::Referrals => crate::t!("settings-section-referrals"),
+            SettingsSection::SharedBlocks => crate::t!("settings-section-shared-blocks"),
+            SettingsSection::Teams => crate::t!("settings-section-teams"),
+            SettingsSection::WarpDrive => crate::t!("settings-section-warp-drive"),
+            SettingsSection::Warpify => crate::t!("settings-section-warpify"),
+            SettingsSection::AI => crate::t!("settings-section-ai"),
+            SettingsSection::WarpAgent => crate::t!("settings-section-warp-agent"),
+            SettingsSection::AgentProfiles => crate::t!("settings-section-agent-profiles"),
+            SettingsSection::AgentMCPServers => crate::t!("settings-section-agent-mcp-servers"),
+            SettingsSection::AgentProviders => crate::t!("settings-section-agent-providers"),
+            SettingsSection::Knowledge => crate::t!("settings-section-knowledge"),
+            SettingsSection::ThirdPartyCLIAgents => {
+                crate::t!("settings-section-third-party-cli-agents")
+            }
+            SettingsSection::Code => crate::t!("settings-section-code"),
+            SettingsSection::CodeIndexing => crate::t!("settings-section-code-indexing"),
+            SettingsSection::EditorAndCodeReview => {
+                crate::t!("settings-section-editor-and-code-review")
+            }
+            SettingsSection::CloudEnvironments => crate::t!("settings-section-cloud-environments"),
+            SettingsSection::OzCloudAPIKeys => crate::t!("settings-section-oz-cloud-api-keys"),
+        };
+        write!(f, "{s}")
     }
 }
 
@@ -262,6 +276,7 @@ impl SettingsSection {
             Self::WarpAgent
                 | Self::AgentProfiles
                 | Self::AgentMCPServers
+                | Self::AgentProviders
                 | Self::Knowledge
                 | Self::ThirdPartyCLIAgents
         )
@@ -298,6 +313,7 @@ impl SettingsSection {
         &[
             Self::WarpAgent,
             Self::AgentProfiles,
+            Self::AgentProviders,
             Self::AgentMCPServers,
             Self::Knowledge,
             Self::ThirdPartyCLIAgents,
@@ -324,7 +340,6 @@ impl FromStr for SettingsSection {
             "Account" => Ok(Self::Account),
             "AI" => Ok(Self::AI),
             "MCP Servers" => Ok(Self::MCPServers),
-            "Billing and usage" => Ok(Self::BillingAndUsage),
             "Appearance" => Ok(Self::Appearance),
             "Code" => Ok(Self::Code),
             "Features" => Ok(Self::Features),
@@ -339,6 +354,7 @@ impl FromStr for SettingsSection {
             "Oz" | "Warp Agent" => Ok(Self::WarpAgent),
             "Profiles" | "AgentProfiles" => Ok(Self::AgentProfiles),
             "MCP servers" | "AgentMCPServers" => Ok(Self::AgentMCPServers),
+            "Providers" | "AgentProviders" => Ok(Self::AgentProviders),
             "Knowledge" => Ok(Self::Knowledge),
             "Third party CLI agents" | "ThirdPartyCLIAgents" => Ok(Self::ThirdPartyCLIAgents),
             "Indexing and projects" | "CodeIndexing" => Ok(Self::CodeIndexing),
@@ -512,8 +528,8 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             vec![
                 ToggleSettingActionPair::custom(
                     SettingActionPairDescriptions::new(
-                        "Show initialization block",
-                        "Hide initialization block",
+                        &crate::t!("settings-debug-show-init-block"),
+                        &crate::t!("settings-debug-hide-init-block"),
                     ),
                     builder(SettingsAction::Debug(
                         DebugSettingsAction::ToggleInitializationBlock,
@@ -526,8 +542,8 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 ),
                 ToggleSettingActionPair::custom(
                     SettingActionPairDescriptions::new(
-                        "Show in-band command blocks",
-                        "Hide in-band command blocks",
+                        &crate::t!("settings-debug-show-inband-blocks"),
+                        &crate::t!("settings-debug-hide-inband-blocks"),
                     ),
                     builder(SettingsAction::Debug(
                         DebugSettingsAction::ToggleInBandCommandBlocks,
@@ -547,25 +563,25 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
             vec![
                 ToggleSettingActionPair::new(
-                    "recording mode",
+                    &crate::t!("toggle-suffix-recording-mode"),
                     WorkspaceAction::ToggleRecordingMode,
                     &id!("Workspace"),
                     flags::RECORDING_MODE_FLAG,
                 ),
                 ToggleSettingActionPair::new(
-                    "in-band generators for new sessions",
+                    &crate::t!("toggle-suffix-inband-generators"),
                     WorkspaceAction::ToggleInBandGenerators,
                     &id!("Workspace"),
                     flags::IN_BAND_GENERATORS_FLAG,
                 ),
                 ToggleSettingActionPair::new(
-                    "debug network status",
+                    &crate::t!("toggle-suffix-debug-network"),
                     WorkspaceAction::ToggleDebugNetworkStatus,
                     &id!("Workspace"),
                     flags::DEBUG_NETWORK_ONLINE_FLAG,
                 ),
                 ToggleSettingActionPair::new(
-                    "memory statistics",
+                    &crate::t!("toggle-suffix-memory-stats"),
                     WorkspaceAction::ToggleShowMemoryStats,
                     &id!("Workspace"),
                     flags::DEBUG_SHOW_MEMORY_STATS_FLAG,
@@ -665,8 +681,8 @@ impl<T: Action + Clone> ToggleSettingActionPair<T> {
 
         ToggleSettingActionPair {
             descriptions: SettingActionPairDescriptions {
-                enable: format!("Enable {description_suffix}"),
-                disable: format!("Disable {description_suffix}"),
+                enable: crate::t!("toggle-setting-enable", suffix = description_suffix),
+                disable: crate::t!("toggle-setting-disable", suffix = description_suffix),
             },
             contexts: SettingActionPairContexts {
                 enable_predicate: context_prefix.to_owned() & !id!(context_boolean_flag),
@@ -971,7 +987,6 @@ macro_rules! update_page {
             SettingsPageViewHandle::CloudEnvironments(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::About(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Code(handle) => $ctx.update_view(handle, $update),
-            SettingsPageViewHandle::BillingAndUsage(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::MCPServers(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::WarpDrive(handle) => $ctx.update_view(handle, $update),
         }
@@ -1013,7 +1028,8 @@ pub struct SettingsView {
 
 impl SettingsView {
     pub fn new(page: Option<SettingsSection>, ctx: &mut ViewContext<Self>) -> Self {
-        let pane_configuration = ctx.add_model(|_ctx| PaneConfiguration::new("Settings"));
+        let pane_configuration =
+            ctx.add_model(|_ctx| PaneConfiguration::new(crate::t!("settings-title")));
 
         let global_resource_handles = GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
         // Main settings page with accounts info
@@ -1065,12 +1081,6 @@ impl SettingsView {
         let environments_page_handle = ctx.add_typed_action_view(EnvironmentsPageView::new);
         ctx.subscribe_to_view(&environments_page_handle, |me, _, event, ctx| {
             me.handle_environments_page_event(event, ctx);
-        });
-
-        // Billing and usage page
-        let billing_and_usage_page_handle = ctx.add_typed_action_view(BillingAndUsagePageView::new);
-        ctx.subscribe_to_view(&billing_and_usage_page_handle, |me, _, event, ctx| {
-            me.handle_billing_and_usage_page_event(event, ctx);
         });
 
         // Keybindings page
@@ -1146,7 +1156,7 @@ impl SettingsView {
                 ..Default::default()
             };
             let mut editor = EditorView::single_line(options, ctx);
-            editor.set_placeholder_text("Search", ctx);
+            editor.set_placeholder_text(crate::t!("common-search"), ctx);
             editor
         });
 
@@ -1164,7 +1174,6 @@ impl SettingsView {
         let mut settings_pages = vec![
             SettingsPage::new(main_page_handle),
             SettingsPage::new(ai_page_handle),
-            SettingsPage::new(billing_and_usage_page_handle),
             SettingsPage::new(code_page_handle),
             SettingsPage::new(teams_page_handle),
             SettingsPage::new(appearance_page_handle),
@@ -1184,15 +1193,14 @@ impl SettingsView {
             SettingsPage::new(about_page_handle),
         ]);
 
-        // Build sidebar nav items. AI page is presented as an "Agents" umbrella
-        // with subpages; the actual AI SettingsPage is hidden from direct sidebar listing.
+        // 去中心化分支:本地模式下移除所有云端账号 / 计费 / 团队 / 同步 / 分享相关的
+        // 设置入口。`SettingsSection` 枚举与各 page 实现暂时保留,只是不挂到侧栏。
+        // 后续在 cloud 模块物理删除 commit 中再清理 enum 与 page。
         let mut nav_items = vec![
-            SettingsNavItem::Page(SettingsSection::Account),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
                 "Agents",
                 SettingsSection::ai_subpages().to_vec(),
             )),
-            SettingsNavItem::Page(SettingsSection::BillingAndUsage),
             SettingsNavItem::Umbrella(SettingsUmbrella::new(
                 "Code",
                 vec![
@@ -1200,21 +1208,15 @@ impl SettingsView {
                     SettingsSection::EditorAndCodeReview,
                 ],
             )),
-            SettingsNavItem::Umbrella(SettingsUmbrella::new(
-                "Cloud platform",
-                vec![
-                    SettingsSection::CloudEnvironments,
-                    SettingsSection::OzCloudAPIKeys,
-                ],
-            )),
-            SettingsNavItem::Page(SettingsSection::Teams),
             SettingsNavItem::Page(SettingsSection::Appearance),
             SettingsNavItem::Page(SettingsSection::Features),
             SettingsNavItem::Page(SettingsSection::Keybindings),
-            SettingsNavItem::Page(SettingsSection::Warpify),
-            SettingsNavItem::Page(SettingsSection::Referrals),
-            SettingsNavItem::Page(SettingsSection::SharedBlocks),
-            SettingsNavItem::Page(SettingsSection::WarpDrive),
+            // 去中心化分支:Privacy 页恢复入口。原以为"全部内容是云端能力"判断有误——
+            // 页内核心 widget 多数纯本地:SecretRedactionWidget(敏感信息混淆,本地正则)、
+            // NetworkLogWidget(网络日志控制台,本地代理)、DataManagementWidget(外链)、
+            // PrivacyPolicyWidget(外链)。CloudConversationStorageWidget 的本地开关
+            // 控制是否把 AI 对话推到云,P4c 已 stub 掉同步外发。AppAnalyticsWidget /
+            // CrashReportsWidget 自身有 should_render 在 OpenWarp 自动隐藏。
             SettingsNavItem::Page(SettingsSection::Privacy),
             SettingsNavItem::Page(SettingsSection::About),
         ];
@@ -1505,28 +1507,28 @@ impl SettingsView {
 
         if ContextFlag::CreateNewSession.is_enabled() {
             items.extend(vec![
-                MenuItemFields::new("Split pane right")
+                MenuItemFields::new(crate::t!("settings-pane-split-right"))
                     .with_on_select_action(SettingsAction::Split(Direction::Right))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_right",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane left")
+                MenuItemFields::new(crate::t!("settings-pane-split-left"))
                     .with_on_select_action(SettingsAction::Split(Direction::Left))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_left",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane down")
+                MenuItemFields::new(crate::t!("settings-pane-split-down"))
                     .with_on_select_action(SettingsAction::Split(Direction::Down))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_down",
                         ctx,
                     ))
                     .into_item(),
-                MenuItemFields::new("Split pane up")
+                MenuItemFields::new(crate::t!("settings-pane-split-up"))
                     .with_on_select_action(SettingsAction::Split(Direction::Up))
                     .with_key_shortcut_label(keybinding_name_to_display_string(
                         "pane_group:add_up",
@@ -1555,7 +1557,7 @@ impl SettingsView {
             );
 
             items.push(
-                MenuItemFields::new("Close pane")
+                MenuItemFields::new(crate::t!("settings-pane-close"))
                     .with_on_select_action(SettingsAction::Close)
                     .with_key_shortcut_label(
                         custom_tag_to_keystroke(CustomAction::CloseCurrentSession.into())
@@ -1597,26 +1599,6 @@ impl SettingsView {
                 ctx.emit(SettingsViewEvent::SignupAnonymousUser)
             }
             _ => (),
-        }
-    }
-
-    fn handle_billing_and_usage_page_event(
-        &mut self,
-        event: &BillingAndUsagePageEvent,
-        ctx: &mut ViewContext<Self>,
-    ) {
-        match event {
-            BillingAndUsagePageEvent::SignupAnonymousUser => {
-                ctx.emit(SettingsViewEvent::SignupAnonymousUser)
-            }
-            BillingAndUsagePageEvent::ShowToast { message, flavor } => {
-                ctx.emit(SettingsViewEvent::ShowToast {
-                    message: message.clone(),
-                    flavor: *flavor,
-                })
-            }
-            BillingAndUsagePageEvent::ShowModal => ctx.notify(),
-            BillingAndUsagePageEvent::HideModal => ctx.notify(),
         }
     }
 
@@ -1955,7 +1937,6 @@ impl SettingsView {
             SettingsPageViewHandle::Keybindings(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Features(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Appearance(v) => v.as_ref(app).should_render(app),
-            SettingsPageViewHandle::BillingAndUsage(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::About(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::OzCloudAPIKeys(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Privacy(v) => v.as_ref(app).should_render(app),
@@ -2173,9 +2154,6 @@ impl SettingsView {
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         match page_handle {
-            SettingsPageViewHandle::BillingAndUsage(view) => {
-                view.read(app, |view, _| view.get_modal_content())
-            }
             SettingsPageViewHandle::Privacy(view) => {
                 view.read(app, |view, _| view.get_modal_content())
             }
@@ -2658,14 +2636,10 @@ impl BackingView for SettingsView {
         _ctx: &view::HeaderRenderContext<'_>,
         _app: &AppContext,
     ) -> view::HeaderContent {
-        view::HeaderContent::simple("Settings")
+        view::HeaderContent::simple(crate::t!("settings-title"))
     }
 
     fn set_focus_handle(&mut self, focus_handle: PaneFocusHandle, _ctx: &mut ViewContext<Self>) {
         self.focus_handle = Some(focus_handle);
     }
 }
-
-#[cfg(test)]
-#[path = "mod_test.rs"]
-mod tests;

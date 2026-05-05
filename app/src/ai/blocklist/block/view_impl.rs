@@ -24,7 +24,6 @@ mod comments;
 mod header;
 mod imported_comments;
 mod input;
-mod orchestration;
 pub mod output;
 pub mod query;
 mod todos;
@@ -994,7 +993,6 @@ impl View for AIBlock {
                 model: self.model.as_ref(),
                 state_handles: &self.state_handles,
                 action_buttons: &self.action_buttons,
-                view_screenshot_buttons: &self.view_screenshot_buttons,
                 action_model: &self.action_model,
                 editor_views: &self.code_editor_views,
                 current_working_directory: self.current_working_directory.as_ref(),
@@ -1025,7 +1023,6 @@ impl View for AIBlock {
                 suggested_agent_mode_workflow: &self.suggested_agent_mode_workflow,
                 manage_rules_button: &self.manage_rules_button,
                 keyboard_navigable_buttons: self.keyboard_navigable_buttons.as_ref(),
-                response_rating: &self.response_rating,
                 request_refunded_count: self.request_refunded_count,
                 search_codebase_view: &self.search_codebase_view,
                 web_search_views: &self.web_search_views,
@@ -1045,7 +1042,6 @@ impl View for AIBlock {
                     .aws_bedrock_credentials_error_view
                     .as_ref(),
                 imported_comments: &self.imported_comments,
-                run_agents_card_views: &self.run_agents_card_views,
                 #[cfg(feature = "local_fs")]
                 resolved_code_block_paths: &self.resolved_code_block_paths,
                 #[cfg(feature = "local_fs")]

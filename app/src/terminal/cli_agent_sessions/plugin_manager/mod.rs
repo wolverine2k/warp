@@ -44,9 +44,9 @@ pub(crate) struct PluginInstructionStep {
 pub(crate) struct PluginInstructions {
     pub title: &'static str,
     pub subtitle: &'static str,
-    pub steps: &'static [PluginInstructionStep],
+    pub steps: Vec<PluginInstructionStep>,
     /// Displayed after the steps in the same style as the subtitle, one per paragraph.
-    pub post_install_notes: &'static [&'static str],
+    pub post_install_notes: Vec<&'static str>,
 }
 
 /// Error returned when plugin installation fails.

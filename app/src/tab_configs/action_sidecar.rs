@@ -133,13 +133,13 @@ pub(crate) fn render_action_sidecar(
         appearance
             .ui_builder()
             .button(ButtonVariant::Outlined, mouse_states.make_default.clone())
-            .with_centered_text_label("Make default".into())
+            .with_centered_text_label(crate::t!("tab-config-make-default").into())
             .with_style(disabled_style)
             .with_tooltip({
                 let ui_builder = appearance.ui_builder().clone();
                 move || {
                     ui_builder
-                        .tool_tip("Already the default".into())
+                        .tool_tip(crate::t!("tab-config-already-default"))
                         .build()
                         .finish()
                 }
@@ -152,7 +152,7 @@ pub(crate) fn render_action_sidecar(
         appearance
             .ui_builder()
             .button(ButtonVariant::Outlined, mouse_states.make_default.clone())
-            .with_centered_text_label("Make default".into())
+            .with_centered_text_label(crate::t!("tab-config-make-default").into())
             .with_style(button_style)
             .build()
             .with_cursor(Cursor::PointingHand)
@@ -174,7 +174,7 @@ pub(crate) fn render_action_sidecar(
             let edit_button = appearance
                 .ui_builder()
                 .button(ButtonVariant::Outlined, mouse_states.edit_config.clone())
-                .with_centered_text_label("Edit config".into())
+                .with_centered_text_label(crate::t!("tab-config-edit-config").into())
                 .with_style(button_style)
                 .build()
                 .with_cursor(Cursor::PointingHand)
@@ -205,7 +205,7 @@ pub(crate) fn render_action_sidecar(
             let remove_button = appearance
                 .ui_builder()
                 .button(ButtonVariant::Outlined, mouse_states.remove_config.clone())
-                .with_centered_text_label("Remove".into())
+                .with_centered_text_label(crate::t!("common-remove").into())
                 .with_style(remove_style)
                 .with_hovered_styles(UiComponentStyles {
                     border_color: Some(theme.accent().into()),

@@ -431,20 +431,6 @@ impl Input {
                     origin: AgentViewEntryOrigin::SlashCommand { trigger },
                 });
             }
-            cloud_agent if command.name == commands::CLOUD_AGENT.name => {
-                let prompt = argument.and_then(|argument| {
-                    let trimmed = argument.trim();
-                    if trimmed.is_empty() {
-                        None
-                    } else {
-                        Some(trimmed.to_owned())
-                    }
-                });
-
-                ctx.emit(Event::EnterCloudAgentView {
-                    initial_prompt: prompt,
-                });
-            }
             create_docker_sandbox if command.name == commands::CREATE_DOCKER_SANDBOX.name => {
                 ctx.emit(Event::CreateDockerSandbox);
             }
@@ -693,9 +679,6 @@ impl Input {
                 }
                 ctx.dispatch_typed_action(&WorkspaceAction::ViewLatestChangelog);
             }
-            feedback if command.name == commands::FEEDBACK.name => {
-                ctx.dispatch_typed_action(&WorkspaceAction::SendFeedback);
-            }
             open_code_review if command.name == commands::OPEN_CODE_REVIEW.name => {
                 ctx.dispatch_typed_action(&TerminalAction::ToggleCodeReviewPane {
                     entrypoint: CodeReviewPaneEntrypoint::SlashCommand,
@@ -832,9 +815,6 @@ impl Input {
                     )
                 });
             }
-            usage if command.name == commands::USAGE.name => {
-                ctx.dispatch_typed_action(&TerminalAction::OpenBillingAndUsagePane);
-            }
             remote_control if command.name == commands::REMOTE_CONTROL.name => {
                 if !FeatureFlag::CreatingSharedSessions.is_enabled()
                     || !FeatureFlag::HOARemoteControl.is_enabled()
@@ -851,30 +831,6 @@ impl Input {
                     return true;
                 }
                 ctx.emit(Event::StartRemoteControl);
-            }
-            cost if command.name == commands::COST.name => {
-                let history = BlocklistAIHistoryModel::handle(ctx);
-                let conversation = history
-                    .as_ref(ctx)
-                    .active_conversation(self.terminal_view_id);
-                if conversation.is_none() {
-                    show_error_toast(
-                        "Cannot show conversation cost: no active conversation".to_owned(),
-                        ctx,
-                    );
-                } else if conversation.is_some_and(|c| c.is_empty()) {
-                    show_error_toast(
-                        "Cannot show conversation cost: conversation is empty".to_owned(),
-                        ctx,
-                    );
-                } else if conversation.is_some_and(|c| !c.status().is_done()) {
-                    show_error_toast(
-                        "Cannot show conversation cost: conversation is in progress".to_owned(),
-                        ctx,
-                    );
-                } else {
-                    ctx.dispatch_typed_action(&TerminalAction::ToggleUsageFooter);
-                }
             }
             fork if command.name == commands::FORK.name => {
                 let Some(conversation_id) = self
@@ -989,9 +945,12 @@ impl Input {
                     return true;
                 };
 
+                // menu 路径无参数时 argument 是 Some(""),规范化为 None,避免摘要后
+                // 触发一次空 user query 浪费 token。
+                let initial_prompt = argument.cloned().filter(|p: &String| !p.is_empty());
                 ctx.dispatch_typed_action(&WorkspaceAction::SummarizeAIConversation {
                     prompt: None,
-                    initial_prompt: argument.cloned(),
+                    initial_prompt,
                 });
             }
             queue if command.name == commands::QUEUE.name => {
@@ -1029,9 +988,35 @@ impl Input {
                 }
                 self.open_repos_menu(ctx);
             }
+            compact if command.name == commands::COMPACT.name => {
+                // OpenWarp:`/compact` 与 `/compact-and` 共用本地会话压缩链路 —
+                // dispatch `WorkspaceAction::SummarizeAIConversation`,initial_prompt: None
+                // 表示"压缩完不发后续 prompt",仅做摘要静默落到 conversation。
+                // 自定义指令(`/compact <指令>`)进 prompt 字段,在 BYOP build_chat_request
+                // 路径下会拼到 SUMMARY_TEMPLATE 后面作为 plugin_context。
+                //
+                // 非 BYOP 路径下,`SummarizeConversation { prompt }` 仍走 server protobuf
+                // (`api::request::input::SummarizeConversation`),server 端处理摘要 —
+                // 之前 prefix 注入的语义被 SummarizeConversation 完整替代。
+                if self
+                    .ai_context_model
+                    .as_ref(ctx)
+                    .selected_conversation_id(ctx)
+                    .is_none()
+                {
+                    show_error_toast("/compact requires an active conversation".to_owned(), ctx);
+                    return true;
+                };
+                // menu 路径无参数时 argument 是 Some(""),规范化为 None,
+                // 避免 chat_stream 拼摘要 prompt 时多走一次空 filter 分支。
+                let prompt = argument.cloned().filter(|p: &String| !p.is_empty());
+                ctx.dispatch_typed_action(&WorkspaceAction::SummarizeAIConversation {
+                    prompt,
+                    initial_prompt: None,
+                });
+            }
             command_that_just_sends_ai_request_with_prefix
-                if command.name == commands::COMPACT.name
-                    || command.name == commands::PLAN.name
+                if command.name == commands::PLAN.name
                     || command.name == commands::ORCHESTRATE.name =>
             {
                 // These slash commands just send AI requests with the slash command text as a
@@ -1336,5 +1321,67 @@ fn conversation_is_cloud_oz_for_slash_command(
     {
         Some(config) => config.harness_type == Harness::Oz,
         None => true,
+    }
+}
+
+#[cfg(all(test, feature = "local_fs", windows))]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    use crate::terminal::model::session::command_executor::testing::TestCommandExecutor;
+    use crate::terminal::model::session::SessionInfo;
+    use crate::terminal::shell::ShellType;
+    use crate::terminal::ShellLaunchData;
+
+    fn wsl_session() -> Session {
+        Session::new(
+            SessionInfo::new_for_test().with_shell_type(ShellType::Bash),
+            Arc::new(TestCommandExecutor::default()),
+        )
+        .with_shell_launch_data(ShellLaunchData::WSL {
+            distro: "Ubuntu".to_owned(),
+        })
+    }
+
+    #[test]
+    fn open_file_command_converts_wsl_paths_to_host_paths() {
+        let session = wsl_session();
+        let cases = [
+            (
+                "/home/ubuntu",
+                "subdir/test.txt",
+                r"\\WSL$\Ubuntu\home\ubuntu\subdir\test.txt",
+                None,
+            ),
+            (
+                "/home/ubuntu/project",
+                "../test.txt",
+                r"\\WSL$\Ubuntu\home\ubuntu\test.txt",
+                None,
+            ),
+            (
+                "/home/ubuntu",
+                "subdir/file\\ name.txt",
+                r"\\WSL$\Ubuntu\home\ubuntu\subdir\file name.txt",
+                None,
+            ),
+            (
+                "/home/ubuntu",
+                "subdir/test.txt:4:2",
+                r"\\WSL$\Ubuntu\home\ubuntu\subdir\test.txt",
+                Some(LineAndColumnArg {
+                    line_num: 4,
+                    column_num: Some(2),
+                }),
+            ),
+        ];
+
+        for (current_dir, raw_arg, expected_path, expected_line_col) in cases {
+            let (path, line_col) = open_file_command_path(&session, current_dir, raw_arg);
+
+            assert_eq!(path, PathBuf::from(expected_path));
+            assert_eq!(line_col, expected_line_col);
+        }
     }
 }

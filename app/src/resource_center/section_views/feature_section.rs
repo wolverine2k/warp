@@ -36,12 +36,12 @@ pub enum FeatureSection {
 }
 
 impl FeatureSection {
-    pub fn section_name_string(&self) -> &'static str {
+    pub fn section_name_string(&self) -> String {
         match self {
-            FeatureSection::WhatsNew => "What's New?",
-            FeatureSection::GettingStarted => "Getting Started",
-            FeatureSection::MaximizeWarp => "Maximize Warp",
-            FeatureSection::AdvancedSetup => "Advanced Setup",
+            FeatureSection::WhatsNew => crate::t!("resource-center-whats-new-section"),
+            FeatureSection::GettingStarted => crate::t!("resource-center-getting-started-section"),
+            FeatureSection::MaximizeWarp => crate::t!("resource-center-maximize-warp-section"),
+            FeatureSection::AdvancedSetup => crate::t!("resource-center-advanced-setup-section"),
         }
     }
 }

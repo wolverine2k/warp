@@ -76,7 +76,7 @@ pub fn init(app: &mut AppContext) {
         // Reuse the save file keybinding name and description
         // so that there's only one entry in settings reused for both cases.
         SAVE_FILE_BINDING_NAME,
-        SAVE_FILE_BINDING_DESCRIPTION,
+        crate::t!("keybinding-desc-save-file"),
         AIDocumentAction::SendUpdatedPlan,
     )
     .with_context_predicate(id!("AIDocumentView") & !id!("IMEOpen"))
@@ -100,7 +100,7 @@ use crate::util::openable_file_type::FileTarget;
 use warp_util::path::LineAndColumnArg;
 
 // Import keybinding constants from code view to ensure consistency
-use crate::code::view::{SAVE_FILE_BINDING_DESCRIPTION, SAVE_FILE_BINDING_NAME};
+use crate::code::view::SAVE_FILE_BINDING_NAME;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AIDocumentAction {
@@ -350,7 +350,7 @@ impl AIDocumentView {
             ActionButton::new("", NakedTheme)
                 .with_icon(icons::Icon::History)
                 .with_size(ButtonSize::Small)
-                .with_tooltip("Show version history")
+                .with_tooltip(crate::t!("ai-document-show-version-history"))
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(
                         PaneHeaderAction::<AIDocumentAction, AIDocumentAction>::CustomAction(
@@ -376,7 +376,7 @@ impl AIDocumentView {
             .unwrap_or("Click".to_string());
         let tooltip_text = format!("This plan has changes the agent isn't aware of. {save_action} to stop the agent's current task and send the updated plan");
         let update_plan_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Update Agent", PrimaryTheme)
+            ActionButton::new(crate::t!("ai-document-update-agent"), PrimaryTheme)
                 .with_size(ButtonSize::Small)
                 .with_tooltip(tooltip_text)
                 .with_tooltip_alignment(TooltipAlignment::Right)
@@ -392,7 +392,7 @@ impl AIDocumentView {
 
         // Create restore button
         let restore_button = ctx.add_typed_action_view(|_ctx| {
-            ActionButton::new("Restore", SecondaryTheme)
+            ActionButton::new(crate::t!("common-restore"), SecondaryTheme)
                 .with_size(ButtonSize::Small)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(
@@ -610,7 +610,7 @@ impl AIDocumentView {
                 let appearance = Appearance::as_ref(app);
                 let ui_builder = appearance.ui_builder().clone();
                 let tooltip = ui_builder
-                    .tool_tip("Save and auto-sync this plan to your Warp Drive".to_string())
+                    .tool_tip(crate::t!("ai-document-save-and-sync-tooltip"))
                     .build()
                     .finish();
                 let sync_button_mouse_state = self.sync_button_mouse_state.clone();
@@ -1064,7 +1064,7 @@ impl TypedActionView for AIDocumentView {
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::success("Link copied to clipboard".to_string()),
+                        DismissibleToast::success(crate::t!("object-toast-link-copied")),
                         window_id,
                         ctx,
                     );
@@ -1077,7 +1077,7 @@ impl TypedActionView for AIDocumentView {
                 let window_id = ctx.window_id();
                 ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
                     toast_stack.add_ephemeral_toast(
-                        DismissibleToast::success("Plan ID copied to clipboard".to_string()),
+                        DismissibleToast::success(crate::t!("ai-document-plan-id-copied")),
                         window_id,
                         ctx,
                     );
@@ -1227,13 +1227,13 @@ impl BackingView for AIDocumentView {
             AIDocumentModel::as_ref(ctx).get_document_warp_drive_object_link(&self.document_id, ctx)
         {
             menu_items.push(
-                MenuItemFields::new("Copy link")
+                MenuItemFields::new(crate::t!("common-copy-link"))
                     .with_on_select_action(AIDocumentAction::CopyLink(link))
                     .with_icon(Icon::Link)
                     .into_item(),
             );
             menu_items.push(
-                MenuItemFields::new("Show in Warp Drive")
+                MenuItemFields::new(crate::t!("ai-document-show-in-warp-drive"))
                     .with_on_select_action(AIDocumentAction::ShowInWarpDrive)
                     .with_icon(Icon::WarpDrive)
                     .into_item(),
@@ -1243,7 +1243,7 @@ impl BackingView for AIDocumentView {
         #[cfg(feature = "local_fs")]
         {
             menu_items.push(
-                crate::menu::MenuItemFields::new("Save as markdown file")
+                crate::menu::MenuItemFields::new(crate::t!("ai-document-save-as-markdown-file"))
                     .with_on_select_action(AIDocumentAction::Export)
                     .with_icon(Icon::Download)
                     .into_item(),
@@ -1252,7 +1252,7 @@ impl BackingView for AIDocumentView {
 
         // Add "Attach to active session" menu item
         menu_items.push(
-            MenuItemFields::new("Attach to active session")
+            MenuItemFields::new(crate::t!("ai-document-attach-to-active-session"))
                 .with_on_select_action(AIDocumentAction::AttachToActiveSession)
                 .with_icon(Icon::Paperclip)
                 .into_item(),
@@ -1260,7 +1260,7 @@ impl BackingView for AIDocumentView {
 
         // Add "Copy plan ID" menu item
         menu_items.push(
-            MenuItemFields::new("Copy plan ID")
+            MenuItemFields::new(crate::t!("ai-document-copy-plan-id"))
                 .with_on_select_action(AIDocumentAction::CopyPlanId)
                 .with_icon(Icon::Copy)
                 .into_item(),

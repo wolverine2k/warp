@@ -109,6 +109,7 @@ impl FilterChipRenderer for QueryFilter {
             | QueryFilter::Code
             | QueryFilter::Rules
             | QueryFilter::Repos
+            | QueryFilter::SshServers
             | QueryFilter::DiffSets
             | QueryFilter::StaticSlashCommands
             | QueryFilter::Skills

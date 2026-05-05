@@ -357,11 +357,13 @@ impl UiBuilder {
             font_size: Some(self.command_palette_font_size),
             font_color: Some(
                 self.warp_theme
-                    .hint_text_color(self.warp_theme.background())
+                    .main_text_color(self.warp_theme.background())
                     .into_solid(),
             ),
             border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
-            background: Some(internal_colors::fg_overlay_1(self.warp_theme()).into()),
+            background: Some(internal_colors::fg_overlay_4(self.warp_theme()).into()),
+            border_width: Some(1.),
+            border_color: Some(internal_colors::fg_overlay_3(self.warp_theme()).into()),
             height: Some(DEFAULT_KEYBOARD_SHORTCUT_HEIGHT),
             padding: Some(Coords::default().left(6.).right(6.)),
             margin: Some(Coords::default().left(3.)),

@@ -9,7 +9,6 @@ use super::{
     about_page::AboutPageView,
     ai_page::{AISettingsPageAction, AISettingsPageView},
     appearance_page::AppearanceSettingsPageView,
-    billing_and_usage_page::BillingAndUsagePageView,
     code_page::CodeSettingsPageView,
     environments_page::EnvironmentsPageView,
     features_page::FeaturesPageView,
@@ -119,7 +118,6 @@ pub enum SettingsPageViewHandle {
     Referrals(ViewHandle<ReferralsPageView>),
     AI(ViewHandle<AISettingsPageView>),
     CloudEnvironments(ViewHandle<EnvironmentsPageView>),
-    BillingAndUsage(ViewHandle<BillingAndUsagePageView>),
     MCPServers(ViewHandle<MCPServersSettingsPageView>),
     WarpDrive(ViewHandle<WarpDriveSettingsPageView>),
 }
@@ -142,7 +140,6 @@ impl SettingsPageViewHandle {
             Referrals(view_handle) => ChildView::new(view_handle).finish(),
             AI(view_handle) => ChildView::new(view_handle).finish(),
             CloudEnvironments(view_handle) => ChildView::new(view_handle).finish(),
-            BillingAndUsage(view_handle) => ChildView::new(view_handle).finish(),
             MCPServers(view_handle) => ChildView::new(view_handle).finish(),
             WarpDrive(view_handle) => ChildView::new(view_handle).finish(),
         }
@@ -557,7 +554,7 @@ pub fn render_info_icon<T: Clone + Action>(
             13.,
             additional_info
                 .tooltip_override_text
-                .unwrap_or("Click to learn more in docs".to_owned()),
+                .unwrap_or_else(|| crate::t!("settings-page-info-icon-tooltip")),
             additional_info.mouse_state.clone(),
         )
         .on_click(move |ctx, _, _| {
@@ -583,7 +580,7 @@ pub fn render_local_only_icon(
         .ui_builder()
         .local_only_icon_with_tooltip(
             13.,
-            custom_tooltip.unwrap_or("This setting is not synced to your other devices".to_owned()),
+            custom_tooltip.unwrap_or_else(|| crate::t!("settings-page-local-only-icon-tooltip")),
             mouse_state.clone(),
         )
         .finish();
@@ -1371,6 +1368,69 @@ impl<V: warpui::View> PageType<V> {
         }
     }
 
+    /// 取出当前 page 的滚动状态 handle(垂直、水平),用于 rebuild 时跨实例保留滚动位置。
+    /// `Monolith` 的 scroll state 是可选的,这里只在两个非空 handle 都存在时返回。
+    pub(super) fn scroll_states(
+        &self,
+    ) -> Option<(ClippedScrollStateHandle, ClippedScrollStateHandle)> {
+        match self {
+            Self::Uncategorized {
+                vertical_scroll_state,
+                horizontal_scroll_state,
+                ..
+            }
+            | Self::Categorized {
+                vertical_scroll_state,
+                horizontal_scroll_state,
+                ..
+            } => Some((
+                vertical_scroll_state.clone(),
+                horizontal_scroll_state.clone(),
+            )),
+            Self::Monolith {
+                vertical_scroll_state: Some(v),
+                horizontal_scroll_state: Some(h),
+                ..
+            } => Some((v.clone(), h.clone())),
+            Self::Monolith { .. } => None,
+        }
+    }
+
+    /// 用旧 page 的 scroll handle 替换当前 page 的内部 handle,保留滚动位置。
+    pub(super) fn replace_scroll_states(
+        &mut self,
+        v: ClippedScrollStateHandle,
+        h: ClippedScrollStateHandle,
+    ) {
+        match self {
+            Self::Uncategorized {
+                vertical_scroll_state,
+                horizontal_scroll_state,
+                ..
+            }
+            | Self::Categorized {
+                vertical_scroll_state,
+                horizontal_scroll_state,
+                ..
+            } => {
+                *vertical_scroll_state = v;
+                *horizontal_scroll_state = h;
+            }
+            Self::Monolith {
+                vertical_scroll_state,
+                horizontal_scroll_state,
+                ..
+            } => {
+                if vertical_scroll_state.is_some() {
+                    *vertical_scroll_state = Some(v);
+                }
+                if horizontal_scroll_state.is_some() {
+                    *horizontal_scroll_state = Some(h);
+                }
+            }
+        }
+    }
+
     /// Apply the search query by matching against all the widgets and storing the results.
     /// Uses all-words matching: every word in the query must appear somewhere in the
     /// widget's search terms (but not necessarily contiguously).
@@ -1900,5 +1960,5 @@ pub(super) fn build_reset_button(
             font_size: Some(appearance.ui_font_size() * 0.8),
             ..Default::default()
         })
-        .with_text_label("Reset to default".to_owned())
+        .with_text_label(crate::t!("settings-page-reset-to-default"))
 }

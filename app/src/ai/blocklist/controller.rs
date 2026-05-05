@@ -11,14 +11,14 @@ mod slash_command;
 use input_context::{input_context_for_request, parse_context_attachments};
 pub use slash_command::*;
 
-use self::response_stream::{ResponseStream, ResponseStreamEvent};
+use self::response_stream::{PendingTitleGeneration, ResponseStream, ResponseStreamEvent};
 use super::agent_view::AgentViewEntryOrigin;
 use super::ResponseStreamId;
 use super::{
     action_model::{BlocklistAIActionEvent, BlocklistAIActionModel},
     agent_view::{AgentViewController, AgentViewControllerEvent},
     context_model::BlocklistAIContextModel,
-    history_model::BlocklistAIHistoryModel,
+    history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel},
     input_model::InputConfig,
     BlocklistAIInputModel, InputType,
 };
@@ -41,8 +41,8 @@ use crate::ai::{
     agent::{
         conversation::AIConversationId, extract_user_query_mode, AIAgentActionResultType,
         AIAgentAttachment, AIAgentContext, AIAgentExchangeId, AIAgentInput, AIAgentOutputStatus,
-        AIIdentifiers, EntrypointType, FinishedAIAgentOutput, RenderableAIError, RequestCost,
-        RequestMetadata, StaticQueryType, UserQueryMode,
+        AIIdentifiers, EntrypointType, FinishedAIAgentOutput, MessageId, RenderableAIError,
+        RequestCost, RequestMetadata, StaticQueryType, UserQueryMode,
     },
     llms::LLMPreferences,
     AIRequestUsageModel,
@@ -59,6 +59,7 @@ use crate::server::server_api::ServerApiProvider;
 use crate::terminal::model::block::{
     formatted_terminal_contents_for_input, BlockId, CURSOR_MARKER,
 };
+use crate::terminal::ssh::util::InteractiveSshCommand;
 use crate::terminal::view::inline_banner::ZeroStatePromptSuggestionType;
 use crate::terminal::{
     model::session::{active_session::ActiveSession, SessionType},
@@ -80,7 +81,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use warp_core::assertions::safe_assert;
-use warp_multi_agent_api::{message, Task, ToolType};
+use warp_multi_agent_api::{
+    client_action::{Action, UpdateTaskDescription},
+    message, ClientAction, Task, ToolType,
+};
 use warpui::r#async::{SpawnedFutureHandle, Timer};
 
 use super::orchestration_event_streamer::{
@@ -94,14 +98,31 @@ pub struct SessionContext {
     session_type: Option<SessionType>,
     shell: Option<ShellLaunchData>,
     current_working_directory: Option<String>,
+    /// OpenWarp:legacy SSH session(用户在本地 PTY 手敲 `ssh xxx@yyy`,
+    /// 远端没装 warp shell hook)的连接信息。`session_type` 仍是 `Local`,
+    /// 但 PTY 实际跑在远端,需要在 prompt 里告知 LLM,否则模型默认在本地 OS。
+    ssh_connection_info: Option<InteractiveSshCommand>,
+    /// 是否为 legacy SSH 会话(`IsLegacySSHSession::Yes`)。
+    is_legacy_ssh: bool,
 }
 
 impl SessionContext {
     pub fn from_session(session: &ActiveSession, app: &AppContext) -> Self {
+        let session_arc = session.session(app);
+        let ssh_connection_info = session_arc
+            .as_ref()
+            .and_then(|s| s.subshell_info().as_ref())
+            .and_then(|info| info.ssh_connection_info.clone());
+        let is_legacy_ssh = session_arc
+            .as_ref()
+            .map(|s| s.is_legacy_ssh_session())
+            .unwrap_or(false);
         SessionContext {
             session_type: session.session_type(app),
             shell: session.shell_launch_data(app),
             current_working_directory: session.current_working_directory().cloned(),
+            ssh_connection_info,
+            is_legacy_ssh,
         }
     }
 
@@ -132,12 +153,26 @@ impl SessionContext {
         matches!(self.session_type, Some(SessionType::WarpifiedRemote { .. }))
     }
 
+    /// OpenWarp:legacy SSH 连接信息(host/port),仅在 `is_legacy_ssh()` 为 true 时有意义。
+    pub fn ssh_connection_info(&self) -> Option<&InteractiveSshCommand> {
+        self.ssh_connection_info.as_ref()
+    }
+
+    /// OpenWarp:本会话是否为 legacy SSH(用户手敲 ssh,远端无 warp hook)。
+    /// 这种会话 `session_type` 仍是 `Local`,但 PTY 实际跑在远端,
+    /// `host_info`/`shell` 等画像反映的是本地客户端而非远端 shell。
+    pub fn is_legacy_ssh(&self) -> bool {
+        self.is_legacy_ssh
+    }
+
     #[cfg(test)]
     pub fn new_for_test() -> Self {
         SessionContext {
             session_type: None,
             shell: None,
             current_working_directory: None,
+            ssh_connection_info: None,
+            is_legacy_ssh: false,
         }
     }
 }
@@ -1919,8 +1954,8 @@ impl BlocklistAIController {
         {
             let Some(conversation) = history_model.conversation(&conversation_id) else {
                 return Err(anyhow!(
-                        "Tried to build passive suggestions request params for non-existent conversation with ID {conversation_id:?}"
-                    ));
+                    "Tried to build passive suggestions request params for non-existent conversation with ID {conversation_id:?}"
+                ));
             };
             let task_id = conversation.get_root_task_id().clone();
             let conversation_data = api::ConversationData {
@@ -1952,8 +1987,8 @@ impl BlocklistAIController {
             (conversation_id, task_id, conversation_data)
         } else {
             return Err(anyhow!(
-                    "Tried to use agent response completed trigger to generate passive suggestions without a conversation ID"
-                ));
+                "Tried to use agent response completed trigger to generate passive suggestions without a conversation ID"
+            ));
         };
 
         let inputs = vec![AIAgentInput::TriggerPassiveSuggestion {
@@ -2205,6 +2240,76 @@ impl BlocklistAIController {
         request_params.parent_agent_id = parent_agent_id;
         request_params.agent_name = agent_name;
 
+        // OpenWarp BYOP 本地会话压缩:
+        //   1. 自动 prune 旧 tool output(对齐 opencode `compaction.ts:297-341` prune)
+        //   2. 把 conversation.compaction_state.clone() 注入 request_params
+        //
+        // chat_stream::build_chat_request 会据此投影 messages(隐去已压缩区间 + 替换 compacted tool output);
+        // SummarizeConversation input 路径还会切 head + 拼 SUMMARY_TEMPLATE。
+        // 非 BYOP 路径(走 server protobuf)不读这个字段,无副作用。
+        let compaction_cfg = crate::ai::byop_compaction::CompactionConfig::from_settings(ctx);
+        history_model.update(ctx, |history_model, _ctx| {
+            if let Some(convo) = history_model.conversation_mut(&conversation_id) {
+                crate::ai::byop_compaction::commit::prune_now(convo, &compaction_cfg);
+            }
+        });
+        if let Some(convo) = history_model.as_ref(ctx).conversation(&conversation_id) {
+            request_params.compaction_state = Some(convo.compaction_state.clone());
+        }
+
+        // OpenWarp BYOP:检测当前请求是否绑定 LRC(alt-screen 长命令)。
+        // - tag-in 首轮:注入 command_id + running_command,并让 chat_stream 合成 subagent
+        //   CreateTask 事件来升级 master 路径已经创建的 optimistic CLI subtask。
+        // - 已进入 agent control 的后续轮:auto-resume / tool result 仍要注入 command_id
+        //   与最新 PTY 快照,但不能重复 spawn subagent。
+        {
+            let terminal_model = self.terminal_model.lock();
+            let active_block = terminal_model.block_list().active_block();
+            let is_lrc_tagged_in = active_block.is_agent_tagged_in();
+            let is_matching_lrc_agent = active_block.is_agent_in_control()
+                && active_block
+                    .agent_interaction_metadata()
+                    .is_some_and(|metadata| metadata.conversation_id() == &conversation_id);
+            if is_lrc_tagged_in || is_matching_lrc_agent {
+                request_params.lrc_command_id = Some(active_block.id().to_string());
+                request_params.lrc_should_spawn_subagent = is_lrc_tagged_in;
+
+                // OpenWarp A3:把完整 RunningCommand 注入到本轮 UserQuery 中,
+                // 严格对齐上游 `get_running_command` 的 grid_contents 提取逻辑
+                // (alt-screen 走 alt_screen.grid_handler,非 alt-screen 走 output_grid)。
+                // 之前用 `output_to_string_force_full_grid_contents()` 在 nvim 等
+                // alt-screen TUI 下取到空字符串,导致 prefix 块为空,模型说看不到 command_id。
+                if let Some(running_command) = byop_get_running_command_for_lrc(&terminal_model) {
+                    request_params.lrc_running_command = Some(running_command.clone());
+                    let total_inputs = request_params.input.len();
+                    let mut filled_count = 0usize;
+                    for input in request_params.input.iter_mut() {
+                        if let crate::ai::agent::AIAgentInput::UserQuery {
+                            running_command: rc_slot @ None,
+                            ..
+                        } = input
+                        {
+                            *rc_slot = Some(running_command.clone());
+                            filled_count += 1;
+                        }
+                    }
+                    log::info!(
+                        "[byop-diag] LRC running_command filled: {filled_count}/{total_inputs} \
+                         UserQuery slot(s); should_spawn={} grid_contents_len={} command={:?} is_alt_screen={}",
+                        request_params.lrc_should_spawn_subagent,
+                        running_command.grid_contents.len(),
+                        running_command.command,
+                        running_command.is_alt_screen_active
+                    );
+                } else {
+                    log::warn!(
+                        "[byop-diag] LRC detected but byop_get_running_command_for_lrc \
+                         returned None (active_block 状态不符)"
+                    );
+                }
+            }
+        }
+
         let server_conversation_token_for_identifiers =
             conversation_data.server_conversation_token.clone();
 
@@ -2418,6 +2523,82 @@ impl BlocklistAIController {
             .try_cancel_stream(response_stream_id, reason, ctx)
     }
 
+    fn start_title_generation(
+        &mut self,
+        pending_title_generation: PendingTitleGeneration,
+        stream_id: ResponseStreamId,
+        conversation_id: AIConversationId,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let terminal_view_id = self.terminal_view_id;
+        let _ = ctx.spawn(
+            async move {
+                let result = crate::ai::agent_providers::chat_stream::generate_title_via_byop(
+                    &pending_title_generation.input,
+                    &pending_title_generation.user_query,
+                )
+                .await;
+                (pending_title_generation.task_id, result)
+            },
+            move |me, (task_id, result), ctx| match result {
+                Ok(Some(title)) => {
+                    log::info!("[byop] title generated: {title:?}");
+                    let client_actions = vec![ClientAction {
+                        action: Some(Action::UpdateTaskDescription(UpdateTaskDescription {
+                            task_id,
+                            description: title,
+                        })),
+                    }];
+                    let response_event = warp_multi_agent_api::ResponseEvent {
+                        r#type: Some(warp_multi_agent_api::response_event::Type::ClientActions(
+                            warp_multi_agent_api::response_event::ClientActions {
+                                actions: client_actions.clone(),
+                            },
+                        )),
+                    };
+                    if FeatureFlag::AgentSharedSessions.is_enabled() {
+                        let participant_id = me
+                            .get_current_response_initiator()
+                            .or_else(|| me.get_sharer_participant_id());
+                        let mut model = me.terminal_model.lock();
+                        if model.shared_session_status().is_sharer() {
+                            model.send_agent_response_for_shared_session(
+                                &response_event,
+                                participant_id,
+                                None,
+                            );
+                        }
+                    }
+                    BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
+                        match history_model.apply_client_actions(
+                            &stream_id,
+                            client_actions,
+                            conversation_id,
+                            terminal_view_id,
+                            ctx,
+                        ) {
+                            Ok(()) => {
+                                ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationMetadata {
+                                    terminal_view_id: Some(terminal_view_id),
+                                    conversation_id,
+                                });
+                            }
+                            Err(e) => {
+                                log::warn!("[byop] title update failed: {e:#}");
+                            }
+                        }
+                    });
+                }
+                Ok(None) => {
+                    log::warn!("[byop] title gen returned empty content; skip");
+                }
+                Err(e) => {
+                    log::warn!("[byop] title gen failed: {e:#}; skip");
+                }
+            },
+        );
+    }
+
     fn handle_response_stream_event(
         &mut self,
         did_input_contain_user_query: bool,
@@ -2504,11 +2685,35 @@ impl BlocklistAIController {
                             warp_multi_agent_api::response_event::Type::Finished(
                                 finished_event,
                             ) => {
+                                let completed_successfully = matches!(
+                                    finished_event.reason.as_ref(),
+                                    Some(
+                                        warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)
+                                    ) | None
+                                );
+                                if completed_successfully {
+                                    if let Some(pending_title_generation) =
+                                        response_stream.update(ctx, |response_stream, _| {
+                                            response_stream.take_pending_title_generation()
+                                        })
+                                    {
+                                        self.start_title_generation(
+                                            pending_title_generation,
+                                            stream_id.clone(),
+                                            conversation_id,
+                                            ctx,
+                                        );
+                                    }
+                                }
+                                // OpenWarp BYOP 本地会话压缩:在 stream finished 前拿 summarization 标志
+                                let summarize_overflow =
+                                    response_stream.as_ref(ctx).summarization_overflow();
                                 self.handle_response_stream_finished(
                                     &stream_id,
                                     finished_event,
                                     conversation_id,
                                     did_input_contain_user_query,
+                                    summarize_overflow,
                                     ctx,
                                 );
                             }
@@ -2605,6 +2810,11 @@ impl BlocklistAIController {
                 let mut was_passive_request = false;
                 let mut is_any_exchange_unfinished = false;
                 let mut actions_to_queue = vec![];
+                // OpenWarp BYOP:收集本轮新加 message id,稍后用于在 EMPTY 分支检测
+                // synthetic invalid_arguments 错误标记。**只看本轮 added** 才能避免
+                // 在历史里反复命中导致 auto-resume 死循环(标记一旦持久化就永远在)。
+                let mut newly_added_message_ids: std::collections::HashSet<MessageId> =
+                    std::collections::HashSet::new();
 
                 for new_exchange_id in new_exchange_ids {
                     let Some(exchange) = conversation.exchange_with_id(new_exchange_id) else {
@@ -2613,6 +2823,7 @@ impl BlocklistAIController {
                     };
                     was_passive_request |= exchange.has_passive_request();
                     is_any_exchange_unfinished |= !exchange.output_status.is_finished();
+                    newly_added_message_ids.extend(exchange.added_message_ids.iter().cloned());
 
                     if let AIAgentOutputStatus::Finished {
                         finished_output: FinishedAIAgentOutput::Success { output },
@@ -2668,9 +2879,96 @@ impl BlocklistAIController {
                         );
                     });
                 } else if !actions_to_queue.is_empty() {
+                    log::info!(
+                        "[byop-diag] queue_actions: count={} ids=[{}] conversation_id={:?}",
+                        actions_to_queue.len(),
+                        actions_to_queue
+                            .iter()
+                            .map(|a| format!("{}", a.id))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        conversation_id,
+                    );
+                    // OpenWarp:LRC tag-in 首轮自动授权 agent 工具执行。
+                    //
+                    // 触发条件:发起本轮请求时 active_block 处于
+                    // InteractionMode::User { did_user_tag_in_agent: true }。不能用当前
+                    // active_block 的 monitored metadata 兜底,否则同一 CLI subagent 会话里的
+                    // 后续普通请求也会被自动确认,导致确认 UI 不显示。
+                    let auto_accept_for_lrc_tag_in =
+                        response_stream.as_ref(ctx).is_lrc_tag_in_request();
+                    if auto_accept_for_lrc_tag_in {
+                        log::info!(
+                            "[byop] LRC tag-in: queue with auto-accept ({} action(s))",
+                            actions_to_queue.len()
+                        );
+                    }
                     self.action_model.update(ctx, |action_model, ctx| {
-                        action_model.queue_actions(actions_to_queue, conversation_id, ctx);
+                        action_model.queue_actions_with_options(
+                            actions_to_queue,
+                            conversation_id,
+                            auto_accept_for_lrc_tag_in,
+                            ctx,
+                        );
                     });
+                } else {
+                    // OpenWarp BYOP:from_args 解析失败时,chat_stream 走 fallback emit
+                    // carrier ToolCall(tool=None) + synthetic error ToolCallResult(result=None,
+                    // server_message_data 是 invalid_arguments JSON)。两者都走 NoClientRepresentation,
+                    // 不入 actions_to_queue,exchange 静默结束 → 模型永远收不到错误反馈,
+                    // 用户必须手动再发消息才能让模型重试。
+                    //
+                    // 检测最近 ~16 条 messages 是否含 BYOP synthetic 错误标记;有的话复用
+                    // line 2695+ 的 auto-resume 路径触发重发,让模型立即基于 error tool_result
+                    // 修正参数重试。`can_attempt_resume_on_error=false` 防 LLM 持续输出坏 args 导致死循环。
+                    // 只在本轮新加的 messages 里查找 synthetic 错误标记,避免历史持久化的
+                    // 同标记反复命中导致死循环。
+                    // OpenWarp BYOP:两类 synthetic ToolCallResult 需要 auto-resume
+                    // (二者都不入 actions_to_queue,exchange 静默结束 → 模型卡死等结果)。
+                    // 1. invalid_arguments — from_args 解析失败兜底(原始)
+                    // 2. _byop_intercepted — webfetch / websearch 等本地拦截工具结果
+                    //    (chat_stream::dispatch_byop_web_tool 不走 protobuf executor,
+                    //     直接合成 result,没有 AIAgentAction 入队)
+                    let needs_byop_local_resume = conversation.all_tasks().any(|task| {
+                        task.messages().any(|msg| {
+                            newly_added_message_ids.contains(&MessageId::new(msg.id.clone()))
+                                && matches!(
+                                    msg.message,
+                                    Some(message::Message::ToolCallResult(
+                                        message::ToolCallResult { result: None, .. },
+                                    )),
+                                )
+                                && (msg
+                                    .server_message_data
+                                    .contains(r#""error":"invalid_arguments""#)
+                                    || msg
+                                        .server_message_data
+                                        .contains(r#""_byop_intercepted":true"#))
+                        })
+                    });
+                    if needs_byop_local_resume {
+                        log::info!(
+                            "[byop] detected synthetic local tool_result (invalid_arguments \
+                             or _byop_intercepted) without queued action → schedule auto-resume. \
+                             conversation_id={conversation_id:?}"
+                        );
+                        let network_status = NetworkStatus::handle(ctx);
+                        let wait_for_online = network_status.as_ref(ctx).wait_until_online();
+                        let handle = ctx.spawn(wait_for_online, move |me, _, ctx| {
+                            me.pending_auto_resume_handles.remove(&conversation_id);
+                            me.resume_conversation(
+                                conversation_id,
+                                /*can_attempt_resume_on_error*/
+                                false,
+                                /*is_auto_resume_after_error*/
+                                true,
+                                vec![],
+                                ctx,
+                            );
+                        });
+                        self.pending_auto_resume_handles
+                            .insert(conversation_id, handle);
+                    }
                 }
 
                 // Cancelled streams will handle pending_response_stream updates synchronously.
@@ -2793,8 +3091,18 @@ impl BlocklistAIController {
         mut finished_event: warp_multi_agent_api::response_event::StreamFinished,
         conversation_id: AIConversationId,
         did_request_contain_user_query: bool,
+        summarize_overflow: Option<bool>,
         ctx: &mut ModelContext<Self>,
     ) {
+        // OpenWarp BYOP 本地会话压缩:在 token_usage move 进下面 closure 前先聚合,
+        // 用于 auto overflow 检查(后面 Done 分支用)。
+        let aggregate_token_count: usize = finished_event
+            .token_usage
+            .iter()
+            .map(|u| (u.total_input + u.output + u.input_cache_read + u.input_cache_write) as usize)
+            .max()
+            .unwrap_or(0);
+
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         history_model.update(ctx, |history_model, _| {
             // Update conversation cost and usage information before updating and
@@ -2813,6 +3121,16 @@ impl BlocklistAIController {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         match finished_event.reason {
             Some(warp_multi_agent_api::response_event::stream_finished::Reason::Done(_)) | None => {
+                // OpenWarp BYOP 本地会话压缩 - 写回 summary
+                if let Some(overflow) = summarize_overflow {
+                    history_model.update(ctx, |history_model, _ctx| {
+                        if let Some(convo) = history_model.conversation_mut(&conversation_id) {
+                            crate::ai::byop_compaction::commit::commit_summarization(
+                                convo, overflow,
+                            );
+                        }
+                    });
+                }
                 history_model.update(ctx, |history_model, ctx| {
                     history_model.mark_response_stream_completed_successfully(
                         stream_id,
@@ -2821,6 +3139,37 @@ impl BlocklistAIController {
                         ctx,
                     );
                 });
+
+                // OpenWarp BYOP 本地会话压缩 - auto overflow 触发(对齐 opencode `processor.ts:395-403`)
+                // 仅在本流不是摘要本身时检查,防止递归。
+                if summarize_overflow.is_none() {
+                    let aggregate_count = aggregate_token_count;
+                    if aggregate_count > 0 {
+                        let cfg = crate::ai::byop_compaction::CompactionConfig::from_settings(ctx);
+                        let model_limit =
+                            crate::ai::byop_compaction::overflow::ModelLimit::FALLBACK;
+                        let counts = crate::ai::byop_compaction::overflow::TokenCounts {
+                            total: aggregate_count,
+                            ..Default::default()
+                        };
+                        if crate::ai::byop_compaction::is_overflow(&cfg, counts, model_limit) {
+                            log::info!(
+                                "[byop-compaction] auto overflow detected: tokens={aggregate_count} usable={}",
+                                crate::ai::byop_compaction::usable(&cfg, model_limit)
+                            );
+                            // 通过 SlashCommandRequest::Summarize 触发(与 /compact-and 同链路);
+                            // overflow=true → chat_stream 拼摘要请求时携带 overflow 标记,
+                            // commit_summarization 写回时也以 overflow=true 落 state(便于 UI 区分)。
+                            self.send_slash_command_request(
+                                crate::ai::blocklist::controller::SlashCommandRequest::Summarize {
+                                    prompt: None,
+                                    overflow: true,
+                                },
+                                ctx,
+                            );
+                        }
+                    }
+                }
             }
             Some(warp_multi_agent_api::response_event::stream_finished::Reason::Other(_)) => {
                 let error_message = "Response stream finished unexpectedly (with finish reason `Other`).";
@@ -3070,6 +3419,52 @@ fn get_running_command(terminal_model: &TerminalModel) -> Option<RunningCommand>
             formatted_terminal_contents_for_input(
                 active_block.output_grid().grid_handler(),
                 // TODO(vorporeal): This is probably too large.
+                Some(1000),
+                CURSOR_MARKER,
+            )
+        },
+        cursor: CURSOR_MARKER.to_owned(),
+        requested_command_id: active_block.requested_command_action_id().cloned(),
+        is_alt_screen_active,
+    })
+}
+
+/// OpenWarp BYOP 专用:LRC tag-in / agent-monitored 场景下提取 RunningCommand。
+///
+/// 上游 `get_running_command` 在 `is_agent_monitoring()` 时返回 None — 因为 Warp 自家
+/// 路径下 LRC 已 spawn cli subagent 后,server 端持久该状态,后续轮 client 不必重发
+/// running_command。但 BYOP 直连模型无服务端持久,**每轮都要把当前 PTY grid 内容
+/// 重新带给模型**(否则模型只能看到首轮 grid_contents 之后的盲区)。
+///
+/// 条件放宽为 `is_agent_in_control_or_tagged_in()` — 覆盖:
+///   - tag-in:`InteractionMode::User { did_user_tag_in_agent: true }`(spawn 前)
+///   - monitored:`InteractionMode::Agent { ... }`(spawn 后)
+///
+/// 提取逻辑严格对齐上游:alt-screen 时取 `terminal_model.alt_screen().grid_handler()`
+/// 而不是 `active_block.output_grid()`(后者在 alt-screen 期间是空的,
+/// 不要再用 `output_to_string_force_full_grid_contents()`,那条路在 nvim 等 TUI 下
+/// 会得到空字符串导致 `<attached_running_command>` 块为空,模型抱怨"看不到 command_id")。
+fn byop_get_running_command_for_lrc(terminal_model: &TerminalModel) -> Option<RunningCommand> {
+    let active_block = terminal_model.block_list().active_block();
+    if !active_block.is_active_and_long_running() {
+        return None;
+    }
+    if !active_block.is_agent_in_control_or_tagged_in() {
+        return None;
+    }
+    let is_alt_screen_active = terminal_model.is_alt_screen_active();
+    Some(RunningCommand {
+        block_id: active_block.id().clone(),
+        command: active_block.command_to_string(),
+        grid_contents: if is_alt_screen_active {
+            formatted_terminal_contents_for_input(
+                terminal_model.alt_screen().grid_handler(),
+                None,
+                CURSOR_MARKER,
+            )
+        } else {
+            formatted_terminal_contents_for_input(
+                active_block.output_grid().grid_handler(),
                 Some(1000),
                 CURSOR_MARKER,
             )
