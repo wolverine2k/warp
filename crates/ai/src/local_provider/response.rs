@@ -70,6 +70,12 @@ pub struct OpenAiSseAdapter {
     tool_buffers: HashMap<u32, ToolBuffer>,
     /// Captured finish_reason once the model reports one.
     captured_finish: Option<api::response_event::stream_finished::Reason>,
+    /// User-visible upstream error message recorded by the HTTP runner when
+    /// the SSE stream errors before any `finish_reason` arrives (e.g. the
+    /// server returned a 4xx/5xx JSON error body that isn't valid SSE). Used
+    /// by `finish()` to surface the real reason instead of the generic
+    /// "stream ended without finish_reason".
+    upstream_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +123,7 @@ impl OpenAiSseAdapter {
             conversation_id,
             request_id,
             run_id,
+            upstream_error: None,
             sent_init: false,
             sent_begin: false,
             text_message_id: None,
@@ -234,6 +241,17 @@ impl OpenAiSseAdapter {
         out
     }
 
+    /// Record an upstream error message (e.g. an HTTP 4xx/5xx JSON body) so
+    /// it's surfaced as the InternalError reason on the Finished event when
+    /// the stream closes without a `finish_reason`. Idempotent: only the
+    /// first call wins, since later errors during teardown are usually
+    /// downstream symptoms of the first one.
+    pub fn record_upstream_error(&mut self, msg: String) {
+        if self.upstream_error.is_none() {
+            self.upstream_error = Some(msg);
+        }
+    }
+
     /// Call once the upstream stream ends (cleanly or otherwise). Emits the
     /// Commit/Rollback action and the Finished event.
     pub fn finish(&mut self) -> Vec<api::ResponseEvent> {
@@ -255,10 +273,18 @@ impl OpenAiSseAdapter {
         };
         out.extend(self.build_action(closing));
 
-        let reason = self
-            .captured_finish
-            .take()
-            .unwrap_or_else(|| internal_error_reason("stream ended without finish_reason"));
+        let reason = self.captured_finish.take().unwrap_or_else(|| {
+            // Prefer the upstream error message captured by the HTTP runner
+            // (e.g. "400 Bad Request: model 'foo' not found") so users see
+            // the real failure reason in the UI instead of the generic
+            // "stream ended without finish_reason" — which historically hid
+            // every misconfiguration behind one unhelpful sentence.
+            let msg = self
+                .upstream_error
+                .take()
+                .unwrap_or_else(|| "stream ended without finish_reason".to_string());
+            internal_error_reason(&msg)
+        });
         out.push(api::ResponseEvent {
             r#type: Some(api::response_event::Type::Finished(
                 api::response_event::StreamFinished {

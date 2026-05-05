@@ -134,6 +134,12 @@ fn synthesize_stream(
                 Poll::Ready(None) => {
                     if let Some(msg) = errored.take() {
                         log::warn!("local provider stream errored before EOF: {msg}");
+                        // Surface the captured upstream error as the
+                        // InternalError reason on Finished so the user sees
+                        // the real cause in the UI (e.g. HTTP 401 / 400 with
+                        // a server-side JSON error body), instead of the
+                        // generic "stream ended without finish_reason".
+                        adapter.record_upstream_error(msg);
                     }
                     for ev in adapter.finish() {
                         pending.push_back(ev);
