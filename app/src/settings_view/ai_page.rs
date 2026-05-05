@@ -2130,12 +2130,13 @@ pub enum AISettingsPageAction {
         agent: Option<CLIAgent>,
     },
     // ----- Custom Local LLM Provider (specs/GH9303/) -----
+    // Toggle actions are dispatched by `render_ai_setting_toggle` (switch
+    // click path). Text fields update `AISettings` directly from their
+    // editor blur handlers because action dispatch from
+    // `subscribe_to_view`'s `ViewContext<EditorView>` doesn't reliably reach
+    // `AISettingsPageView::handle_action` — same pattern as `AwsBedrockWidget`.
     ToggleLocalProviderEnabled,
-    SetLocalProviderDisplayName(String),
-    SetLocalProviderBaseUrl(String),
-    SetLocalProviderModelId(String),
     ToggleLocalProviderSupportsTools,
-    SetLocalProviderContextWindow(String),
 }
 
 impl From<&AISettingsPageAction> for LoginGatedFeature {
@@ -2861,51 +2862,11 @@ impl TypedActionView for AISettingsPageView {
                 });
                 ctx.notify();
             }
-            AISettingsPageAction::SetLocalProviderDisplayName(name) => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .local_provider_display_name
-                        .set_value(name.clone(), ctx));
-                });
-                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                    prefs.refresh_local_provider_entry(ctx);
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::SetLocalProviderBaseUrl(url) => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.local_provider_base_url.set_value(url.clone(), ctx));
-                });
-                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                    prefs.refresh_local_provider_entry(ctx);
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::SetLocalProviderModelId(id) => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings.local_provider_model_id.set_value(id.clone(), ctx));
-                });
-                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                    prefs.refresh_local_provider_entry(ctx);
-                });
-                ctx.notify();
-            }
             AISettingsPageAction::ToggleLocalProviderSupportsTools => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings
                         .local_provider_supports_tools
                         .toggle_and_save_value(ctx));
-                });
-                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
-                    prefs.refresh_local_provider_entry(ctx);
-                });
-                ctx.notify();
-            }
-            AISettingsPageAction::SetLocalProviderContextWindow(value) => {
-                AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .local_provider_context_window
-                        .set_value(value.clone(), ctx));
                 });
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
                     prefs.refresh_local_provider_entry(ctx);
@@ -6447,9 +6408,14 @@ impl LocalProviderWidget {
         ctx.subscribe_to_view(&display_name_editor, |_, editor, event, ctx| {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                ctx.dispatch_typed_action(&AISettingsPageAction::SetLocalProviderDisplayName(
-                    buffer_text,
-                ));
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .local_provider_display_name
+                        .set_value(buffer_text, ctx));
+                });
+                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                    prefs.refresh_local_provider_entry(ctx);
+                });
             }
         });
 
@@ -6463,9 +6429,14 @@ impl LocalProviderWidget {
         ctx.subscribe_to_view(&base_url_editor, |_, editor, event, ctx| {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                ctx.dispatch_typed_action(&AISettingsPageAction::SetLocalProviderBaseUrl(
-                    buffer_text,
-                ));
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .local_provider_base_url
+                        .set_value(buffer_text, ctx));
+                });
+                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                    prefs.refresh_local_provider_entry(ctx);
+                });
             }
         });
 
@@ -6478,9 +6449,14 @@ impl LocalProviderWidget {
         ctx.subscribe_to_view(&model_id_editor, |_, editor, event, ctx| {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                ctx.dispatch_typed_action(&AISettingsPageAction::SetLocalProviderModelId(
-                    buffer_text,
-                ));
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .local_provider_model_id
+                        .set_value(buffer_text, ctx));
+                });
+                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                    prefs.refresh_local_provider_entry(ctx);
+                });
             }
         });
 
@@ -6500,6 +6476,9 @@ impl LocalProviderWidget {
                         model.set_key(key, ctx);
                     },
                 );
+                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                    prefs.refresh_local_provider_entry(ctx);
+                });
             }
         });
 
@@ -6513,9 +6492,14 @@ impl LocalProviderWidget {
         ctx.subscribe_to_view(&context_window_editor, |_, editor, event, ctx| {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                ctx.dispatch_typed_action(&AISettingsPageAction::SetLocalProviderContextWindow(
-                    buffer_text,
-                ));
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .local_provider_context_window
+                        .set_value(buffer_text, ctx));
+                });
+                LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
+                    prefs.refresh_local_provider_entry(ctx);
+                });
             }
         });
 
