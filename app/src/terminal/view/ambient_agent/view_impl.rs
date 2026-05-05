@@ -17,7 +17,6 @@ use crate::ai::blocklist::{agent_view::AgentViewEntryOrigin, BlocklistAIHistoryM
 use crate::ai::conversation_details_panel::ConversationDetailsData;
 use crate::pane_group::TerminalViewResources;
 use crate::server::server_api::ai::SpawnAgentRequest;
-use crate::terminal::view::ambient_agent::{CloudModeFollowupUserQuery, CloudModeInitialUserQuery};
 use crate::terminal::view::rich_content::{RichContentInsertionPosition, RichContentMetadata};
 use crate::terminal::view::TerminalView;
 use crate::terminal::CLIAgent;
@@ -30,9 +29,7 @@ use super::loading_screen::{
     render_cloud_mode_cancelled_screen, render_cloud_mode_error_screen,
     render_cloud_mode_github_auth_required_screen, render_cloud_mode_loading_screen,
 };
-use super::{
-    is_cloud_agent_pre_first_exchange, AmbientAgentEntryBlock, AmbientAgentViewModelEvent,
-};
+use super::{AmbientAgentEntryBlock, AmbientAgentViewModelEvent};
 use crate::terminal::view::Event as TerminalViewEvent;
 const CHILD_AGENT_GITHUB_AUTH_REQUIRED_BLOCKED_ACTION: &str =
     "GitHub authentication required before starting the child agent.";
@@ -100,10 +97,11 @@ impl TerminalView {
             return;
         };
 
-        // Tear down the non-oz cloud-mode queued-prompt block on terminal / transition
+        // Tear down the cloud-mode queued-prompt block on terminal / transition
         // events that replace it. `Failed`, `NeedsGithubAuth`, and `Cancelled` hand off
         // to the existing error / auth / cancelled UI; `HarnessCommandStarted` hands
-        // off to the live harness CLI block. Idempotent and cheap when no block exists.
+        // off to the live third-party harness CLI block. Idempotent and cheap when no
+        // block exists.
         if matches!(
             event,
             AmbientAgentViewModelEvent::Failed { .. }
@@ -140,48 +138,17 @@ impl TerminalView {
                     return;
                 }
                 if FeatureFlag::CloudModeSetupV2.is_enabled() {
-                    if ambient_agent_view_model
+                    // Render the submitted cloud prompt via the queued-prompt UI while the
+                    // real shared-session transcript catches up. `request.prompt` is stored
+                    // stripped of any `/plan` / `/orchestrate` prefix; rebuild the display
+                    // form from `request.mode` so the user sees exactly what they typed.
+                    let prompt = ambient_agent_view_model
                         .as_ref(ctx)
-                        .is_third_party_harness()
-                    {
-                        // Non-oz runs: render the submitted prompt via the queued-prompt UI.
-                        // The block is removed later by `HarnessCommandStarted` / failure /
-                        // cancel / auth handlers.
-                        //
-                        // `request.prompt` is stored stripped of any `/plan` / `/orchestrate`
-                        // prefix; rebuild the display form from `request.mode` so the user sees
-                        // exactly what they typed.
-                        let prompt = ambient_agent_view_model
-                            .as_ref(ctx)
-                            .request()
-                            .map(|request| {
-                                display_user_query_with_mode(request.mode, &request.prompt)
-                            })
-                            .unwrap_or_default();
-                        if !prompt.is_empty() {
-                            self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
-                        }
-                    } else {
-                        let initial_user_query = ctx.add_view(|ctx| {
-                            CloudModeInitialUserQuery::new(ambient_agent_view_model.clone(), ctx)
-                        });
-                        self.insert_rich_content(
-                            None,
-                            initial_user_query,
-                            None,
-                            RichContentInsertionPosition::Append {
-                                insert_below_long_running_block: true,
-                            },
-                            ctx,
-                        );
-                        ambient_agent_view_model.update(ctx, |model, _| {
-                            model.set_has_inserted_cloud_mode_user_query_block(true);
-                            if let Some(prompt) =
-                                model.request().map(|request| request.prompt.clone())
-                            {
-                                model.record_optimistic_user_query(prompt);
-                            }
-                        });
+                        .request()
+                        .map(|request| display_user_query_with_mode(request.mode, &request.prompt))
+                        .unwrap_or_default();
+                    if !prompt.is_empty() {
+                        self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
                     }
                 } else {
                     // Reset tip cooldown so the first tip shows for 60 seconds
@@ -199,6 +166,11 @@ impl TerminalView {
                 ctx.notify();
             }
             AmbientAgentViewModelEvent::FollowupDispatched => {
+                if FeatureFlag::CloudModeSetupV2.is_enabled() {
+                    ambient_agent_view_model.update(ctx, |model, ctx| {
+                        model.start_new_setup_command_group(ctx);
+                    });
+                }
                 self.update_active_ambient_agent_conversation_status(
                     ConversationStatus::InProgress,
                     None,
@@ -209,26 +181,7 @@ impl TerminalView {
                     .pending_followup_prompt()
                     .map(str::to_owned);
                 if let Some(prompt) = pending_prompt {
-                    let prompt_for_query = prompt.clone();
-                    let followup_user_query = ctx.add_view(|ctx| {
-                        CloudModeFollowupUserQuery::new(
-                            prompt_for_query,
-                            ambient_agent_view_model.clone(),
-                            ctx,
-                        )
-                    });
-                    self.insert_rich_content(
-                        None,
-                        followup_user_query,
-                        None,
-                        RichContentInsertionPosition::Append {
-                            insert_below_long_running_block: true,
-                        },
-                        ctx,
-                    );
-                    ambient_agent_view_model.update(ctx, |model, _| {
-                        model.record_optimistic_user_query(prompt);
-                    });
+                    self.insert_cloud_mode_queued_user_query_block(prompt, ctx);
                 }
                 ctx.notify();
             }
@@ -342,6 +295,8 @@ impl TerminalView {
                 }
                 // Collapse the setup-commands summary, matching the oz first-exchange behavior.
                 ambient_agent_view_model.update(ctx, |model, ctx| {
+                    let group_id = model.setup_command_state().current_group_id();
+                    model.finish_setup_command_group(group_id, ctx);
                     model.set_setup_command_visibility(false, ctx);
                 });
                 // Force a fresh viewer size report to the sharer so the harness CLI (e.g.
@@ -368,11 +323,12 @@ impl TerminalView {
             return;
         };
 
-        if !is_cloud_agent_pre_first_exchange(
-            self.ambient_agent_view_model.as_ref(),
-            &self.agent_view_controller,
-            ctx,
-        ) {
+        if !self
+            .model
+            .lock()
+            .block_list()
+            .is_executing_oz_environment_startup_commands()
+        {
             return;
         }
 
@@ -395,6 +351,10 @@ impl TerminalView {
         let Some(block_index) = self.model.lock().block_list().block_index_for_id(block_id) else {
             return;
         };
+        let group_id = ambient_agent_view_model
+            .as_ref(ctx)
+            .setup_command_state()
+            .current_group_id();
 
         if !ambient_agent_view_model
             .as_ref(ctx)
@@ -409,6 +369,7 @@ impl TerminalView {
 
             let setup_command_text = ctx.add_typed_action_view(|ctx| {
                 super::CloudModeSetupTextBlock::new(
+                    group_id,
                     ambient_agent_view_model.clone(),
                     self.agent_view_controller.clone(),
                     ctx,
@@ -425,6 +386,7 @@ impl TerminalView {
 
         let setup_command_block = ctx.add_typed_action_view(|ctx| {
             super::CloudModeSetupCommandBlock::new(
+                group_id,
                 block_id.clone(),
                 ambient_agent_view_model.clone(),
                 &self.model_events_handle,
