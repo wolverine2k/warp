@@ -27,7 +27,7 @@ Presubmit (must pass before pushing a PR):
 
 ## Architecture
 
-Cargo workspace with ~65 crates under `crates/` plus the main binary in `app/`.
+Cargo workspace under `crates/` (~60 crates) plus the main binary in `app/`.
 
 - `app/` — main Warp binary. Houses terminal emulation, AI/Agent Mode, Drive (cloud sync), auth, settings, workspace/session management. `app/src/persistence/schema.rs` is the Diesel/SQLite schema; migrations live alongside.
 - `crates/warpui/` and `crates/warpui_core/` — custom Entity-Component-Handle UI framework (the *only* MIT-licensed code; everything else is AGPL-3.0). Global `App` owns entities; views hold `ViewHandle<T>` references; `AppContext` provides temporary access during render/events. Elements describe layout (Flutter-inspired).
@@ -48,6 +48,7 @@ These are easy mistakes that aren't obvious from the code:
 - **`MouseStateHandle` lifetime.** Create it once during construction and clone/reference it everywhere. Calling `MouseStateHandle::default()` inline during render silently breaks all mouse interactions on that view.
 - **No `_` wildcards in matches.** This codebase deliberately uses exhaustive matching so adding a new enum variant produces a compile error at every match site. Don't introduce `_ => …` arms unless there's a specific reason.
 - **Feature flags over `#[cfg(...)]`.** Gate new behavior with `FeatureFlag::YourFlag.is_enabled()` so it can be toggled without recompilation. Reserve `#[cfg]` for code that genuinely cannot compile without it (platform-specific, missing deps). New flags go in `crates/warp_core/src/features.rs`; rollout lists are `DOGFOOD_FLAGS` / `PREVIEW_FLAGS` / `RELEASE_FLAGS`. The `add-feature-flag`, `promote-feature`, and `remove-feature-flag` skills automate the wiring.
+- **`ctx` parameter naming.** Functions taking `AppContext` / `ViewContext` / `ModelContext` should name the parameter `ctx` and place it last — unless the function takes a closure, in which case the closure goes last.
 - **Inline format args.** Clippy's `uninlined_format_args` is enforced — write `eprintln!("{message}")`, not `eprintln!("{}", message)`.
 - **Unused params get deleted, not `_`-prefixed.** Update the signature and all call sites.
 - **Don't churn unrelated comments.** Only modify a comment if the logic it describes changed.
