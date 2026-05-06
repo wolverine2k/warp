@@ -87,7 +87,10 @@ Landed:
   `ResponseChoice`, `ResponseMessage` for the non-streaming response shape.
 - `crates/ai/src/local_provider/request.rs` — projection step that drops
   pre-compaction history when `compaction_state.completed` is non-empty.
-  Synthetic compaction pair (already in `tasks`) stands in as the new head.
+  The synthetic `(user "Continue...", assistant <summary>)` pair is
+  generated *purely from `CompactionState`* — never spliced into the
+  task list — which keeps the controller-side helper free of `task_store`
+  mutations.
 - Unit tests per module (overflow: 13, prompt: 6, commit: 4) + 3 new
   integration tests (`summarizer_parses_non_streaming_json...`,
   `summarizer_surfaces_http_error_with_body_excerpt`,
@@ -95,20 +98,21 @@ Landed:
 
 Deferred to B-3a:
 
-- `StreamFinished.usage` plumbing — `OpenAiSseAdapter` doesn't yet capture
-  the OpenAI-format `usage` chunk, so the controller has no token counts to
-  hand to `is_overflow`. Need to (a) parse `usage` off the final `ChatCompletionChunk`
-  (requires `stream_options: {"include_usage": true}` in the request body for
-  servers that gate it) and (b) thread it onto `StreamFinished.usage`.
-- Controller dispatch — the place that observes `Finished` for a local-provider
-  conversation and decides whether to compact. Needs `&mut AIConversation`
-  access to mutate `task_store` (splice synthetic `(user, assistant)` pair)
-  and `compaction_state` (record the new `CompletedCompaction`). Plumbing
-  the summarizer dispatch through the existing controller flow is the bulk
+- Controller dispatch — the place that observes `Finished` for a
+  local-provider conversation and decides whether to compact. Mutates
+  `compaction_state` only — no task-store splicing required because the
+  request projection synthesizes the head from state. Plumbing the
+  summarizer dispatch through the existing controller flow is the bulk
   of B-3a.
 - End-to-end verification against a real OpenAI-compatible endpoint —
   requires the controller dispatch above to be wired before it's
   meaningful.
+
+B-3a status (in progress on the same branch):
+
+- `StreamFinished.token_usage` plumbing — landed. `ChatCompletionChunk`
+  now parses `usage`; `OpenAiSseAdapter` captures and emits it; chat
+  request body sets `stream_options.include_usage = true`.
 
 ### B-4. `/compact` user command
 

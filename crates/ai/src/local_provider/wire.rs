@@ -23,6 +23,17 @@ pub struct ChatCompletionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<ToolChoice>,
     pub stream: bool,
+    /// `stream_options: {"include_usage": true}` is required by OpenAI to get
+    /// the final usage chunk; many compatible servers honour it and the rest
+    /// silently ignore it. Phase B-3a relies on the resulting usage stats to
+    /// detect token-overflow and auto-trigger compaction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct StreamOptions {
+    pub include_usage: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -90,6 +101,31 @@ pub struct ChatCompletionChunk {
     /// We surface it through the adapter as a finish-with-error.
     #[serde(default)]
     pub error: Option<ChunkError>,
+    /// OpenAI usage stats. With `stream_options: {"include_usage": true}` set,
+    /// servers emit a final chunk with `choices: []` and `usage: {...}` after
+    /// the last content chunk. Phase B-3a uses this to drive auto-compaction.
+    #[serde(default)]
+    pub usage: Option<OpenAiUsage>,
+}
+
+/// OpenAI-format usage stats. Field names match the upstream contract; some
+/// servers omit `total_tokens` or `prompt_tokens_details`.
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+pub struct OpenAiUsage {
+    #[serde(default)]
+    pub prompt_tokens: u64,
+    #[serde(default)]
+    pub completion_tokens: u64,
+    #[serde(default)]
+    pub total_tokens: u64,
+    #[serde(default)]
+    pub prompt_tokens_details: Option<OpenAiPromptTokensDetails>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, Default)]
+pub struct OpenAiPromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

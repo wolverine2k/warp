@@ -27,7 +27,7 @@ use thiserror::Error;
 use uuid::Uuid;
 use warp_multi_agent_api as api;
 
-use crate::local_provider::wire::{ChatCompletionChunk, ToolCallDelta};
+use crate::local_provider::wire::{ChatCompletionChunk, OpenAiUsage, ToolCallDelta};
 
 /// Errors emitted while parsing the upstream SSE stream. These get translated
 /// into a `Finished{InternalError}` proto event by the adapter; they don't
@@ -37,7 +37,10 @@ pub enum AdapterError {
     #[error("malformed SSE chunk JSON: {0}")]
     MalformedChunk(#[from] serde_json::Error),
     #[error("upstream server reported an error: {message}")]
-    UpstreamError { message: String, code: Option<String> },
+    UpstreamError {
+        message: String,
+        code: Option<String>,
+    },
     #[error("stream ended unexpectedly without a finish_reason")]
     PrematureEof,
     #[error("tool-call argument parsing failed for `{name}`: {detail}")]
@@ -84,11 +87,28 @@ pub struct OpenAiSseAdapter {
     /// by `finish()` to surface the real reason instead of the generic
     /// "stream ended without finish_reason".
     upstream_error: Option<String>,
+    /// Phase B-3a: OpenAI-format `usage` from the final chunk (when
+    /// `stream_options.include_usage = true`). Mapped to
+    /// `StreamFinished.token_usage` on `finish()`. The auto-compaction hook
+    /// reads it off the conversation state to decide whether to summarize.
+    captured_usage: Option<OpenAiUsage>,
+    /// Model id echoed back by the upstream server in chunk responses. Falls
+    /// through to `StreamFinished.token_usage[0].model_id` so the controller
+    /// keeps per-model accumulators correct. `None` until we observe a chunk
+    /// with `model` set; servers that omit it leave us with no attribution
+    /// and we fall back to `"local"` on emit.
+    captured_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     Streaming,
+    /// `finish_reason` arrived. Phase B-3a keeps the stream open in this
+    /// state because OpenAI emits the usage chunk *after* `finish_reason`
+    /// (with `stream_options.include_usage = true`). Subsequent content
+    /// chunks are ignored; only `usage` and `[DONE]` are still meaningful.
+    /// Becomes `Done` on `[DONE]` or upstream EOF.
+    Finishing,
     Done,
     Errored,
 }
@@ -139,6 +159,8 @@ impl OpenAiSseAdapter {
             reasoning_message_id: None,
             tool_buffers: HashMap::new(),
             captured_finish: None,
+            captured_usage: None,
+            captured_model: None,
         }
     }
 
@@ -159,21 +181,21 @@ impl OpenAiSseAdapter {
         &self.conversation_id
     }
 
-    /// Returns true once the adapter has observed either `[DONE]`, a chunk
-    /// with `finish_reason`, or a fatal error — i.e. the LOGICAL stream has
-    /// ended even if the underlying HTTP body hasn't closed yet. Callers
-    /// driving the adapter from a network source should check this after
-    /// each `feed` and call `finish` immediately when true, so a server that
-    /// keeps the connection open past `[DONE]` doesn't leave the response
-    /// stream hanging.
+    /// Returns true once the adapter has observed `[DONE]` or a fatal
+    /// error — i.e. the network stream is logically closed. `finish_reason`
+    /// alone does **not** terminate (Phase B-3a needs the post-`finish_reason`
+    /// usage chunk before `[DONE]`). Callers driving the adapter from a
+    /// network source should check this after each `feed` and call `finish`
+    /// immediately when true, so a server that keeps the connection open
+    /// past `[DONE]` doesn't leave the response stream hanging.
     pub fn is_terminal(&self) -> bool {
-        self.state != State::Streaming
+        matches!(self.state, State::Done | State::Errored)
     }
 
     /// Feed one SSE message-data string. Returns the events to emit downstream.
     /// `[DONE]` is treated as a successful end-of-stream.
     pub fn feed(&mut self, data: &str) -> Vec<api::ResponseEvent> {
-        if self.state != State::Streaming {
+        if matches!(self.state, State::Done | State::Errored) {
             return vec![];
         }
         let trimmed = data.trim();
@@ -203,9 +225,8 @@ impl OpenAiSseAdapter {
             Ok(c) => c,
             Err(e) => {
                 self.state = State::Errored;
-                self.captured_finish = Some(internal_error_reason(&format!(
-                    "malformed SSE chunk: {e}"
-                )));
+                self.captured_finish =
+                    Some(internal_error_reason(&format!("malformed SSE chunk: {e}")));
                 return out;
             }
         };
@@ -217,6 +238,31 @@ impl OpenAiSseAdapter {
             ));
             // Surface error details via InternalError so the user sees them.
             self.captured_finish = Some(internal_error_reason(&err.message));
+            return out;
+        }
+
+        // Phase B-3a: capture usage + model when the upstream provided them.
+        // OpenAI emits a final chunk with `choices: []` and `usage: {...}`
+        // when `stream_options.include_usage = true`; some servers include
+        // usage on the same chunk as the final content. Don't overwrite
+        // captured_model once it's set — first non-empty wins.
+        if let Some(usage) = chunk.usage {
+            self.captured_usage = Some(usage);
+        }
+        if self.captured_model.is_none() {
+            if let Some(m) = chunk.model {
+                if !m.is_empty() {
+                    self.captured_model = Some(m);
+                }
+            }
+        }
+
+        // Once `finish_reason` has fired we're in `Finishing`, waiting for
+        // the post-`finish_reason` usage chunk and `[DONE]`. Subsequent
+        // content / tool deltas are ignored (servers that emit them after
+        // `finish_reason` are non-compliant and the model has nothing more
+        // to say).
+        if self.state == State::Finishing {
             return out;
         }
 
@@ -253,11 +299,14 @@ impl OpenAiSseAdapter {
             }
         }
 
-        // Finish reason captured for the closing event.
+        // Finish reason captured for the closing event. Phase B-3a:
+        // transition to Finishing instead of Done so the post-`finish_reason`
+        // usage chunk can still be fed; the runner observes Done only on
+        // `[DONE]` (or upstream EOF, handled in the runner).
         if let Some(reason) = choice.finish_reason.as_deref() {
             self.captured_finish = Some(map_finish_reason(reason));
             self.flush_pending_tool_calls(&mut out);
-            self.state = State::Done;
+            self.state = State::Finishing;
         }
 
         out
@@ -291,7 +340,12 @@ impl OpenAiSseAdapter {
             self.sent_create_task = true;
         }
 
-        let healthy = matches!(self.state, State::Done) && self.captured_finish.is_some();
+        // Healthy = we observed a `finish_reason` (captured_finish set) and
+        // the stream ended cleanly via `[DONE]` or upstream EOF after
+        // `finish_reason` (state == Done or Finishing). State::Errored or
+        // EOF before `finish_reason` (Streaming) means we roll back.
+        let healthy =
+            matches!(self.state, State::Done | State::Finishing) && self.captured_finish.is_some();
         let closing = if healthy {
             client_action_commit()
         } else {
@@ -311,10 +365,15 @@ impl OpenAiSseAdapter {
                 .unwrap_or_else(|| "stream ended without finish_reason".to_string());
             internal_error_reason(&msg)
         });
+        let token_usage = match self.captured_usage.take() {
+            Some(u) => vec![open_ai_usage_to_proto(u, self.captured_model.as_deref())],
+            None => Vec::new(),
+        };
         out.push(api::ResponseEvent {
             r#type: Some(api::response_event::Type::Finished(
                 api::response_event::StreamFinished {
                     reason: Some(reason),
+                    token_usage,
                     ..Default::default()
                 },
             )),
@@ -322,6 +381,12 @@ impl OpenAiSseAdapter {
 
         self.state = State::Done;
         out
+    }
+
+    /// Test/inspection accessor for the captured upstream usage stats.
+    #[cfg(test)]
+    pub(crate) fn captured_usage(&self) -> Option<OpenAiUsage> {
+        self.captured_usage
     }
 
     // ---------- internals ----------
@@ -366,12 +431,14 @@ impl OpenAiSseAdapter {
             let message_id = Uuid::new_v4().to_string();
             *opened = Some(message_id.clone());
             // First chunk: create the message with the initial content.
-            open.extend(self.build_action(api::client_action::Action::AddMessagesToTask(
-                api::client_action::AddMessagesToTask {
-                    task_id: self.task_id.clone(),
-                    messages: vec![build_kind_message(&message_id, kind, text)],
-                },
-            )));
+            open.extend(
+                self.build_action(api::client_action::Action::AddMessagesToTask(
+                    api::client_action::AddMessagesToTask {
+                        task_id: self.task_id.clone(),
+                        messages: vec![build_kind_message(&message_id, kind, text)],
+                    },
+                )),
+            );
             return (open, vec![]);
         }
         // Subsequent chunks: append.
@@ -496,9 +563,9 @@ fn build_tool_call_event(task_id: &str, buf: &ToolBuffer) -> Option<api::Respons
             );
             let err_message = api::Message {
                 id: Uuid::new_v4().to_string(),
-                message: Some(api::message::Message::AgentOutput(api::message::AgentOutput {
-                    text: body,
-                })),
+                message: Some(api::message::Message::AgentOutput(
+                    api::message::AgentOutput { text: body },
+                )),
                 ..Default::default()
             };
             return Some(api::ResponseEvent {
@@ -558,6 +625,37 @@ fn client_action_commit() -> api::client_action::Action {
 
 fn client_action_rollback() -> api::client_action::Action {
     api::client_action::Action::RollbackTransaction(api::client_action::RollbackTransaction {})
+}
+
+/// Phase B-3a: bridge OpenAI's `{prompt_tokens, completion_tokens, ...}`
+/// into the Warp proto `TokenUsage`. `model_id` falls back to `"local"`
+/// when the upstream didn't echo a `model` field — the controller's
+/// per-model accumulator just needs a stable key.
+fn open_ai_usage_to_proto(
+    usage: OpenAiUsage,
+    model_id: Option<&str>,
+) -> api::response_event::stream_finished::TokenUsage {
+    use api::response_event::stream_finished::TokenUsage;
+    let cached = usage
+        .prompt_tokens_details
+        .map(|d| d.cached_tokens)
+        .unwrap_or(0);
+    // Saturating cast: OpenAI uses u64 internally; the proto is u32. A turn
+    // that emits >4 billion tokens is so far past the model limit that the
+    // cap-at-u32::MAX read is fine for accounting purposes.
+    let to_u32 = |n: u64| -> u32 { n.try_into().unwrap_or(u32::MAX) };
+    TokenUsage {
+        model_id: model_id.unwrap_or("local").to_string(),
+        // total_input maps to OpenAI prompt_tokens (cache reads are part of
+        // prompt_tokens already in OpenAI's accounting; we surface them
+        // separately on input_cache_read for consumers that want to subtract
+        // them out).
+        total_input: to_u32(usage.prompt_tokens),
+        output: to_u32(usage.completion_tokens),
+        input_cache_read: to_u32(cached),
+        input_cache_write: 0,
+        cost_in_cents: 0.0,
+    }
 }
 
 fn map_finish_reason(reason: &str) -> api::response_event::stream_finished::Reason {

@@ -40,10 +40,29 @@ where
 /// flags so prior compactions short-circuit the prune walk and Phase B-3's
 /// `select` finds the head/tail boundary.
 #[derive(Clone, Copy)]
-struct WireMsg<'a> {
+pub struct WireMsg<'a> {
     msg: &'a api::Message,
     tool_names: &'a ToolNameLookup,
     state: &'a CompactionState,
+}
+
+/// Build the per-message [`MessageRef`]-implementing views needed by
+/// [`super::algorithm::select`] / [`super::algorithm::prune_decisions`].
+/// `tool_names` is borrowed for the lifetime of the returned vec; build it
+/// with [`build_tool_name_lookup`] off the same `messages` slice.
+pub fn build_views<'a>(
+    messages: &'a [&'a api::Message],
+    tool_names: &'a ToolNameLookup,
+    state: &'a CompactionState,
+) -> Vec<WireMsg<'a>> {
+    messages
+        .iter()
+        .map(|m| WireMsg {
+            msg: m,
+            tool_names,
+            state,
+        })
+        .collect()
 }
 
 fn estimate_size_chars(msg: &api::Message) -> usize {
@@ -168,7 +187,10 @@ pub fn compute_prune_set(tasks: &[api::Task], state: &CompactionState) -> HashSe
 /// In-place: replace the `content` of every Tool-role `ChatMessage` whose
 /// `tool_call_id` is in `prune_set` with [`PRUNED_TOOL_OUTPUT_PLACEHOLDER`].
 /// No-op when `prune_set` is empty.
-pub fn apply_prune(messages: &mut [crate::local_provider::wire::ChatMessage], prune_set: &HashSet<String>) {
+pub fn apply_prune(
+    messages: &mut [crate::local_provider::wire::ChatMessage],
+    prune_set: &HashSet<String>,
+) {
     if prune_set.is_empty() {
         return;
     }

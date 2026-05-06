@@ -16,7 +16,8 @@ use crate::local_provider::{
     prompt,
     tools::{self, LocalTool},
     wire::{
-        ChatCompletionRequest, ChatMessage, Role, ToolCall, ToolCallFunction, ToolChoice,
+        ChatCompletionRequest, ChatMessage, Role, StreamOptions, ToolCall, ToolCallFunction,
+        ToolChoice,
     },
 };
 
@@ -91,24 +92,61 @@ pub fn compose_chat_completion_request(
     messages.push(system_message(&local_tools, cfg));
 
     // Phase B-3 head-summary projection. When the conversation has a
-    // completed compaction, drop every history message that pre-dates the
-    // compaction's trigger user message. The synthetic
-    // `(user trigger, assistant summary)` pair is itself in `tasks` (the
-    // app-side commit step splices it into the active task), so the model
-    // sees `[system, summary, tail...]` instead of the original overflowing
-    // head. Skipped silently when `completed.is_empty()` (the unaffected
-    // baseline).
-    let drop_before_id = pre_compaction_drop_before_id(input);
-    let drop_active = drop_before_id.is_some();
-    let mut should_skip = drop_active;
+    // completed compaction, synthesize the `(user "Continue...", assistant
+    // <summary>)` pair from `CompactionState` itself — the synthetic ids
+    // never appear in `tasks`, so the controller-side helper doesn't have
+    // to mutate the task store. We then drop every task message before the
+    // recorded `tail_start_id`. The model sees `[system, continue, summary,
+    // tail...]` instead of the original overflowing head. Skipped silently
+    // when `completed.is_empty()` (unaffected baseline).
+    let projection = compaction_projection(input);
+    if let Some(p) = &projection {
+        messages.push(ChatMessage {
+            role: Role::User,
+            content: Some(p.continue_prompt.clone()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        });
+        messages.push(ChatMessage {
+            role: Role::Assistant,
+            content: Some(p.summary_text.clone()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        });
+    }
+
+    // Rendering modes:
+    // - No projection: render all messages.
+    // - Projection with `tail_start_id = Some(id)`: skip until we reach
+    //   that id, then render the rest.
+    // - Projection with `tail_start_id = None`: drop everything (manual
+    //   `/compact` with no preserved tail).
+    enum Mode {
+        RenderAll,
+        SkipUntil(String),
+        DropAll,
+    }
+    let mut mode = match projection.as_ref() {
+        None => Mode::RenderAll,
+        Some(p) => match p.tail_start_id.as_deref() {
+            Some(id) => Mode::SkipUntil(id.to_string()),
+            None => Mode::DropAll,
+        },
+    };
 
     for task in &input.tasks {
         for proto_msg in &task.messages {
-            if should_skip {
-                if Some(proto_msg.id.as_str()) == drop_before_id.as_deref() {
-                    should_skip = false;
-                } else {
-                    continue;
+            match &mode {
+                Mode::RenderAll => {}
+                Mode::DropAll => continue,
+                Mode::SkipUntil(id) => {
+                    if proto_msg.id.as_str() == id.as_str() {
+                        mode = Mode::RenderAll;
+                    } else {
+                        continue;
+                    }
                 }
             }
             push_history_messages(&mut messages, proto_msg);
@@ -145,33 +183,37 @@ pub fn compose_chat_completion_request(
         tools,
         tool_choice,
         stream: true,
+        stream_options: Some(StreamOptions {
+            include_usage: true,
+        }),
     }
 }
 
-/// Phase B-3: returns the message id we should drop history *up to* (exclusive).
-///
+/// Phase B-3 projection bundle describing what to splice into the head of
+/// the outbound request body and where the preserved tail begins.
+struct CompactionProjection {
+    continue_prompt: String,
+    summary_text: String,
+    /// Id of the first task message to render. `None` means "drop everything
+    /// after the synthetic pair" (manual `/compact` without an unconsumed
+    /// tail).
+    tail_start_id: Option<String>,
+}
+
 /// Reads the most recent [`super::compaction::CompletedCompaction`] off
-/// `input.compaction_state` and returns its `user_msg_id` — that's the
-/// synthetic compaction-trigger marker spliced into the task list at commit
-/// time. Everything before it represents the now-summarized head and gets
-/// pruned from the request body.
-///
-/// Returns `None` when no compaction has run (the unaffected baseline) or
-/// when the synthetic id isn't present in any task's message list (defensive:
-/// without that anchor we can't safely drop anything, so the projection no-ops).
-fn pre_compaction_drop_before_id(input: &LocalProviderInput) -> Option<String> {
+/// `input.compaction_state` and returns the projection bundle. Returns
+/// `None` when no compaction has run (unaffected baseline) or when the
+/// completed entry has no cached summary text (defensive — we can't
+/// reconstruct the head without it, so we no-op rather than send a request
+/// missing context).
+fn compaction_projection(input: &LocalProviderInput) -> Option<CompactionProjection> {
     let last = input.compaction_state.completed().last()?;
-    let user_id: &str = &last.user_msg_id;
-    let exists = input
-        .tasks
-        .iter()
-        .flat_map(|t| t.messages.iter())
-        .any(|m| m.id.as_str() == user_id);
-    if exists {
-        Some(last.user_msg_id.clone())
-    } else {
-        None
-    }
+    let summary_text = last.summary_text.clone()?;
+    Some(CompactionProjection {
+        continue_prompt: super::compaction::prompt::build_continue_message(last.overflow),
+        summary_text,
+        tail_start_id: last.tail_start_id.clone(),
+    })
 }
 
 /// Tools that are both signaled by the server (`supported_tools`) and have a
@@ -220,7 +262,10 @@ fn backfill_orphaned_tool_calls(
     let mut i = 0;
     while i < messages.len() {
         let needs_check = matches!(messages[i].role, Role::Assistant)
-            && messages[i].tool_calls.as_ref().is_some_and(|tcs| !tcs.is_empty());
+            && messages[i]
+                .tool_calls
+                .as_ref()
+                .is_some_and(|tcs| !tcs.is_empty());
         if !needs_check {
             i += 1;
             continue;
@@ -241,7 +286,10 @@ fn backfill_orphaned_tool_calls(
             j += 1;
         }
         let mut insert_at = j;
-        for id in tool_call_ids.into_iter().filter(|id| !satisfied.contains(id)) {
+        for id in tool_call_ids
+            .into_iter()
+            .filter(|id| !satisfied.contains(id))
+        {
             let content = action_results
                 .get(&id)
                 .cloned()
@@ -262,7 +310,7 @@ fn backfill_orphaned_tool_calls(
     }
 }
 
-fn push_history_messages(out: &mut Vec<ChatMessage>, proto_msg: &api::Message) {
+pub(crate) fn push_history_messages(out: &mut Vec<ChatMessage>, proto_msg: &api::Message) {
     use api::message::Message as M;
     match proto_msg.message.as_ref() {
         Some(M::UserQuery(q)) => {
@@ -389,7 +437,11 @@ fn render_run_shell(r: &api::RunShellCommandResult) -> String {
         Some(R::CommandFinished(f)) => {
             format!(
                 "$ {}\n{}\n[exit {}]",
-                if r.command.is_empty() { "<command>" } else { &r.command },
+                if r.command.is_empty() {
+                    "<command>"
+                } else {
+                    &r.command
+                },
                 f.output,
                 f.exit_code
             )
@@ -436,7 +488,11 @@ fn render_apply_diffs(r: &api::ApplyFileDiffsResult) -> String {
                 .filter_map(|u| u.file.as_ref())
                 .map(|f| f.file_path.as_str())
                 .collect();
-            let deleted: Vec<&str> = s.deleted_files.iter().map(|d| d.file_path.as_str()).collect();
+            let deleted: Vec<&str> = s
+                .deleted_files
+                .iter()
+                .map(|d| d.file_path.as_str())
+                .collect();
             let mut bits = Vec::new();
             if !updated.is_empty() {
                 bits.push(format!("updated: {}", updated.join(", ")));
@@ -464,8 +520,11 @@ fn render_grep(r: &api::GrepResult) -> String {
             }
             let mut out = String::new();
             for fm in &s.matched_files {
-                let lines: Vec<String> =
-                    fm.matched_lines.iter().map(|m| m.line_number.to_string()).collect();
+                let lines: Vec<String> = fm
+                    .matched_lines
+                    .iter()
+                    .map(|m| m.line_number.to_string())
+                    .collect();
                 out.push_str(&format!("{}: lines {}\n", fm.file_path, lines.join(",")));
             }
             out
@@ -598,9 +657,9 @@ mod tests {
                 },
                 api::Message {
                     id: "m2".into(),
-                    message: Some(api::message::Message::AgentOutput(api::message::AgentOutput {
-                        text: "ok".into(),
-                    })),
+                    message: Some(api::message::Message::AgentOutput(
+                        api::message::AgentOutput { text: "ok".into() },
+                    )),
                     ..Default::default()
                 },
                 api::Message {
@@ -691,7 +750,10 @@ mod tests {
         assert_eq!(req.messages.len(), 3);
         let assistant = &req.messages[1];
         assert!(matches!(assistant.role, Role::Assistant));
-        assert!(assistant.content.is_none(), "tool-call assistant has no text content");
+        assert!(
+            assistant.content.is_none(),
+            "tool-call assistant has no text content"
+        );
         let tcs = assistant.tool_calls.as_ref().expect("tool_calls present");
         assert_eq!(tcs.len(), 1);
         assert_eq!(tcs[0].id, "call_xyz");
@@ -723,7 +785,10 @@ mod tests {
             ..Default::default()
         };
         let mut action_results = std::collections::HashMap::new();
-        action_results.insert("call_real".to_string(), "[package]\nname = \"foo\"".to_string());
+        action_results.insert(
+            "call_real".to_string(),
+            "[package]\nname = \"foo\"".to_string(),
+        );
         let input = LocalProviderInput {
             user_query: Some("what's in Cargo.toml?".into()),
             tasks: vec![task],
@@ -737,7 +802,10 @@ mod tests {
         let tool_msg = &req.messages[2];
         assert!(matches!(tool_msg.role, Role::Tool));
         assert_eq!(tool_msg.tool_call_id.as_deref(), Some("call_real"));
-        assert_eq!(tool_msg.content.as_deref(), Some("[package]\nname = \"foo\""));
+        assert_eq!(
+            tool_msg.content.as_deref(),
+            Some("[package]\nname = \"foo\"")
+        );
     }
 
     #[test]
@@ -751,9 +819,7 @@ mod tests {
 
     // ---- summarize_tool_result ----
 
-    fn tool_result(
-        inner: api::message::tool_call_result::Result,
-    ) -> api::message::ToolCallResult {
+    fn tool_result(inner: api::message::tool_call_result::Result) -> api::message::ToolCallResult {
         api::message::ToolCallResult {
             tool_call_id: "tc_1".into(),
             result: Some(inner),
@@ -858,7 +924,9 @@ mod tests {
         let r = tool_result(api::message::tool_call_result::Result::Grep(
             api::GrepResult {
                 result: Some(api::grep_result::Result::Success(
-                    api::grep_result::Success { matched_files: vec![] },
+                    api::grep_result::Success {
+                        matched_files: vec![],
+                    },
                 )),
             },
         ));
@@ -953,9 +1021,9 @@ mod tests {
     fn agent_msg(id: &str, body: &str) -> api::Message {
         api::Message {
             id: id.into(),
-            message: Some(api::message::Message::AgentOutput(api::message::AgentOutput {
-                text: body.into(),
-            })),
+            message: Some(api::message::Message::AgentOutput(
+                api::message::AgentOutput { text: body.into() },
+            )),
             ..Default::default()
         }
     }
@@ -977,7 +1045,9 @@ mod tests {
     }
 
     #[test]
-    fn projection_drops_history_before_compaction_trigger() {
+    fn projection_synthesizes_head_and_drops_pre_tail_history() {
+        // The synthetic compaction pair is NOT in `tasks` — the projection
+        // synthesizes it from `compaction_state`.
         let task = api::Task {
             id: "t1".into(),
             messages: vec![
@@ -985,11 +1055,6 @@ mod tests {
                 agent_msg("a_old1", "old reply 1"),
                 user_msg("u_old2", "old turn 2"),
                 agent_msg("a_old2", "old reply 2"),
-                // Synthetic compaction pair (spliced in by the app-side
-                // commit step).
-                user_msg("compaction-trigger-X", "Continue..."),
-                agent_msg("compaction-summary-X", "## Goal\n- summary"),
-                // Tail user turn after compaction.
                 user_msg("u_new", "post-compact ask"),
             ],
             ..Default::default()
@@ -1010,24 +1075,64 @@ mod tests {
         };
         let req = compose_chat_completion_request(&input, &cfg());
 
-        // Expect: system + synthetic user + synthetic assistant + tail user.
-        // The four pre-compaction messages are dropped.
+        // Expect: system + synthetic continue user + synthetic summary
+        // assistant + tail user. The four pre-tail messages are dropped.
         assert_eq!(
             req.messages.len(),
             4,
             "wrong msg count: {:?}",
-            req.messages.iter().map(|m| (m.role, m.content.clone())).collect::<Vec<_>>()
+            req.messages
+                .iter()
+                .map(|m| (m.role, m.content.clone()))
+                .collect::<Vec<_>>()
         );
-        assert_eq!(req.messages[1].content.as_deref(), Some("Continue..."));
-        assert_eq!(req.messages[2].content.as_deref(), Some("## Goal\n- summary"));
+        // Continue prompt has the overflow=true preamble.
+        assert!(req.messages[1]
+            .content
+            .as_deref()
+            .unwrap()
+            .contains("Continue"));
+        assert_eq!(
+            req.messages[2].content.as_deref(),
+            Some("## Goal\n- summary")
+        );
         assert_eq!(req.messages[3].content.as_deref(), Some("post-compact ask"));
     }
 
     #[test]
-    fn projection_no_op_when_trigger_id_missing_from_tasks() {
-        // Defensive: state references an id that isn't in the task list.
-        // The projection should NOT drop everything (would silently lose
-        // history); it just no-ops.
+    fn projection_drops_all_history_when_tail_start_id_is_none() {
+        // Manual `/compact` with no preserved tail: the synthetic pair is
+        // the entire head, every task message gets dropped.
+        let task = api::Task {
+            id: "t1".into(),
+            messages: vec![user_msg("u1", "hi"), agent_msg("a1", "hello")],
+            ..Default::default()
+        };
+        let mut state = CompactionState::default();
+        state.push_completed(CompletedCompaction {
+            user_msg_id: "compaction-trigger-Y".into(),
+            assistant_msg_id: "compaction-summary-Y".into(),
+            tail_start_id: None,
+            summary_text: Some("manual digest".into()),
+            auto: false,
+            overflow: false,
+        });
+        let input = LocalProviderInput {
+            tasks: vec![task],
+            compaction_state: state,
+            ..Default::default()
+        };
+        let req = compose_chat_completion_request(&input, &cfg());
+        // system + synthetic user + synthetic assistant — that's it.
+        assert_eq!(req.messages.len(), 3);
+        assert_eq!(req.messages[2].content.as_deref(), Some("manual digest"));
+    }
+
+    #[test]
+    fn projection_no_op_when_summary_text_missing() {
+        // Defensive: completed entry without cached summary_text. We
+        // can't reconstruct the head, so we render the original messages
+        // rather than silently lose context.
         let task = api::Task {
             id: "t1".into(),
             messages: vec![user_msg("u1", "hi")],
@@ -1035,10 +1140,10 @@ mod tests {
         };
         let mut state = CompactionState::default();
         state.push_completed(CompletedCompaction {
-            user_msg_id: "compaction-trigger-MISSING".into(),
-            assistant_msg_id: "compaction-summary-MISSING".into(),
+            user_msg_id: "compaction-trigger-Z".into(),
+            assistant_msg_id: "compaction-summary-Z".into(),
             tail_start_id: None,
-            summary_text: Some("ghost".into()),
+            summary_text: None,
             auto: true,
             overflow: true,
         });
@@ -1048,7 +1153,6 @@ mod tests {
             ..Default::default()
         };
         let req = compose_chat_completion_request(&input, &cfg());
-        // system + the one user message — nothing dropped.
         assert_eq!(req.messages.len(), 2);
         assert_eq!(req.messages[1].content.as_deref(), Some("hi"));
     }

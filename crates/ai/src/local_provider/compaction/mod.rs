@@ -17,6 +17,7 @@
 //! - Auto-trigger on token-overflow detection (`is_overflow`)
 
 pub mod algorithm;
+pub mod auto;
 pub mod commit;
 pub mod config;
 pub mod overflow;
@@ -28,6 +29,7 @@ pub mod wire;
 #[path = "algorithm_tests.rs"]
 mod algorithm_tests;
 
+pub use auto::{try_compact, AutoCompactionError, AutoCompactionOutcome};
 pub use commit::{commit_summarization, CommitOutcome};
 pub use config::CompactionConfig;
 pub use overflow::{is_overflow, usable, ModelLimit, TokenCounts};

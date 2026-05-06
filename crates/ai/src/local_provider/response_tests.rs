@@ -19,17 +19,11 @@ fn drive(adapter: &mut OpenAiSseAdapter, chunks: &[&str]) -> Vec<api::ResponseEv
 }
 
 fn is_init(ev: &api::ResponseEvent) -> bool {
-    matches!(
-        ev.r#type,
-        Some(api::response_event::Type::Init(_))
-    )
+    matches!(ev.r#type, Some(api::response_event::Type::Init(_)))
 }
 
 fn is_finished(ev: &api::ResponseEvent) -> bool {
-    matches!(
-        ev.r#type,
-        Some(api::response_event::Type::Finished(_))
-    )
+    matches!(ev.r#type, Some(api::response_event::Type::Finished(_)))
 }
 
 fn finish_reason(ev: &api::ResponseEvent) -> Option<&api::response_event::stream_finished::Reason> {
@@ -81,7 +75,12 @@ fn count_begin_tx(events: &[api::ResponseEvent]) -> usize {
         .iter()
         .filter_map(unwrap_actions)
         .flat_map(|a| a.iter())
-        .filter(|a| matches!(a.action, Some(api::client_action::Action::BeginTransaction(_))))
+        .filter(|a| {
+            matches!(
+                a.action,
+                Some(api::client_action::Action::BeginTransaction(_))
+            )
+        })
         .count()
 }
 
@@ -128,7 +127,9 @@ fn empty_stream_emits_init_begin_rollback_finished() {
     // The finish reason should be InternalError (no finish_reason ever arrived)
     assert!(matches!(
         finish_reason(events.last().unwrap()),
-        Some(api::response_event::stream_finished::Reason::InternalError(_))
+        Some(api::response_event::stream_finished::Reason::InternalError(
+            _
+        ))
     ));
 }
 
@@ -142,8 +143,16 @@ fn text_only_short_emits_add_then_finished_done() {
 
     assert!(is_init(&events[0]));
     assert_eq!(count_begin_tx(&events), 1);
-    assert_eq!(count_add_messages(&events), 1, "first text delta opens the message");
-    assert_eq!(count_text_appends(&events), 0, "single chunk doesn't append");
+    assert_eq!(
+        count_add_messages(&events),
+        1,
+        "first text delta opens the message"
+    );
+    assert_eq!(
+        count_text_appends(&events),
+        0,
+        "single chunk doesn't append"
+    );
     assert_eq!(count_commit_tx(&events), 1);
     assert_eq!(count_rollback_tx(&events), 0);
     assert!(matches!(
@@ -180,7 +189,9 @@ fn finish_length_maps_to_max_token_limit() {
     let events = drive(&mut adapter, &[chunk]);
     assert!(matches!(
         finish_reason(events.last().unwrap()),
-        Some(api::response_event::stream_finished::Reason::MaxTokenLimit(_))
+        Some(api::response_event::stream_finished::Reason::MaxTokenLimit(
+            _
+        ))
     ));
 }
 
@@ -191,7 +202,9 @@ fn malformed_chunk_rolls_back_with_internal_error() {
     assert_eq!(count_rollback_tx(&events), 1);
     assert!(matches!(
         finish_reason(events.last().unwrap()),
-        Some(api::response_event::stream_finished::Reason::InternalError(_))
+        Some(api::response_event::stream_finished::Reason::InternalError(
+            _
+        ))
     ));
 }
 
@@ -218,8 +231,7 @@ fn unicode_streams_correctly_across_chunks() {
 #[test]
 fn reasoning_content_routes_to_reasoning_message() {
     let mut adapter = OpenAiSseAdapter::new();
-    let c1 =
-        r#"{"choices":[{"index":0,"delta":{"reasoning_content":"thinking..."}}]}"#;
+    let c1 = r#"{"choices":[{"index":0,"delta":{"reasoning_content":"thinking..."}}]}"#;
     let c2 = r#"{"choices":[{"index":0,"delta":{"content":"answer"},"finish_reason":"stop"}]}"#;
     let events = drive(&mut adapter, &[c1, c2]);
     // First: reasoning open (AddMessagesToTask). Second: answer open (AddMessagesToTask).
@@ -288,7 +300,10 @@ fn ordering_invariant_no_actions_after_commit() {
     for ev in &events {
         if let Some(actions) = unwrap_actions(ev) {
             for a in actions {
-                if matches!(a.action, Some(api::client_action::Action::CommitTransaction(_))) {
+                if matches!(
+                    a.action,
+                    Some(api::client_action::Action::CommitTransaction(_))
+                ) {
                     saw_commit = true;
                 } else if saw_commit
                     && !matches!(
@@ -304,4 +319,73 @@ fn ordering_invariant_no_actions_after_commit() {
         }
     }
     assert!(saw_commit, "expected a Commit in this stream");
+}
+
+// ---------- Phase B-3a usage capture ----------
+
+#[test]
+fn final_chunk_with_usage_emits_token_usage_on_stream_finished() {
+    let mut adapter = OpenAiSseAdapter::new();
+    let events = drive(
+        &mut adapter,
+        &[
+            r#"{"id":"c1","model":"my-model","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}"#,
+            // OpenAI's final usage chunk: empty choices, populated usage.
+            r#"{"id":"c1","model":"my-model","choices":[],"usage":{"prompt_tokens":42,"completion_tokens":17,"total_tokens":59,"prompt_tokens_details":{"cached_tokens":5}}}"#,
+        ],
+    );
+    let finished = events.iter().find(|e| is_finished(e)).expect("Finished");
+    let token_usage = match &finished.r#type {
+        Some(api::response_event::Type::Finished(f)) => &f.token_usage,
+        _ => unreachable!(),
+    };
+    assert_eq!(token_usage.len(), 1, "expected one TokenUsage entry");
+    let u = &token_usage[0];
+    assert_eq!(u.model_id, "my-model");
+    assert_eq!(u.total_input, 42);
+    assert_eq!(u.output, 17);
+    assert_eq!(u.input_cache_read, 5);
+    assert_eq!(u.input_cache_write, 0);
+}
+
+#[test]
+fn no_usage_chunk_means_empty_token_usage_on_stream_finished() {
+    let mut adapter = OpenAiSseAdapter::new();
+    let events = drive(
+        &mut adapter,
+        &[
+            r#"{"id":"c1","model":"my-model","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}"#,
+        ],
+    );
+    let finished = events.iter().find(|e| is_finished(e)).expect("Finished");
+    let token_usage = match &finished.r#type {
+        Some(api::response_event::Type::Finished(f)) => &f.token_usage,
+        _ => unreachable!(),
+    };
+    assert!(
+        token_usage.is_empty(),
+        "no upstream usage chunk should yield empty token_usage, got {token_usage:?}"
+    );
+}
+
+#[test]
+fn usage_chunk_without_model_field_falls_back_to_local() {
+    // Server omits `model` entirely.
+    let mut adapter = OpenAiSseAdapter::new();
+    let events = drive(
+        &mut adapter,
+        &[
+            r#"{"choices":[{"index":0,"delta":{"content":"x"},"finish_reason":"stop"}]}"#,
+            r#"{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":2}}"#,
+        ],
+    );
+    let finished = events.iter().find(|e| is_finished(e)).expect("Finished");
+    let token_usage = match &finished.r#type {
+        Some(api::response_event::Type::Finished(f)) => &f.token_usage,
+        _ => unreachable!(),
+    };
+    assert_eq!(token_usage.len(), 1);
+    assert_eq!(token_usage[0].model_id, "local");
+    assert_eq!(token_usage[0].total_input, 10);
+    assert_eq!(token_usage[0].output, 2);
 }

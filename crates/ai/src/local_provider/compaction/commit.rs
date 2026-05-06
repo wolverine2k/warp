@@ -103,13 +103,19 @@ mod tests {
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0].user_msg_id, outcome.user_msg_id);
         assert_eq!(completed[0].assistant_msg_id, outcome.assistant_msg_id);
-        assert_eq!(completed[0].summary_text.as_deref(), Some("## Goal\n- summary"));
+        assert_eq!(
+            completed[0].summary_text.as_deref(),
+            Some("## Goal\n- summary")
+        );
         assert_eq!(completed[0].tail_start_id.as_deref(), Some("tail-1"));
 
         // The trigger user message was tagged Auto, the assistant message
         // was tagged is_summary.
         let user_marker = state.marker(&outcome.user_msg_id).expect("user marker");
-        assert_eq!(user_marker.compaction_trigger, Some(CompactionTrigger::Auto));
+        assert_eq!(
+            user_marker.compaction_trigger,
+            Some(CompactionTrigger::Auto)
+        );
         let assistant_marker = state
             .marker(&outcome.assistant_msg_id)
             .expect("assistant marker");
@@ -119,8 +125,7 @@ mod tests {
     #[test]
     fn manual_trigger_marks_as_manual_not_auto() {
         let mut state = CompactionState::default();
-        let outcome =
-            commit_summarization(&mut state, "summary".into(), None, false, true);
+        let outcome = commit_summarization(&mut state, "summary".into(), None, false, true);
         assert!(!outcome.auto);
         assert!(!outcome.overflow);
         let marker = state.marker(&outcome.user_msg_id).unwrap();

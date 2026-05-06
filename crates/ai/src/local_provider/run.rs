@@ -182,8 +182,7 @@ fn synthesize_stream(
                 match fut.as_mut().poll(cx) {
                     Poll::Pending => return Poll::Pending,
                     Poll::Ready(result) => {
-                        let body = result
-                            .unwrap_or_else(|e| format!("(failed to read body: {e})"));
+                        let body = result.unwrap_or_else(|e| format!("(failed to read body: {e})"));
                         let trimmed = body.trim();
                         let excerpt: String =
                             trimmed.chars().take(ERROR_BODY_EXCERPT_CHARS).collect();
@@ -372,6 +371,7 @@ pub async fn run_summarizer_turn(
         tools: None,
         tool_choice: None,
         stream: false,
+        stream_options: None,
     };
     let body_json = serde_json::to_string(&body)?;
 
@@ -397,8 +397,9 @@ pub async fn run_summarizer_turn(
         });
     }
 
-    let parsed: ChatCompletionResponse = serde_json::from_str(&text)
-        .map_err(|e| SummarizerError::DecodeResponse(format!("{e}: {}", first_chars(&text, 200))))?;
+    let parsed: ChatCompletionResponse = serde_json::from_str(&text).map_err(|e| {
+        SummarizerError::DecodeResponse(format!("{e}: {}", first_chars(&text, 200)))
+    })?;
 
     if let Some(err) = parsed.error {
         return Err(SummarizerError::UpstreamErrorEnvelope(err.message));

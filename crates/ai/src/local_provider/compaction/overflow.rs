@@ -190,20 +190,32 @@ mod tests {
 
     #[test]
     fn usable_returns_zero_for_zero_context() {
-        let m = ModelLimit { context: 0, input: 0, max_output: 0 };
+        let m = ModelLimit {
+            context: 0,
+            input: 0,
+            max_output: 0,
+        };
         assert_eq!(usable(&cfg_default(), m), 0);
     }
 
     #[test]
     fn usable_subtracts_reserved_from_input_when_present() {
-        let m = ModelLimit { context: 200_000, input: 180_000, max_output: 8_000 };
+        let m = ModelLimit {
+            context: 200_000,
+            input: 180_000,
+            max_output: 8_000,
+        };
         // default reserved = min(COMPACTION_BUFFER=20k, max_output=8k) = 8_000
         assert_eq!(usable(&cfg_default(), m), 180_000 - 8_000);
     }
 
     #[test]
     fn usable_falls_back_to_context_minus_max_output_when_input_zero() {
-        let m = ModelLimit { context: 100_000, input: 0, max_output: 4_000 };
+        let m = ModelLimit {
+            context: 100_000,
+            input: 0,
+            max_output: 4_000,
+        };
         assert_eq!(usable(&cfg_default(), m), 100_000 - 4_000);
     }
 
@@ -211,7 +223,11 @@ mod tests {
     fn usable_honours_reserved_override() {
         let mut cfg = cfg_default();
         cfg.reserved = Some(50_000);
-        let m = ModelLimit { context: 200_000, input: 180_000, max_output: 8_000 };
+        let m = ModelLimit {
+            context: 200_000,
+            input: 180_000,
+            max_output: 8_000,
+        };
         assert_eq!(usable(&cfg, m), 180_000 - 50_000);
     }
 
@@ -220,26 +236,49 @@ mod tests {
         let mut cfg = cfg_default();
         cfg.auto = false;
         let m = ModelLimit::FALLBACK;
-        let t = TokenCounts { total: 1_000_000, ..Default::default() };
+        let t = TokenCounts {
+            total: 1_000_000,
+            ..Default::default()
+        };
         assert!(!is_overflow(&cfg, t, m));
     }
 
     #[test]
     fn is_overflow_false_when_context_zero() {
         let cfg = cfg_default();
-        let m = ModelLimit { context: 0, input: 0, max_output: 0 };
-        let t = TokenCounts { total: 1_000_000, ..Default::default() };
+        let m = ModelLimit {
+            context: 0,
+            input: 0,
+            max_output: 0,
+        };
+        let t = TokenCounts {
+            total: 1_000_000,
+            ..Default::default()
+        };
         assert!(!is_overflow(&cfg, t, m));
     }
 
     #[test]
     fn is_overflow_triggers_at_or_above_usable_budget() {
         let cfg = cfg_default();
-        let m = ModelLimit { context: 200_000, input: 180_000, max_output: 8_000 };
+        let m = ModelLimit {
+            context: 200_000,
+            input: 180_000,
+            max_output: 8_000,
+        };
         // usable = 180_000 - 8_000 = 172_000
-        let just_under = TokenCounts { total: 171_999, ..Default::default() };
-        let exactly_at = TokenCounts { total: 172_000, ..Default::default() };
-        let just_over = TokenCounts { total: 172_001, ..Default::default() };
+        let just_under = TokenCounts {
+            total: 171_999,
+            ..Default::default()
+        };
+        let exactly_at = TokenCounts {
+            total: 172_000,
+            ..Default::default()
+        };
+        let just_over = TokenCounts {
+            total: 172_001,
+            ..Default::default()
+        };
         assert!(!is_overflow(&cfg, just_under, m));
         assert!(is_overflow(&cfg, exactly_at, m));
         assert!(is_overflow(&cfg, just_over, m));

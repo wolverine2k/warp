@@ -16,7 +16,10 @@ use std::sync::Once;
 use std::time::Duration;
 
 use ai::local_provider::{
-    compaction::{commit_summarization, CompactionState},
+    compaction::{
+        commit_summarization, try_compact, AutoCompactionOutcome, CompactionConfig,
+        CompactionState, TokenCounts,
+    },
     config::LocalProviderConfig,
     request::LocalProviderInput,
     run::{
@@ -98,11 +101,7 @@ async fn drain_http_request(socket: &mut TcpStream) -> std::io::Result<()> {
         total.extend_from_slice(&buf[..n]);
         if total.windows(4).any(|w| w == b"\r\n\r\n") {
             // Headers done. Read a bit more to drain the body.
-            let _ = tokio::time::timeout(
-                Duration::from_millis(20),
-                socket.read(&mut buf),
-            )
-            .await;
+            let _ = tokio::time::timeout(Duration::from_millis(20), socket.read(&mut buf)).await;
             return Ok(());
         }
     }
@@ -178,7 +177,8 @@ fn last_finish_reason(
 #[tokio::test]
 async fn basic_text_only_turn_streams_and_commits() {
     let scripted = vec![
-        r#"{"choices":[{"index":0,"delta":{"content":"hello "},"finish_reason":null}]}"#.to_string(),
+        r#"{"choices":[{"index":0,"delta":{"content":"hello "},"finish_reason":null}]}"#
+            .to_string(),
         r#"{"choices":[{"index":0,"delta":{"content":"world"},"finish_reason":null}]}"#.to_string(),
         r#"{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}"#.to_string(),
         "[DONE]".to_string(),
@@ -195,17 +195,25 @@ async fn basic_text_only_turn_streams_and_commits() {
     ));
     // Begin transaction, at least one AddMessages, at least one Append, Commit, Finished{Done}
     assert_eq!(
-        count_actions(&events, |a| matches!(a, api::client_action::Action::BeginTransaction(_))),
+        count_actions(&events, |a| matches!(
+            a,
+            api::client_action::Action::BeginTransaction(_)
+        )),
         1
     );
-    let appends =
-        count_actions(&events, |a| matches!(a, api::client_action::Action::AppendToMessageContent(_)));
-    let opens =
-        count_actions(&events, |a| matches!(a, api::client_action::Action::AddMessagesToTask(_)));
+    let appends = count_actions(&events, |a| {
+        matches!(a, api::client_action::Action::AppendToMessageContent(_))
+    });
+    let opens = count_actions(&events, |a| {
+        matches!(a, api::client_action::Action::AddMessagesToTask(_))
+    });
     assert!(opens >= 1, "expected an opening AddMessagesToTask, got 0");
     assert!(appends >= 1, "expected appends for the second chunk");
     assert_eq!(
-        count_actions(&events, |a| matches!(a, api::client_action::Action::CommitTransaction(_))),
+        count_actions(&events, |a| matches!(
+            a,
+            api::client_action::Action::CommitTransaction(_)
+        )),
         1
     );
     assert!(matches!(
@@ -223,7 +231,9 @@ async fn finish_reason_length_maps_to_max_token_limit() {
     let events = collect_events(cfg_for(&url), empty_input()).await.unwrap();
     assert!(matches!(
         last_finish_reason(&events),
-        Some(api::response_event::stream_finished::Reason::MaxTokenLimit(_))
+        Some(api::response_event::stream_finished::Reason::MaxTokenLimit(
+            _
+        ))
     ));
 }
 
@@ -238,13 +248,18 @@ async fn unreachable_endpoint_is_handled_gracefully() {
         Some(api::response_event::Type::Init(_))
     ));
     assert_eq!(
-        count_actions(&events, |a| matches!(a, api::client_action::Action::RollbackTransaction(_))),
+        count_actions(&events, |a| matches!(
+            a,
+            api::client_action::Action::RollbackTransaction(_)
+        )),
         1,
         "expected rollback when the endpoint is unreachable"
     );
     assert!(matches!(
         last_finish_reason(&events),
-        Some(api::response_event::stream_finished::Reason::InternalError(_))
+        Some(api::response_event::stream_finished::Reason::InternalError(
+            _
+        ))
     ));
 }
 
@@ -272,13 +287,12 @@ async fn tool_call_round_trips_into_typed_proto() {
         })
         .flat_map(|a| a.iter())
         .find_map(|a| match a.action.as_ref()? {
-            api::client_action::Action::AddMessagesToTask(amt) => amt
-                .messages
-                .iter()
-                .find_map(|m| match m.message.as_ref()? {
+            api::client_action::Action::AddMessagesToTask(amt) => {
+                amt.messages.iter().find_map(|m| match m.message.as_ref()? {
                     api::message::Message::ToolCall(tc) => Some(tc.clone()),
                     _ => None,
-                }),
+                })
+            }
             _ => None,
         });
     let tc = tool_message.expect("expected a ToolCall message");
@@ -331,10 +345,12 @@ async fn cancellation_mid_stream_rolls_back() {
     }
     // Cancellation path emits a Rollback (or Commit if done already; here we
     // expect Rollback because we cancelled before finish_reason).
-    let rollbacks =
-        count_actions(&events, |a| matches!(a, api::client_action::Action::RollbackTransaction(_)));
-    let commits =
-        count_actions(&events, |a| matches!(a, api::client_action::Action::CommitTransaction(_)));
+    let rollbacks = count_actions(&events, |a| {
+        matches!(a, api::client_action::Action::RollbackTransaction(_))
+    });
+    let commits = count_actions(&events, |a| {
+        matches!(a, api::client_action::Action::CommitTransaction(_))
+    });
     assert!(
         rollbacks + commits >= 1,
         "expected at least one Commit or Rollback after cancel, got {:?}",
@@ -377,9 +393,8 @@ async fn multiple_http_error_statuses_finish_cleanly() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let url = format!("http://127.0.0.1:{port}/v1");
-        let status_body = format!(
-            "HTTP/1.1 {status} Error\r\nContent-Length: 11\r\n\r\nbody-text!!"
-        );
+        let status_body =
+            format!("HTTP/1.1 {status} Error\r\nContent-Length: 11\r\n\r\nbody-text!!");
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let _ = drain_http_request(&mut socket).await;
@@ -387,9 +402,8 @@ async fn multiple_http_error_statuses_finish_cleanly() {
             let _ = socket.shutdown().await;
         });
         let events = collect_events(cfg_for(&url), empty_input()).await.unwrap();
-        let reason = last_finish_reason(&events).unwrap_or_else(|| {
-            panic!("status {status}: no Finished event")
-        });
+        let reason = last_finish_reason(&events)
+            .unwrap_or_else(|| panic!("status {status}: no Finished event"));
         assert!(
             matches!(
                 reason,
@@ -437,13 +451,12 @@ async fn malformed_tool_args_emit_synthetic_assistant_message() {
         })
         .flat_map(|a| a.iter())
         .filter_map(|a| match a.action.as_ref()? {
-            api::client_action::Action::AddMessagesToTask(amt) => amt
-                .messages
-                .iter()
-                .find_map(|m| match m.message.as_ref()? {
+            api::client_action::Action::AddMessagesToTask(amt) => {
+                amt.messages.iter().find_map(|m| match m.message.as_ref()? {
                     api::message::Message::AgentOutput(ao) => Some(ao.text.clone()),
                     _ => None,
-                }),
+                })
+            }
             _ => None,
         })
         .next();
@@ -489,9 +502,7 @@ async fn reasoning_content_emits_separately_from_visible_text() {
             };
             match inner_msg {
                 Some(api::message::Message::AgentOutput(a)) => visible.push_str(&a.text),
-                Some(api::message::Message::AgentReasoning(r)) => {
-                    reasoning.push_str(&r.reasoning)
-                }
+                Some(api::message::Message::AgentReasoning(r)) => reasoning.push_str(&r.reasoning),
                 _ => {}
             }
         }
@@ -574,7 +585,10 @@ async fn conversation_id_round_trips_in_init_event() {
         "conversation_id should carry the local: prefix, got {}",
         init.conversation_id
     );
-    assert!(!init.request_id.is_empty(), "request_id should be populated");
+    assert!(
+        !init.request_id.is_empty(),
+        "request_id should be populated"
+    );
     assert!(!init.run_id.is_empty(), "run_id should be populated");
     assert_ne!(init.conversation_id, init.request_id);
     assert_ne!(init.request_id, init.run_id);
@@ -619,7 +633,9 @@ async fn api_key_attaches_authorization_header() {
     let captured = captured.lock().await;
     let request_str = String::from_utf8_lossy(&captured);
     assert!(
-        request_str.to_lowercase().contains("authorization: bearer sk-test-token-xyz"),
+        request_str
+            .to_lowercase()
+            .contains("authorization: bearer sk-test-token-xyz"),
         "expected Authorization header in request, got:\n{request_str}"
     );
 }
@@ -732,10 +748,81 @@ async fn summarizer_surfaces_http_error_with_body_excerpt() {
         .await
         .expect_err("404 should surface as UpstreamHttp");
     let msg = format!("{err}");
-    assert!(msg.contains("404"), "error message should include status: {msg}");
+    assert!(
+        msg.contains("404"),
+        "error message should include status: {msg}"
+    );
     assert!(
         msg.contains("model not found"),
         "error message should include body excerpt: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn auto_compact_round_trip_overflow_summarizes_and_commits() {
+    use warp_multi_agent_api as api;
+    init_crypto_provider();
+
+    // Mock summarizer endpoint returning a canned summary.
+    let body = "{\
+        \"id\":\"cmpl-2\",\
+        \"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"## Goal\\n- auto-compact summary\"},\"finish_reason\":\"stop\"}]\
+    }";
+    let (url, _captured) = spawn_json_mock_server(body.to_string()).await;
+    let mut cfg = cfg_for(&url);
+    // Tiny window so even a few small messages overflow.
+    cfg.context_window = Some(64);
+
+    // History: enough messages that select() finds a head/tail split.
+    let messages_owned: Vec<api::Message> = (0..6)
+        .map(|i| api::Message {
+            id: format!("m{i}"),
+            message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+                query: format!("turn-{i} {}", "x".repeat(200)),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .collect();
+    let messages: Vec<&api::Message> = messages_owned.iter().collect();
+
+    let mut state = CompactionState::default();
+    let compaction_cfg = CompactionConfig::default();
+    // Force overflow regardless of estimated size by handing in a giant
+    // total — try_compact still has to call select on the actual messages.
+    let tokens = TokenCounts {
+        total: 1_000_000,
+        ..Default::default()
+    };
+    let http = reqwest::Client::new();
+
+    let outcome = try_compact(&messages, &mut state, &cfg, &compaction_cfg, tokens, &http)
+        .await
+        .expect("auto-compact succeeds");
+
+    match outcome {
+        AutoCompactionOutcome::Compacted(o) => {
+            assert!(o.auto, "auto-trigger should mark Compacted as auto=true");
+            assert!(
+                o.summary_text.contains("auto-compact summary"),
+                "outcome should carry the summarizer text, got: {}",
+                o.summary_text
+            );
+        }
+        AutoCompactionOutcome::Skipped => {
+            panic!("expected Compacted, got Skipped — select() may not be picking a tail")
+        }
+    }
+    assert_eq!(state.completed().len(), 1);
+    let last = &state.completed()[0];
+    assert!(last.auto);
+    assert!(last.overflow);
+    assert!(
+        last.summary_text
+            .as_deref()
+            .map(|s| s.contains("auto-compact summary"))
+            .unwrap_or(false),
+        "completed entry should cache the summary text"
     );
 }
 
@@ -745,8 +832,12 @@ async fn next_turn_after_compaction_drops_pre_compaction_history() {
     init_crypto_provider();
 
     // Step 1: simulate an overflow-summarize-commit cycle via the helper.
+    // The compaction state is the only artifact — the synthetic
+    // (user, assistant) pair lives entirely in `CompactionState` and is
+    // synthesized by the request projection on the next turn. No task
+    // mutation required.
     let mut state = CompactionState::default();
-    let outcome = commit_summarization(
+    let _outcome = commit_summarization(
         &mut state,
         "## Goal\n- distilled summary".to_string(),
         Some("u_new".into()),
@@ -754,9 +845,9 @@ async fn next_turn_after_compaction_drops_pre_compaction_history() {
         false, // not manual
     );
 
-    // Step 2: build a task list that includes an old "head" plus the
-    // synthetic compaction pair plus a new tail user turn — mirrors what
-    // the app-side commit step splices into AIConversation.task_store.
+    // Step 2: build a task list that includes an old "head" plus a new
+    // tail user turn — the model never sees the head because the
+    // projection drops it.
     let task = api::Task {
         id: "t1".into(),
         messages: vec![
@@ -770,24 +861,11 @@ async fn next_turn_after_compaction_drops_pre_compaction_history() {
             },
             api::Message {
                 id: "a_old".into(),
-                message: Some(api::message::Message::AgentOutput(api::message::AgentOutput {
-                    text: "old assistant reply".into(),
-                })),
-                ..Default::default()
-            },
-            api::Message {
-                id: outcome.user_msg_id.clone(),
-                message: Some(api::message::Message::UserQuery(api::message::UserQuery {
-                    query: "Continue if you have next steps...".into(),
-                    ..Default::default()
-                })),
-                ..Default::default()
-            },
-            api::Message {
-                id: outcome.assistant_msg_id.clone(),
-                message: Some(api::message::Message::AgentOutput(api::message::AgentOutput {
-                    text: outcome.summary_text.clone(),
-                })),
+                message: Some(api::message::Message::AgentOutput(
+                    api::message::AgentOutput {
+                        text: "old assistant reply".into(),
+                    },
+                )),
                 ..Default::default()
             },
             api::Message {
