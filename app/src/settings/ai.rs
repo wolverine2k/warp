@@ -1529,6 +1529,63 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.local_provider.context_window",
         description: "Optional context-window hint in tokens (integer). Empty means use model defaults.",
     }
+
+    // ---------------------------------------------------------------------
+    // Local-provider conversation compaction — see specs/GH9303/compaction-phase-b.md.
+    // Phase A wires `prune` only; the rest are read by Phase B-3 (summarization).
+    // ---------------------------------------------------------------------
+
+    local_provider_compaction_prune: LocalProviderCompactionPrune {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.local_provider.compaction.prune",
+        description: "Replace older tool-output payloads with a placeholder once history exceeds the prune threshold. Keeps long, tool-heavy conversations under the upstream model's token limit.",
+    }
+
+    local_provider_compaction_auto: LocalProviderCompactionAuto {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.local_provider.compaction.auto",
+        description: "Auto-summarize the conversation when the LLM reports a token-overflow response (Phase B-3 — currently inert).",
+    }
+
+    // u32 values stored as strings (see local_provider_context_window for
+    // rationale); empty/0 falls back to the algorithm's default formulas.
+    local_provider_compaction_tail_turns: LocalProviderCompactionTailTurns {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.local_provider.compaction.tail_turns",
+        description: "How many recent user turns to keep verbatim in the summarization tail. Empty/0 uses the default of 2.",
+    }
+
+    local_provider_compaction_preserve_recent_tokens: LocalProviderCompactionPreserveRecentTokens {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.local_provider.compaction.preserve_recent_tokens",
+        description: "Override the recent-tokens preservation budget. Empty/0 uses the formula min(8000, max(2000, usable/4)).",
+    }
+
+    local_provider_compaction_reserved: LocalProviderCompactionReserved {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.local_provider.compaction.reserved",
+        description: "Override the reserved-output buffer subtracted from the context window. Empty/0 uses min(20000, max_output).",
+    }
 ]);
 
 impl AISettings {

@@ -103,6 +103,31 @@ pub fn is_local_llm_id(id: &LLMId) -> bool {
     id.as_str().starts_with("local:")
 }
 
+/// Snapshot the local-provider compaction config from `AISettings`.
+/// Phase A only consumes the `prune` field; the rest are wired through so
+/// Phase B-3 (summarization) doesn't have to revisit this glue layer.
+pub fn compaction_config_from_app(
+    ctx: &AppContext,
+) -> ai::local_provider::compaction::CompactionConfig {
+    use ai::local_provider::compaction::CompactionConfig;
+    let s = AISettings::as_ref(ctx);
+    let parse_optional = |raw: &str| -> Option<usize> {
+        let n = raw.trim().parse::<u32>().ok()?;
+        (n > 0).then_some(n as usize)
+    };
+    let tail_turns_raw = s.local_provider_compaction_tail_turns.to_string();
+    let preserve_raw = s.local_provider_compaction_preserve_recent_tokens.to_string();
+    let reserved_raw = s.local_provider_compaction_reserved.to_string();
+    CompactionConfig {
+        auto: *s.local_provider_compaction_auto,
+        prune: *s.local_provider_compaction_prune,
+        tail_turns: parse_optional(&tail_turns_raw)
+            .unwrap_or(ai::local_provider::compaction::consts::DEFAULT_TAIL_TURNS),
+        preserve_recent_tokens: parse_optional(&preserve_raw),
+        reserved: parse_optional(&reserved_raw),
+    }
+}
+
 /// Inject (or refresh) the synthetic local-provider entry across every feature
 /// list in `ModelsByFeature`. Called after a model-list refresh so the picker
 /// shows the local model alongside server-provided ones. Idempotent: any prior

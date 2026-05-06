@@ -237,6 +237,7 @@ async fn route_to_local_provider(
         task_id,
         needs_create_task,
         action_results,
+        compaction_config: params.local_provider_compaction_config.clone(),
     };
 
     let http = reqwest::Client::new();

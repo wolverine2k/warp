@@ -140,6 +140,10 @@ pub struct RequestParams {
     /// from the controller so `route_to_local_provider` can populate
     /// `LocalProviderInput.task_id` with an id that exists in the controller.
     pub root_task_id: Option<String>,
+    /// Snapshot of the user's local-provider compaction settings, captured
+    /// at `RequestParams::new` time so the dispatch fork stays AppContext-free.
+    /// Phase A consumes only `prune`; Phase B-3 will consume the rest.
+    pub local_provider_compaction_config: ai::local_provider::compaction::CompactionConfig,
 }
 
 pub type Event = Result<warp_multi_agent_api::ResponseEvent, Arc<AIApiError>>;
@@ -352,6 +356,8 @@ impl RequestParams {
             agent_name: None,
             local_provider_config: crate::ai::local_provider_config::snapshot_from_app(app),
             root_task_id: conversation.root_task_id,
+            local_provider_compaction_config:
+                crate::ai::local_provider_config::compaction_config_from_app(app),
         }
     }
 }
