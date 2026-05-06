@@ -64,9 +64,14 @@ pub struct LocalProviderInput {
     /// HTTP 400 ("tool_calls must be followed by tool messages").
     pub action_results: std::collections::HashMap<String, String>,
     /// Phase A compaction config (defaults to `prune=true`,
-    /// `tail_turns=DEFAULT_TAIL_TURNS`). Phase B will populate this from
-    /// `AISettings.byop_compaction_*` per the openwarp port.
+    /// `tail_turns=DEFAULT_TAIL_TURNS`). Phase B-1 populates this from
+    /// `AISettings.local_provider_compaction_*` at request build time.
     pub compaction_config: super::compaction::CompactionConfig,
+    /// Phase B-2 sidecar state. The translator forwards this to
+    /// `compute_prune_set` so prune halts at prior summary boundaries and
+    /// skips already-pruned tool outputs. `Default::default()` is the
+    /// "never compacted" baseline.
+    pub compaction_state: super::compaction::CompactionState,
 }
 
 /// Build the OpenAI request body for a single turn.
@@ -98,8 +103,10 @@ pub fn compose_chat_completion_request(
     // conversations under the model's token limit. See
     // `crate::local_provider::compaction` for the algorithm and Phase B notes.
     if input.compaction_config.prune {
-        let prune_set =
-            crate::local_provider::compaction::wire::compute_prune_set(&input.tasks);
+        let prune_set = crate::local_provider::compaction::wire::compute_prune_set(
+            &input.tasks,
+            &input.compaction_state,
+        );
         crate::local_provider::compaction::wire::apply_prune(&mut messages, &prune_set);
     }
 

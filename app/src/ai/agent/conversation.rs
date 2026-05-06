@@ -235,6 +235,13 @@ pub struct AIConversation {
     orchestration_config: Option<OrchestrationConfig>,
     orchestration_status: OrchestrationConfigStatus,
     orchestration_plan_id: Option<String>,
+
+    /// Local-provider compaction sidecar (Phase B-2). Tracks per-message
+    /// compaction markers and completed summarization intervals. Default
+    /// (empty) is the "never compacted" baseline; only the local-provider
+    /// dispatch path mutates it. Cross-restart persistence is deferred to
+    /// Phase B-2a — see `specs/GH9303/compaction-phase-b.md`.
+    compaction_state: ai::local_provider::compaction::CompactionState,
 }
 
 pub(crate) fn artifact_from_fork_proto(
@@ -288,6 +295,7 @@ impl AIConversation {
             orchestration_config: None,
             orchestration_status: OrchestrationConfigStatus::default(),
             orchestration_plan_id: None,
+            compaction_state: ai::local_provider::compaction::CompactionState::default(),
         }
     }
 
@@ -476,11 +484,23 @@ impl AIConversation {
             orchestration_config: None,
             orchestration_status: OrchestrationConfigStatus::default(),
             orchestration_plan_id: None,
+            compaction_state: ai::local_provider::compaction::CompactionState::default(),
         })
     }
 
     pub fn id(&self) -> AIConversationId {
         self.id
+    }
+
+    pub fn compaction_state(&self) -> &ai::local_provider::compaction::CompactionState {
+        &self.compaction_state
+    }
+
+    #[allow(dead_code)] // Phase B-3 commit pipeline mutates this; for now read-only.
+    pub fn compaction_state_mut(
+        &mut self,
+    ) -> &mut ai::local_provider::compaction::CompactionState {
+        &mut self.compaction_state
     }
 
     /// Assigns fresh exchange IDs to all exchanges in this conversation.

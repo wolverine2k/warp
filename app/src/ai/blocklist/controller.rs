@@ -1954,6 +1954,7 @@ impl BlocklistAIController {
                 ambient_agent_task_id: self.ambient_agent_task_id,
                 existing_suggestions: None,
                 root_task_id: Some(task_id.to_string()),
+                compaction_state: conversation.compaction_state().clone(),
             };
             (conversation_id, task_id, conversation_data)
         } else if !matches!(
@@ -1971,6 +1972,8 @@ impl BlocklistAIController {
                 ambient_agent_task_id: self.ambient_agent_task_id,
                 existing_suggestions: None,
                 root_task_id: Some(task_id.to_string()),
+                compaction_state:
+                    ai::local_provider::compaction::CompactionState::default(),
             };
             (conversation_id, task_id, conversation_data)
         } else {
@@ -2140,6 +2143,7 @@ impl BlocklistAIController {
             parent_agent_id,
             agent_name,
             root_task_id,
+            compaction_state,
         ) = {
             let Some(conversation) = history_model
                 .as_ref(ctx)
@@ -2153,6 +2157,7 @@ impl BlocklistAIController {
 
             let active_tasks = conversation.compute_active_tasks();
             let root_task_id = conversation.get_root_task_id().to_string();
+            let compaction_state = conversation.compaction_state().clone();
 
             (
                 conversation.id(),
@@ -2164,6 +2169,7 @@ impl BlocklistAIController {
                 conversation.parent_agent_id().map(str::to_string),
                 conversation.agent_name().map(str::to_string),
                 root_task_id,
+                compaction_state,
             )
         };
 
@@ -2212,6 +2218,7 @@ impl BlocklistAIController {
                 .existing_suggestions_for_conversation(conversation_id)
                 .cloned(),
             root_task_id: Some(root_task_id),
+            compaction_state,
         };
 
         // Log an error if tool call results do not have corresponding tool calls in task context

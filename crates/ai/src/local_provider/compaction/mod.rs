@@ -18,6 +18,7 @@
 
 pub mod algorithm;
 pub mod config;
+pub mod state;
 pub mod wire;
 
 #[cfg(test)]
@@ -25,6 +26,7 @@ pub mod wire;
 mod algorithm_tests;
 
 pub use config::CompactionConfig;
+pub use state::{CompactionState, CompactionTrigger, CompletedCompaction, MessageMarker};
 
 /// Constants byte-aligned with opencode `compaction.ts:33-39`.
 pub mod consts {

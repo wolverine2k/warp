@@ -144,6 +144,10 @@ pub struct RequestParams {
     /// at `RequestParams::new` time so the dispatch fork stays AppContext-free.
     /// Phase A consumes only `prune`; Phase B-3 will consume the rest.
     pub local_provider_compaction_config: ai::local_provider::compaction::CompactionConfig,
+    /// Snapshot of the conversation's compaction sidecar (Phase B-2). Cloned
+    /// from `AIConversation::compaction_state` at request build time so the
+    /// dispatch fork can hand it to the request translator.
+    pub local_provider_compaction_state: ai::local_provider::compaction::CompactionState,
 }
 
 pub type Event = Result<warp_multi_agent_api::ResponseEvent, Arc<AIApiError>>;
@@ -173,6 +177,9 @@ pub struct ConversationData {
     /// server-driven `Action::CreateTask` ever arrives), and every emitted
     /// `AddMessagesToTask` is dropped with `TaskNotFound`.
     pub root_task_id: Option<String>,
+    /// Compaction sidecar snapshot (Phase B-2). Cloned from
+    /// `AIConversation::compaction_state` at the call site.
+    pub compaction_state: ai::local_provider::compaction::CompactionState,
 }
 
 impl RequestParams {
@@ -358,6 +365,7 @@ impl RequestParams {
             root_task_id: conversation.root_task_id,
             local_provider_compaction_config:
                 crate::ai::local_provider_config::compaction_config_from_app(app),
+            local_provider_compaction_state: conversation.compaction_state,
         }
     }
 }

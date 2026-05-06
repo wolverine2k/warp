@@ -9,6 +9,7 @@ use warp_multi_agent_api as api;
 
 use super::algorithm::{prune_decisions, MessageRef, Role, ToolOutputRef};
 use super::consts::CHARS_PER_TOKEN;
+use super::state::CompactionState;
 use super::PRUNED_TOOL_OUTPUT_PLACEHOLDER;
 
 /// `tool_call_id → tool_name` index used by the prune decision to skip
@@ -34,13 +35,15 @@ where
     out
 }
 
-/// Per-message [`MessageRef`] view over a borrowed `api::Message`. Phase A
-/// has no `CompactionState`, so the trait methods that consult it always
-/// return false.
+/// Per-message [`MessageRef`] view over a borrowed `api::Message`. Consults
+/// `state` for `is_summary` / `is_compaction_marker` / `already_compacted`
+/// flags so prior compactions short-circuit the prune walk and Phase B-3's
+/// `select` finds the head/tail boundary.
 #[derive(Clone, Copy)]
 struct WireMsg<'a> {
     msg: &'a api::Message,
     tool_names: &'a ToolNameLookup,
+    state: &'a CompactionState,
 }
 
 fn estimate_size_chars(msg: &api::Message) -> usize {
@@ -87,11 +90,23 @@ impl<'a> MessageRef for WireMsg<'a> {
     }
 
     fn is_compaction_marker(&self) -> bool {
-        false
+        if self.role() != Role::User {
+            return false;
+        }
+        self.state
+            .marker(&self.msg.id)
+            .map(|m| m.compaction_trigger.is_some())
+            .unwrap_or(false)
     }
 
     fn is_summary(&self) -> bool {
-        false
+        if self.role() != Role::Assistant {
+            return false;
+        }
+        self.state
+            .marker(&self.msg.id)
+            .map(|m| m.is_summary)
+            .unwrap_or(false)
     }
 
     fn estimate_size(&self) -> usize {
@@ -108,21 +123,29 @@ impl<'a> MessageRef for WireMsg<'a> {
             .cloned()
             .unwrap_or_default();
         let output_size = estimate_size_chars(self.msg);
+        let already_compacted = self
+            .state
+            .marker(&self.msg.id)
+            .and_then(|m| m.tool_output_compacted_at)
+            .is_some();
         vec![ToolOutputRef {
             call_id: tcr.tool_call_id.clone(),
             tool_name,
             output_size,
             completed: tcr.result.is_some() || !self.msg.server_message_data.is_empty(),
-            already_compacted: false,
+            already_compacted,
         }]
     }
 }
 
 /// Run [`prune_decisions`] over a slice of conversation tasks (each task's
-/// proto messages, in order) and return the set of `tool_call_id`s whose
-/// content should be replaced with a placeholder when the OpenAI body is
-/// built.
-pub fn compute_prune_set(tasks: &[api::Task]) -> HashSet<String> {
+/// proto messages, in order) plus the conversation's compaction sidecar
+/// state. Returns the set of `tool_call_id`s whose content should be
+/// replaced with a placeholder when the OpenAI body is built.
+///
+/// Pass `&CompactionState::default()` if the caller has no persistent state
+/// (in-session use prior to Phase B-3's commit pipeline).
+pub fn compute_prune_set(tasks: &[api::Task], state: &CompactionState) -> HashSet<String> {
     let flat: Vec<&api::Message> = tasks.iter().flat_map(|t| t.messages.iter()).collect();
     if flat.is_empty() {
         return HashSet::new();
@@ -133,6 +156,7 @@ pub fn compute_prune_set(tasks: &[api::Task]) -> HashSet<String> {
         .map(|m| WireMsg {
             msg: *m,
             tool_names: &tool_names,
+            state,
         })
         .collect();
     prune_decisions(&views)
