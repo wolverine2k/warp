@@ -154,6 +154,20 @@ impl TaskStatusSyncModel {
             if conversation.is_remote_child() {
                 return;
             }
+            // Skip Local LLM Provider conversations: they never hit warp.dev's
+            // backend, so the server has no `agent_tasks` row to update.
+            // Without this guard every status change emits a noisy
+            // "failed to load AI task owner: Not found" error from the
+            // GraphQL response. `server_conversation_token` is the cleanest
+            // signal because warp.dev assigns it only after a server-side
+            // response, which the local provider never produces.
+            // Server-routed conversations that haven't received their token
+            // yet are caught up by the
+            // `BlocklistAIHistoryEvent::ConversationServerTokenAssigned`
+            // re-sync handler below.
+            if conversation.server_conversation_token().is_none() {
+                return;
+            }
             let Some(task_id) = conversation.task_id() else {
                 return;
             };
