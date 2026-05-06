@@ -17,19 +17,29 @@ pub async fn generate_multi_agent_output(
 ) -> Result<ResponseStream, ConvertToAPITypeError> {
     // ---- Custom Local LLM Provider fork (specs/GH9303/) ----
     //
-    // If the active model id starts with `local:` AND the snapshot indicates
-    // a configured + enabled local provider, route directly to the user's
-    // endpoint instead of through warp.dev. The snapshot was populated at
-    // `RequestParams::new` time from `&AppContext`; this code path stays
-    // AppContext-free per tech.md §5.
+    // If a local provider is configured + enabled, route this request to
+    // the user's endpoint instead of warp.dev — regardless of which model
+    // the conversation has selected. Configuring + enabling the local
+    // provider is the user's explicit opt-in, and forcing every Agent
+    // Mode request through it lets users on free / analytics-disabled
+    // plans (where warp.dev's MultiAgent endpoint rejects with HTTP 400
+    // "App analytics must be enabled") use Agent Mode at all.
+    //
+    // We retain the `local:` model-id signal as a separate diagnostic:
+    // if the user explicitly selected a local model but no provider is
+    // configured, surface a clear error rather than silently routing to
+    // warp.dev (which would then fail in a less-obvious way).
+    //
+    // The snapshot was populated at `RequestParams::new` time from
+    // `&AppContext`; this code path stays AppContext-free per tech.md §5.
+    if let Some(cfg) = params.local_provider_config.take() {
+        return route_to_local_provider(params, cfg, cancellation_rx).await;
+    }
     if crate::ai::local_provider_config::is_local_llm_id(&params.model) {
-        if let Some(cfg) = params.local_provider_config.take() {
-            return route_to_local_provider(params, cfg, cancellation_rx).await;
-        }
-        // Stale local id but no active config (user disabled the provider but
-        // their saved profile still references it). Surface a one-shot
-        // error stream so the controller's existing toast path fires; the user
-        // can re-select a Warp model.
+        // Stale local id but no active config (user disabled the provider
+        // but their saved profile still references it). Surface a
+        // one-shot error stream so the controller's existing toast path
+        // fires; the user can re-select a Warp model.
         let (tx, rx) = async_channel::unbounded();
         let err = AIApiError::Other(anyhow::anyhow!(
             "Local provider is no longer configured. Re-enable it in settings, or pick a Warp model."
