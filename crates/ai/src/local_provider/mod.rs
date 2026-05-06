@@ -14,6 +14,7 @@
 //!    of `warp_multi_agent_api::ResponseEvent`s matching the contract the
 //!    Warp client controller already speaks.
 
+pub mod compaction;
 pub mod config;
 pub mod key_manager;
 pub mod prompt;

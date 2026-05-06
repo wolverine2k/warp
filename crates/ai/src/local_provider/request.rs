@@ -63,6 +63,10 @@ pub struct LocalProviderInput {
     /// matching `role:"tool"` follow-up, and the upstream rejects with
     /// HTTP 400 ("tool_calls must be followed by tool messages").
     pub action_results: std::collections::HashMap<String, String>,
+    /// Phase A compaction config (defaults to `prune=true`,
+    /// `tail_turns=DEFAULT_TAIL_TURNS`). Phase B will populate this from
+    /// `AISettings.byop_compaction_*` per the openwarp port.
+    pub compaction_config: super::compaction::CompactionConfig,
 }
 
 /// Build the OpenAI request body for a single turn.
@@ -88,6 +92,16 @@ pub fn compose_chat_completion_request(
     }
 
     backfill_orphaned_tool_calls(&mut messages, &input.action_results);
+
+    // Phase A compaction: replace old tool-output content with a placeholder
+    // once the cumulative byte budget is exceeded. Keeps long, tool-heavy
+    // conversations under the model's token limit. See
+    // `crate::local_provider::compaction` for the algorithm and Phase B notes.
+    if input.compaction_config.prune {
+        let prune_set =
+            crate::local_provider::compaction::wire::compute_prune_set(&input.tasks);
+        crate::local_provider::compaction::wire::apply_prune(&mut messages, &prune_set);
+    }
 
     if let Some(q) = input.user_query.as_deref() {
         messages.push(ChatMessage {
