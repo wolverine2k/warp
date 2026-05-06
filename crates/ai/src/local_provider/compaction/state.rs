@@ -144,6 +144,14 @@ impl CompactionState {
         &self.completed
     }
 
+    /// Phase B-2a persistence gate: returns true when no compaction has
+    /// run (no markers, no completed intervals). Lets the save path skip
+    /// emitting a `{...}` blob for warp.dev conversations that never
+    /// touched the local-provider compactor.
+    pub fn is_empty(&self) -> bool {
+        self.markers.is_empty() && self.completed.is_empty()
+    }
+
     /// All message ids that should be hidden from the request body
     /// (opencode `hidden`): every completed compaction's user_msg_id +
     /// assistant_msg_id. Note: the *summary content itself* is spliced back

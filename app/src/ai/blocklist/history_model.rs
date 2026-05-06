@@ -1119,6 +1119,7 @@ impl BlocklistAIHistoryModel {
             run_id: None,
             autoexecute_override: Some(source_conversation.autoexecute_override().into()),
             last_event_sequence: None,
+            compaction_state_json: None,
         };
         let forked_conversation_id = AIConversationId::new();
         if let Err(e) = sqlite_sender.send(ModelEvent::UpdateMultiAgentConversation {
@@ -1274,6 +1275,7 @@ impl BlocklistAIHistoryModel {
             run_id: None,
             autoexecute_override: Some(conversation.autoexecute_override().into()),
             last_event_sequence: None,
+            compaction_state_json: None,
         };
 
         let forked_conversation_id = AIConversationId::new();

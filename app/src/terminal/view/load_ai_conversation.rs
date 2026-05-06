@@ -1002,6 +1002,7 @@ impl TerminalView {
             run_id: None,
             autoexecute_override: None,
             last_event_sequence: None,
+            compaction_state_json: None,
         };
 
         match AIConversation::new_restored(conversation_id, tasks, Some(conversation_data)) {

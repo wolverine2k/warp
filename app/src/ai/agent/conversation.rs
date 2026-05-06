@@ -377,6 +377,7 @@ impl AIConversation {
             run_id,
             autoexecute_override,
             last_event_sequence,
+            compaction_state,
         ) = if let Some(data) = conversation_data {
             let server_conversation_token = data
                 .server_conversation_token
@@ -409,6 +410,22 @@ impl AIConversation {
                 AIConversationAutoexecuteMode::default()
             };
             let last_event_sequence = data.last_event_sequence;
+            // Phase B-2a: round-trip CompactionState. A parse failure
+            // (schema drift, corrupted blob) degrades to "never compacted"
+            // — equivalent to the unaffected baseline. The version field
+            // on `CompactionState` lets future schemas detect
+            // incompatibility explicitly.
+            let compaction_state: ai::local_provider::compaction::CompactionState = data
+                .compaction_state_json
+                .as_deref()
+                .and_then(|json| {
+                    serde_json::from_str(json)
+                        .map_err(|e| {
+                            log::warn!("Failed to deserialize compaction_state, using default: {e}")
+                        })
+                        .ok()
+                })
+                .unwrap_or_default();
 
             (
                 server_conversation_token,
@@ -423,6 +440,7 @@ impl AIConversation {
                 run_id,
                 autoexecute_override,
                 last_event_sequence,
+                compaction_state,
             )
         } else {
             (
@@ -438,6 +456,7 @@ impl AIConversation {
                 None,
                 AIConversationAutoexecuteMode::default(),
                 None,
+                ai::local_provider::compaction::CompactionState::default(),
             )
         };
 
@@ -484,7 +503,7 @@ impl AIConversation {
             orchestration_config: None,
             orchestration_status: OrchestrationConfigStatus::default(),
             orchestration_plan_id: None,
-            compaction_state: ai::local_provider::compaction::CompactionState::default(),
+            compaction_state,
         })
     }
 
@@ -2934,6 +2953,20 @@ impl AIConversation {
                 run_id: self.task_id.map(|id| id.to_string()),
                 autoexecute_override: Some(self.autoexecute_override.into()),
                 last_event_sequence: self.last_event_sequence,
+                // Phase B-2a: serialize Local LLM Provider compaction
+                // sidecar state. None when no compaction has happened
+                // (the empty-default case) — avoids writing a useless
+                // `{...}` blob for every warp.dev conversation. A parse
+                // failure on either side degrades to default state.
+                compaction_state_json: if self.compaction_state.is_empty() {
+                    None
+                } else {
+                    serde_json::to_string(&self.compaction_state)
+                        .map_err(|e| {
+                            log::error!("Failed to serialize compaction_state: {e}");
+                        })
+                        .ok()
+                },
             },
         };
         ctx.spawn(

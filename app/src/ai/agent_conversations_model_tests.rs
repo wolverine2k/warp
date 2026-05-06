@@ -254,6 +254,7 @@ fn test_display_status_uses_matching_conversation_for_in_progress_task() {
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                compaction_state_json: None,
             },
         );
 
@@ -308,6 +309,7 @@ fn test_display_status_uses_active_execution_over_previous_conversation_status()
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                compaction_state_json: None,
             },
         );
 
@@ -369,6 +371,7 @@ fn test_display_status_updates_when_blocked_conversation_resumes() {
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                compaction_state_json: None,
             },
         );
 
@@ -446,6 +449,7 @@ fn test_display_status_terminal_task_state_overrides_matching_conversation() {
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                compaction_state_json: None,
             },
         );
 
@@ -499,6 +503,7 @@ fn test_status_filter_uses_display_status_for_task_backed_conversations() {
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                compaction_state_json: None,
             },
         );
 
@@ -792,6 +797,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_run_id() {
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                compaction_state_json: None,
             },
         );
 
@@ -844,6 +850,7 @@ fn test_get_entries_merges_task_and_local_conversation_by_server_token() {
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
+                compaction_state_json: None,
             },
         );
 
@@ -1011,6 +1018,7 @@ fn test_resolve_open_action_falls_back_to_local_conversation_for_invalid_session
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                compaction_state_json: None,
             },
         );
 
@@ -1397,6 +1405,7 @@ fn test_get_tasks_and_conversations_prefers_task_when_task_id_matches_conversati
                 run_id: Some(task_id.clone()),
                 autoexecute_override: None,
                 last_event_sequence: None,
+                compaction_state_json: None,
             },
         );
 
@@ -1455,6 +1464,7 @@ fn test_get_tasks_and_conversations_prefers_task_when_server_token_matches() {
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
+                compaction_state_json: None,
             },
         );
 
@@ -1512,6 +1522,7 @@ fn test_get_tasks_and_conversations_keeps_unrelated_tasks_and_conversations() {
                 run_id: None,
                 autoexecute_override: None,
                 last_event_sequence: None,
+                compaction_state_json: None,
             },
         );
 
