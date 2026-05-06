@@ -90,8 +90,27 @@ pub fn compose_chat_completion_request(
     let mut messages = Vec::new();
     messages.push(system_message(&local_tools, cfg));
 
+    // Phase B-3 head-summary projection. When the conversation has a
+    // completed compaction, drop every history message that pre-dates the
+    // compaction's trigger user message. The synthetic
+    // `(user trigger, assistant summary)` pair is itself in `tasks` (the
+    // app-side commit step splices it into the active task), so the model
+    // sees `[system, summary, tail...]` instead of the original overflowing
+    // head. Skipped silently when `completed.is_empty()` (the unaffected
+    // baseline).
+    let drop_before_id = pre_compaction_drop_before_id(input);
+    let drop_active = drop_before_id.is_some();
+    let mut should_skip = drop_active;
+
     for task in &input.tasks {
         for proto_msg in &task.messages {
+            if should_skip {
+                if Some(proto_msg.id.as_str()) == drop_before_id.as_deref() {
+                    should_skip = false;
+                } else {
+                    continue;
+                }
+            }
             push_history_messages(&mut messages, proto_msg);
         }
     }
@@ -126,6 +145,32 @@ pub fn compose_chat_completion_request(
         tools,
         tool_choice,
         stream: true,
+    }
+}
+
+/// Phase B-3: returns the message id we should drop history *up to* (exclusive).
+///
+/// Reads the most recent [`super::compaction::CompletedCompaction`] off
+/// `input.compaction_state` and returns its `user_msg_id` — that's the
+/// synthetic compaction-trigger marker spliced into the task list at commit
+/// time. Everything before it represents the now-summarized head and gets
+/// pruned from the request body.
+///
+/// Returns `None` when no compaction has run (the unaffected baseline) or
+/// when the synthetic id isn't present in any task's message list (defensive:
+/// without that anchor we can't safely drop anything, so the projection no-ops).
+fn pre_compaction_drop_before_id(input: &LocalProviderInput) -> Option<String> {
+    let last = input.compaction_state.completed().last()?;
+    let user_id: &str = &last.user_msg_id;
+    let exists = input
+        .tasks
+        .iter()
+        .flat_map(|t| t.messages.iter())
+        .any(|m| m.id.as_str() == user_id);
+    if exists {
+        Some(last.user_msg_id.clone())
+    } else {
+        None
     }
 }
 
@@ -888,5 +933,123 @@ mod tests {
         };
         let s = summarize_tool_result(&r);
         assert!(s.contains("empty"));
+    }
+
+    // ---- Phase B-3 projection ----
+
+    use crate::local_provider::compaction::{CompactionState, CompletedCompaction};
+
+    fn user_msg(id: &str, body: &str) -> api::Message {
+        api::Message {
+            id: id.into(),
+            message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+                query: body.into(),
+                ..Default::default()
+            })),
+            ..Default::default()
+        }
+    }
+
+    fn agent_msg(id: &str, body: &str) -> api::Message {
+        api::Message {
+            id: id.into(),
+            message: Some(api::message::Message::AgentOutput(api::message::AgentOutput {
+                text: body.into(),
+            })),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn projection_no_op_when_compaction_state_empty() {
+        let task = api::Task {
+            id: "t1".into(),
+            messages: vec![user_msg("u1", "hi"), agent_msg("a1", "hello")],
+            ..Default::default()
+        };
+        let input = LocalProviderInput {
+            tasks: vec![task],
+            ..Default::default()
+        };
+        let req = compose_chat_completion_request(&input, &cfg());
+        // system + user + assistant
+        assert_eq!(req.messages.len(), 3);
+    }
+
+    #[test]
+    fn projection_drops_history_before_compaction_trigger() {
+        let task = api::Task {
+            id: "t1".into(),
+            messages: vec![
+                user_msg("u_old1", "old turn 1"),
+                agent_msg("a_old1", "old reply 1"),
+                user_msg("u_old2", "old turn 2"),
+                agent_msg("a_old2", "old reply 2"),
+                // Synthetic compaction pair (spliced in by the app-side
+                // commit step).
+                user_msg("compaction-trigger-X", "Continue..."),
+                agent_msg("compaction-summary-X", "## Goal\n- summary"),
+                // Tail user turn after compaction.
+                user_msg("u_new", "post-compact ask"),
+            ],
+            ..Default::default()
+        };
+        let mut state = CompactionState::default();
+        state.push_completed(CompletedCompaction {
+            user_msg_id: "compaction-trigger-X".into(),
+            assistant_msg_id: "compaction-summary-X".into(),
+            tail_start_id: Some("u_new".into()),
+            summary_text: Some("## Goal\n- summary".into()),
+            auto: true,
+            overflow: true,
+        });
+        let input = LocalProviderInput {
+            tasks: vec![task],
+            compaction_state: state,
+            ..Default::default()
+        };
+        let req = compose_chat_completion_request(&input, &cfg());
+
+        // Expect: system + synthetic user + synthetic assistant + tail user.
+        // The four pre-compaction messages are dropped.
+        assert_eq!(
+            req.messages.len(),
+            4,
+            "wrong msg count: {:?}",
+            req.messages.iter().map(|m| (m.role, m.content.clone())).collect::<Vec<_>>()
+        );
+        assert_eq!(req.messages[1].content.as_deref(), Some("Continue..."));
+        assert_eq!(req.messages[2].content.as_deref(), Some("## Goal\n- summary"));
+        assert_eq!(req.messages[3].content.as_deref(), Some("post-compact ask"));
+    }
+
+    #[test]
+    fn projection_no_op_when_trigger_id_missing_from_tasks() {
+        // Defensive: state references an id that isn't in the task list.
+        // The projection should NOT drop everything (would silently lose
+        // history); it just no-ops.
+        let task = api::Task {
+            id: "t1".into(),
+            messages: vec![user_msg("u1", "hi")],
+            ..Default::default()
+        };
+        let mut state = CompactionState::default();
+        state.push_completed(CompletedCompaction {
+            user_msg_id: "compaction-trigger-MISSING".into(),
+            assistant_msg_id: "compaction-summary-MISSING".into(),
+            tail_start_id: None,
+            summary_text: Some("ghost".into()),
+            auto: true,
+            overflow: true,
+        });
+        let input = LocalProviderInput {
+            tasks: vec![task],
+            compaction_state: state,
+            ..Default::default()
+        };
+        let req = compose_chat_completion_request(&input, &cfg());
+        // system + the one user message — nothing dropped.
+        assert_eq!(req.messages.len(), 2);
+        assert_eq!(req.messages[1].content.as_deref(), Some("hi"));
     }
 }

@@ -98,8 +98,7 @@ fn prune_keeps_two_most_recent_user_turns_intact() {
         tool("t3", "c3", PRUNE_PROTECT * 2),
     ];
     let decisions = prune_decisions(&msgs);
-    let pruned: HashMap<&'static str, &'static str> =
-        decisions.into_iter().map(|(m, c)| (m, c)).collect();
+    let pruned: HashMap<&'static str, &'static str> = decisions.into_iter().collect();
     assert!(!pruned.contains_key("t2"), "u2's tool must not be pruned");
     assert!(!pruned.contains_key("t3"), "u3's tool must not be pruned");
     assert!(

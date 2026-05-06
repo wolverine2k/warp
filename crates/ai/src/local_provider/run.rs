@@ -306,3 +306,162 @@ fn synthesize_stream(
 // panic in unit-test contexts depending on workspace TLS-provider setup.
 // The pieces this function composes (config validation, request translation,
 // SSE adapter) are independently unit-tested in their own modules.
+
+// ---------- summarizer (non-streaming) ----------
+
+use crate::local_provider::wire::{
+    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Role,
+};
+
+/// Inputs for [`run_summarizer_turn`] — a self-contained summarization call.
+/// Distinct from [`LocalProviderInput`] because the summarizer doesn't share
+/// the SSE/controller plumbing — it's a one-shot helper.
+#[derive(Debug, Clone)]
+pub struct SummarizerInput {
+    /// Pre-composed messages to send to the summarizer model. The caller is
+    /// responsible for shape: typically `[system, ...history, user(prompt)]`
+    /// where the user prompt comes from
+    /// [`crate::local_provider::compaction::prompt::build_prompt`].
+    pub messages: Vec<ChatMessage>,
+}
+
+/// Errors specific to [`run_summarizer_turn`]. Streaming-path errors come
+/// back as `Finished{InternalError}` events; the summarizer is a one-shot
+/// call so we expose them directly.
+#[derive(Debug, thiserror::Error)]
+pub enum SummarizerError {
+    #[error("invalid local provider config: {0}")]
+    InvalidConfig(#[from] crate::local_provider::config::LocalProviderConfigError),
+    #[error("HTTP transport error: {0}")]
+    Transport(#[from] reqwest::Error),
+    #[error("failed to encode summarizer request body: {0}")]
+    EncodeRequest(#[from] serde_json::Error),
+    #[error("upstream returned HTTP {status}: {body}")]
+    UpstreamHttp { status: u16, body: String },
+    #[error("upstream returned a non-JSON or malformed body: {0}")]
+    DecodeResponse(String),
+    #[error("upstream reported an error envelope: {0}")]
+    UpstreamErrorEnvelope(String),
+    #[error("summarizer response had no assistant content")]
+    NoContent,
+}
+
+/// Issue a single non-streaming Chat Completions request and return the
+/// assistant text. Used by the head-summary compaction path; `run_chat_turn`
+/// stays the only entry point for normal turns.
+///
+/// Behaviour notes:
+/// - `stream` is forced to `false` regardless of caller setup — this path
+///   reads `ChatCompletionResponse`, not `ChatCompletionChunk`s.
+/// - `tools` / `tool_choice` are not sent — summarization is a plain text
+///   completion and tool advertisements would only confuse the model.
+/// - The reasoning channels (`reasoning_content` / `reasoning`) are
+///   prepended to the visible text only when `content` is empty; a
+///   well-behaved summarizer puts the structured Markdown in `content`.
+pub async fn run_summarizer_turn(
+    input: SummarizerInput,
+    cfg: &crate::local_provider::config::LocalProviderConfig,
+    http: &reqwest::Client,
+) -> Result<String, SummarizerError> {
+    cfg.validate()?;
+    let url = cfg.chat_completions_url()?;
+
+    let body = ChatCompletionRequest {
+        model: cfg.model_id.clone(),
+        messages: input.messages,
+        tools: None,
+        tool_choice: None,
+        stream: false,
+    };
+    let body_json = serde_json::to_string(&body)?;
+
+    let mut req = http
+        .post(url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header(reqwest::header::ACCEPT, "application/json")
+        .body(body_json);
+    if let Some(key) = &cfg.api_key {
+        if !key.is_empty() {
+            req = req.bearer_auth(key);
+        }
+    }
+
+    let resp = req.send().await?;
+    let status = resp.status();
+    let text = resp.text().await?;
+
+    if !status.is_success() {
+        return Err(SummarizerError::UpstreamHttp {
+            status: status.as_u16(),
+            body: text.chars().take(500).collect(),
+        });
+    }
+
+    let parsed: ChatCompletionResponse = serde_json::from_str(&text)
+        .map_err(|e| SummarizerError::DecodeResponse(format!("{e}: {}", first_chars(&text, 200))))?;
+
+    if let Some(err) = parsed.error {
+        return Err(SummarizerError::UpstreamErrorEnvelope(err.message));
+    }
+
+    let summary_text = parsed
+        .choices
+        .into_iter()
+        .find_map(|choice| {
+            let m = choice.message?;
+            // Prefer visible content; some servers stuff structured output
+            // into reasoning_content even on non-streaming mode.
+            let candidate = m
+                .content
+                .filter(|s| !s.trim().is_empty())
+                .or(m.reasoning_content)
+                .or(m.reasoning)?;
+            let trimmed = candidate.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .ok_or(SummarizerError::NoContent)?;
+
+    Ok(summary_text)
+}
+
+fn first_chars(s: &str, n: usize) -> String {
+    s.chars().take(n).collect()
+}
+
+/// Convenience constructor for the canonical 3-message summarizer body
+/// `[system?, history..., user(prompt)]`. Most callers should hand-build
+/// `Vec<ChatMessage>` themselves; this helper exists to keep the common case
+/// terse.
+///
+/// `system_prompt = None` skips the system message entirely. Some local
+/// servers reject zero-system bodies; pass `Some("You are a summarizer.")`
+/// or similar in that case.
+pub fn build_summarizer_messages(
+    system_prompt: Option<&str>,
+    history: Vec<ChatMessage>,
+    user_prompt: String,
+) -> Vec<ChatMessage> {
+    let mut out: Vec<ChatMessage> = Vec::with_capacity(history.len() + 2);
+    if let Some(sys) = system_prompt {
+        out.push(ChatMessage {
+            role: Role::System,
+            content: Some(sys.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        });
+    }
+    out.extend(history);
+    out.push(ChatMessage {
+        role: Role::User,
+        content: Some(user_prompt),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    });
+    out
+}

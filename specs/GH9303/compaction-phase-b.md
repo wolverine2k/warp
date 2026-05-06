@@ -63,6 +63,53 @@ Open question: whether the summarizer call goes through the same SSE adapter
 or a one-shot non-streaming path. Recommend non-streaming for simplicity —
 we just need the final text.
 
+#### B-3 status (delivered in this PR)
+
+Library + projection layer is complete. Controller dispatch is the only
+remaining piece — split out as B-3a so the library work can land first and
+get reviewed in isolation.
+
+Landed:
+
+- `crates/ai/src/local_provider/compaction/overflow.rs` — `TokenCounts`,
+  `ModelLimit::FALLBACK` / `from_context_window`, `is_overflow`, `usable`
+  (1:1 byte-aligned with opencode `overflow.ts`).
+- `crates/ai/src/local_provider/compaction/prompt.rs` — `SUMMARY_TEMPLATE`
+  (byte-aligned), `build_prompt`, `build_continue_message`.
+- `crates/ai/src/local_provider/compaction/commit.rs` — `commit_summarization`
+  helper (decoupled from `AIConversation`; generates synthetic ids, pushes
+  `CompletedCompaction`, returns the ids so the caller can splice matching
+  `api::Message`s into the task list).
+- `crates/ai/src/local_provider/run.rs::run_summarizer_turn` — non-streaming
+  `Chat Completions` call that returns the assistant text, plus
+  `build_summarizer_messages` convenience composer.
+- `crates/ai/src/local_provider/wire.rs` — `ChatCompletionResponse`,
+  `ResponseChoice`, `ResponseMessage` for the non-streaming response shape.
+- `crates/ai/src/local_provider/request.rs` — projection step that drops
+  pre-compaction history when `compaction_state.completed` is non-empty.
+  Synthetic compaction pair (already in `tasks`) stands in as the new head.
+- Unit tests per module (overflow: 13, prompt: 6, commit: 4) + 3 new
+  integration tests (`summarizer_parses_non_streaming_json...`,
+  `summarizer_surfaces_http_error_with_body_excerpt`,
+  `next_turn_after_compaction_drops_pre_compaction_history`).
+
+Deferred to B-3a:
+
+- `StreamFinished.usage` plumbing — `OpenAiSseAdapter` doesn't yet capture
+  the OpenAI-format `usage` chunk, so the controller has no token counts to
+  hand to `is_overflow`. Need to (a) parse `usage` off the final `ChatCompletionChunk`
+  (requires `stream_options: {"include_usage": true}` in the request body for
+  servers that gate it) and (b) thread it onto `StreamFinished.usage`.
+- Controller dispatch — the place that observes `Finished` for a local-provider
+  conversation and decides whether to compact. Needs `&mut AIConversation`
+  access to mutate `task_store` (splice synthetic `(user, assistant)` pair)
+  and `compaction_state` (record the new `CompletedCompaction`). Plumbing
+  the summarizer dispatch through the existing controller flow is the bulk
+  of B-3a.
+- End-to-end verification against a real OpenAI-compatible endpoint —
+  requires the controller dispatch above to be wired before it's
+  meaningful.
+
 ### B-4. `/compact` user command
 
 Add a slash command in the input bar that triggers the same flow as B-3 but

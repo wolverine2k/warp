@@ -16,9 +16,13 @@ use std::sync::Once;
 use std::time::Duration;
 
 use ai::local_provider::{
+    compaction::{commit_summarization, CompactionState},
     config::LocalProviderConfig,
     request::LocalProviderInput,
-    run::{run_chat_turn, LocalRunError},
+    run::{
+        build_summarizer_messages, run_chat_turn, run_summarizer_turn, LocalRunError,
+        SummarizerInput,
+    },
 };
 use futures::stream::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -617,5 +621,251 @@ async fn api_key_attaches_authorization_header() {
     assert!(
         request_str.to_lowercase().contains("authorization: bearer sk-test-token-xyz"),
         "expected Authorization header in request, got:\n{request_str}"
+    );
+}
+
+// ---------- Phase B-3 head-summary compaction tests ----------
+
+/// Spin up a one-shot mock server that responds to a single non-streaming
+/// JSON Chat Completions request with a canned `application/json` body.
+/// Returns `(url, captured_body_handle)`.
+async fn spawn_json_mock_server(
+    response_body: String,
+) -> (String, std::sync::Arc<tokio::sync::Mutex<Vec<u8>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let port = listener.local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{port}/v1");
+    let captured = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<u8>::new()));
+    let captured_for_task = captured.clone();
+    tokio::spawn(async move {
+        let (mut socket, _) = match listener.accept().await {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        // Read until \r\n\r\n then drain a bit of the body so we capture it.
+        let mut buf = vec![0u8; 16 * 1024];
+        let mut acc = Vec::new();
+        loop {
+            let n = match socket.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            acc.extend_from_slice(&buf[..n]);
+            if acc.windows(4).any(|w| w == b"\r\n\r\n") {
+                let _ = tokio::time::timeout(Duration::from_millis(50), socket.read(&mut buf))
+                    .await
+                    .ok()
+                    .and_then(|res| res.ok())
+                    .map(|n| acc.extend_from_slice(&buf[..n]));
+                break;
+            }
+        }
+        *captured_for_task.lock().await = acc;
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            response_body.len()
+        );
+        let _ = socket.write_all(header.as_bytes()).await;
+        let _ = socket.write_all(response_body.as_bytes()).await;
+        let _ = socket.shutdown().await;
+    });
+    (url, captured)
+}
+
+#[tokio::test]
+async fn summarizer_parses_non_streaming_json_and_returns_assistant_text() {
+    init_crypto_provider();
+    let body = "{\
+        \"id\":\"cmpl-1\",\
+        \"model\":\"test-model\",\
+        \"choices\":[{\
+            \"index\":0,\
+            \"message\":{\"role\":\"assistant\",\"content\":\"## Goal\\n- single-sentence task summary\"},\
+            \"finish_reason\":\"stop\"\
+        }]\
+    }";
+    let (url, captured) = spawn_json_mock_server(body.to_string()).await;
+    let cfg = cfg_for(&url);
+    let messages = build_summarizer_messages(
+        Some("You are a summarizer."),
+        vec![],
+        "Summarize the conversation".to_string(),
+    );
+    let input = SummarizerInput { messages };
+    let http = reqwest::Client::new();
+    let summary = run_summarizer_turn(input, &cfg, &http)
+        .await
+        .expect("summarizer call succeeds");
+    assert!(summary.contains("## Goal"));
+    assert!(summary.contains("single-sentence task summary"));
+    // Confirm the request was non-streaming.
+    let captured = captured.lock().await;
+    let request_str = String::from_utf8_lossy(&captured);
+    assert!(
+        request_str.contains("\"stream\":false"),
+        "summarizer request body should include stream:false, got:\n{request_str}"
+    );
+}
+
+#[tokio::test]
+async fn summarizer_surfaces_http_error_with_body_excerpt() {
+    init_crypto_provider();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{port}/v1");
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let _ = drain_http_request(&mut socket).await;
+        let body = r#"{"error":{"message":"model not found"}}"#;
+        let header = format!(
+            "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = socket.write_all(header.as_bytes()).await;
+        let _ = socket.shutdown().await;
+    });
+    let cfg = cfg_for(&url);
+    let messages = build_summarizer_messages(None, vec![], "summarize".to_string());
+    let input = SummarizerInput { messages };
+    let http = reqwest::Client::new();
+    let err = run_summarizer_turn(input, &cfg, &http)
+        .await
+        .expect_err("404 should surface as UpstreamHttp");
+    let msg = format!("{err}");
+    assert!(msg.contains("404"), "error message should include status: {msg}");
+    assert!(
+        msg.contains("model not found"),
+        "error message should include body excerpt: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn next_turn_after_compaction_drops_pre_compaction_history() {
+    use warp_multi_agent_api as api;
+    init_crypto_provider();
+
+    // Step 1: simulate an overflow-summarize-commit cycle via the helper.
+    let mut state = CompactionState::default();
+    let outcome = commit_summarization(
+        &mut state,
+        "## Goal\n- distilled summary".to_string(),
+        Some("u_new".into()),
+        true,  // overflow
+        false, // not manual
+    );
+
+    // Step 2: build a task list that includes an old "head" plus the
+    // synthetic compaction pair plus a new tail user turn — mirrors what
+    // the app-side commit step splices into AIConversation.task_store.
+    let task = api::Task {
+        id: "t1".into(),
+        messages: vec![
+            api::Message {
+                id: "u_old".into(),
+                message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+                    query: "old turn that was summarized".into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+            api::Message {
+                id: "a_old".into(),
+                message: Some(api::message::Message::AgentOutput(api::message::AgentOutput {
+                    text: "old assistant reply".into(),
+                })),
+                ..Default::default()
+            },
+            api::Message {
+                id: outcome.user_msg_id.clone(),
+                message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+                    query: "Continue if you have next steps...".into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+            api::Message {
+                id: outcome.assistant_msg_id.clone(),
+                message: Some(api::message::Message::AgentOutput(api::message::AgentOutput {
+                    text: outcome.summary_text.clone(),
+                })),
+                ..Default::default()
+            },
+            api::Message {
+                id: "u_new".into(),
+                message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+                    query: "post-compaction question".into(),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+
+    // Step 3: spin up a chat-mock that captures the request body, fire a
+    // turn through `run_chat_turn`, and assert the body contains the summary
+    // and excludes the dropped head.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{port}/v1");
+    let captured = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<u8>::new()));
+    let captured_for_task = captured.clone();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 16 * 1024];
+        let mut acc = Vec::new();
+        loop {
+            let n = match socket.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            acc.extend_from_slice(&buf[..n]);
+            if acc.windows(4).any(|w| w == b"\r\n\r\n") {
+                let _ = tokio::time::timeout(Duration::from_millis(50), socket.read(&mut buf))
+                    .await
+                    .ok()
+                    .and_then(|res| res.ok())
+                    .map(|n| acc.extend_from_slice(&buf[..n]));
+                break;
+            }
+        }
+        *captured_for_task.lock().await = acc;
+        let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
+        let _ = socket.write_all(header.as_bytes()).await;
+        let _ = socket
+            .write_all(
+                b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ack\"},\"finish_reason\":\"stop\"}]}\n\n",
+            )
+            .await;
+        let _ = socket.write_all(b"data: [DONE]\n\n").await;
+        let _ = socket.shutdown().await;
+    });
+
+    let input = LocalProviderInput {
+        user_query: Some("anything new?".into()),
+        tasks: vec![task],
+        supported_tools: vec![],
+        compaction_state: state,
+        ..Default::default()
+    };
+    let _events = collect_events(cfg_for(&url), input).await.unwrap();
+
+    let captured = captured.lock().await;
+    let request_str = String::from_utf8_lossy(&captured);
+    assert!(
+        request_str.contains("distilled summary"),
+        "post-compaction request should embed the summary, got:\n{request_str}"
+    );
+    assert!(
+        !request_str.contains("old turn that was summarized"),
+        "pre-compaction head should be dropped, got:\n{request_str}"
+    );
+    assert!(
+        !request_str.contains("old assistant reply"),
+        "pre-compaction reply should be dropped, got:\n{request_str}"
+    );
+    assert!(
+        request_str.contains("post-compaction question"),
+        "post-compaction tail should be preserved, got:\n{request_str}"
     );
 }

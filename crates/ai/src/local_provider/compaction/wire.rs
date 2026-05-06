@@ -154,7 +154,7 @@ pub fn compute_prune_set(tasks: &[api::Task], state: &CompactionState) -> HashSe
     let views: Vec<WireMsg<'_>> = flat
         .iter()
         .map(|m| WireMsg {
-            msg: *m,
+            msg: m,
             tool_names: &tool_names,
             state,
         })

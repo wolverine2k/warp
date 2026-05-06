@@ -17,7 +17,10 @@
 //! - Auto-trigger on token-overflow detection (`is_overflow`)
 
 pub mod algorithm;
+pub mod commit;
 pub mod config;
+pub mod overflow;
+pub mod prompt;
 pub mod state;
 pub mod wire;
 
@@ -25,7 +28,9 @@ pub mod wire;
 #[path = "algorithm_tests.rs"]
 mod algorithm_tests;
 
+pub use commit::{commit_summarization, CommitOutcome};
 pub use config::CompactionConfig;
+pub use overflow::{is_overflow, usable, ModelLimit, TokenCounts};
 pub use state::{CompactionState, CompactionTrigger, CompletedCompaction, MessageMarker};
 
 /// Constants byte-aligned with opencode `compaction.ts:33-39`.

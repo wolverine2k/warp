@@ -152,6 +152,46 @@ pub struct ChunkError {
     pub code: Option<String>,
 }
 
+// ---------- Response (non-streaming, used by the summarizer path) ----------
+
+/// One-shot non-streaming Chat Completions response. Used by
+/// `run_summarizer_turn` — the streaming SSE path returns
+/// [`ChatCompletionChunk`] instead.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ChatCompletionResponse {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub choices: Vec<ResponseChoice>,
+    #[serde(default)]
+    pub error: Option<ChunkError>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ResponseChoice {
+    #[serde(default)]
+    pub index: u32,
+    #[serde(default)]
+    pub message: Option<ResponseMessage>,
+    #[serde(default)]
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ResponseMessage {
+    #[serde(default)]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub content: Option<String>,
+    /// Some servers still emit reasoning fields on non-streaming responses.
+    #[serde(default)]
+    pub reasoning_content: Option<String>,
+    #[serde(default)]
+    pub reasoning: Option<String>,
+}
+
 // ---------- Outbound tool-call shape (echoed back in messages history) ----------
 
 /// What we send back in the next turn's `messages` array on an assistant turn that
