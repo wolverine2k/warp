@@ -143,6 +143,10 @@ async fn main() -> ExitCode {
     }
 
     let http = reqwest::Client::new();
+    // Smoke binary measures wall-clock elapsed; Instant is the natural
+    // primitive for that. Workspace policy disallows it broadly but a CLI
+    // smoke example is the right place for an explicit local opt-in.
+    #[allow(clippy::disallowed_types)]
     let started = std::time::Instant::now();
     let mut stream = match run_chat_turn(input, cfg, cancel_rx, http).await {
         Ok(s) => s,

@@ -774,7 +774,7 @@ async fn auto_compact_round_trip_overflow_summarizes_and_commits() {
     cfg.context_window = Some(64);
 
     // History: enough messages that select() finds a head/tail split.
-    let messages_owned: Vec<api::Message> = (0..6)
+    let messages: Vec<api::Message> = (0..6)
         .map(|i| api::Message {
             id: format!("m{i}"),
             message: Some(api::message::Message::UserQuery(api::message::UserQuery {
@@ -784,7 +784,6 @@ async fn auto_compact_round_trip_overflow_summarizes_and_commits() {
             ..Default::default()
         })
         .collect();
-    let messages: Vec<&api::Message> = messages_owned.iter().collect();
 
     let mut state = CompactionState::default();
     let compaction_cfg = CompactionConfig::default();

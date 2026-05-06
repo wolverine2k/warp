@@ -55,7 +55,7 @@ pub enum AutoCompactionError {
 /// on success. The summarizer call is the only thing that can return an
 /// error here — overflow detection and message rendering are pure.
 pub async fn try_compact(
-    messages: &[&api::Message],
+    messages: &[api::Message],
     state: &mut CompactionState,
     cfg: &LocalProviderConfig,
     compaction_cfg: &CompactionConfig,
@@ -68,8 +68,9 @@ pub async fn try_compact(
     }
 
     // Build views over the messages so the algorithm can size each one.
-    let tool_names = build_tool_name_lookup(messages.iter().copied());
-    let views = build_views(messages, &tool_names, state);
+    let messages_refs: Vec<&api::Message> = messages.iter().collect();
+    let tool_names = build_tool_name_lookup(messages_refs.iter().copied());
+    let views = build_views(&messages_refs, &tool_names, state);
 
     let usable_tokens = usable(compaction_cfg, model);
     let preserve_budget = compaction_cfg.preserve_recent_budget(usable_tokens);
@@ -177,10 +178,11 @@ mod tests {
     async fn skipped_when_auto_disabled() {
         init_crypto_provider();
         let mut state = CompactionState::default();
-        let mut compaction_cfg = CompactionConfig::default();
-        compaction_cfg.auto = false;
-        let m = user_msg("u1", "hi");
-        let messages: Vec<&api::Message> = vec![&m];
+        let compaction_cfg = CompactionConfig {
+            auto: false,
+            ..CompactionConfig::default()
+        };
+        let messages: Vec<api::Message> = vec![user_msg("u1", "hi")];
         let http = reqwest::Client::new();
         let r = try_compact(
             &messages,
@@ -204,8 +206,7 @@ mod tests {
         init_crypto_provider();
         let mut state = CompactionState::default();
         let compaction_cfg = CompactionConfig::default();
-        let m = user_msg("u1", "hi");
-        let messages: Vec<&api::Message> = vec![&m];
+        let messages: Vec<api::Message> = vec![user_msg("u1", "hi")];
         let mut large_window_cfg = cfg();
         large_window_cfg.context_window = Some(200_000);
         let http = reqwest::Client::new();

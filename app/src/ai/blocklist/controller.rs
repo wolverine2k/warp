@@ -2829,6 +2829,12 @@ impl BlocklistAIController {
         did_request_contain_user_query: bool,
         ctx: &mut ModelContext<Self>,
     ) {
+        // Phase B-3a: snapshot the token_usage entries for the
+        // auto-compaction dispatcher BEFORE the next step moves them into
+        // `update_conversation_cost_and_usage_for_request`. Cheap clone —
+        // typically 1-2 entries, each a small struct.
+        let usage_snapshot_for_compaction = finished_event.token_usage.clone();
+
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         history_model.update(ctx, |history_model, _| {
             // Update conversation cost and usage information before updating and
@@ -2843,6 +2849,18 @@ impl BlocklistAIController {
                 did_request_contain_user_query,
             );
         });
+
+        // Phase B-3a: dispatch the local-provider auto-compactor when the
+        // just-finished turn was through a local model and the conversation
+        // is overflowing. Fire-and-forget — the summarizer call happens in
+        // the background, the next user turn just goes uncompacted if it
+        // races; the turn after benefits.
+        crate::ai::local_provider_compaction::dispatch_auto_compaction(
+            self,
+            conversation_id,
+            &usage_snapshot_for_compaction,
+            ctx,
+        );
 
         let history_model = BlocklistAIHistoryModel::handle(ctx);
         match finished_event.reason {

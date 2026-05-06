@@ -383,11 +383,6 @@ impl OpenAiSseAdapter {
         out
     }
 
-    /// Test/inspection accessor for the captured upstream usage stats.
-    #[cfg(test)]
-    pub(crate) fn captured_usage(&self) -> Option<OpenAiUsage> {
-        self.captured_usage
-    }
 
     // ---------- internals ----------
 
