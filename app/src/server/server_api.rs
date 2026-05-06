@@ -568,10 +568,34 @@ impl ServerApi {
             };
 
             if let Some(errors) = response.errors.as_ref() {
-                crate::safe_error!(
-                    safe: ("graphql response for {:?} had errors", operation_name),
-                    full: ("graphql response for {:?} had errors {:?}", operation_name, errors)
-                );
+                // "task owner: Not found" / "no rows in result set" on
+                // `UpdateAgentTask` is the expected response when the
+                // backend has no row for the task — which is always the
+                // case for Local LLM Provider conversations (they never
+                // hit warp.dev to create an `agent_tasks` row in the
+                // first place). Logging it as ERROR creates noise on
+                // every status transition during local-provider use.
+                // Detect the pattern here and downgrade to DEBUG so the
+                // error path is still observable without flooding
+                // stderr / log files.
+                let is_local_provider_task_sync_noise = operation_name
+                    .as_deref()
+                    == Some("UpdateAgentTask")
+                    && errors.iter().any(|error| {
+                        error.message.contains("task owner")
+                            || error.message.contains("no rows in result set")
+                    });
+
+                if is_local_provider_task_sync_noise {
+                    log::debug!(
+                        "graphql {operation_name:?} response (suppressed local-provider noise): {errors:?}"
+                    );
+                } else {
+                    crate::safe_error!(
+                        safe: ("graphql response for {:?} had errors", operation_name),
+                        full: ("graphql response for {:?} had errors {:?}", operation_name, errors)
+                    );
+                }
 
                 // "User not in context: Not found" comes from warp-server as an error when attempting
                 // to get a required user for some gql field. If we see that, since we have already
