@@ -72,6 +72,21 @@ impl SlashCommandRequest {
         ctx: &mut ModelContext<BlocklistAIController>,
     ) {
         let conversation_id = self.conversation_id(controller, ctx);
+
+        // Phase B-4: intercept `/compact` for local-provider conversations
+        // and route through the lib auto-compactor instead of the warp.dev
+        // SummarizeConversation path. Falls through for warp.dev / unset
+        // conversations so existing `/compact` UX stays intact.
+        if matches!(self, Self::Summarize { .. }) {
+            if let Some(conv_id) = conversation_id {
+                if crate::ai::local_provider_compaction::dispatch_manual_compaction(
+                    controller, conv_id, ctx,
+                ) {
+                    return;
+                }
+            }
+        }
+
         // For skill invocations, include user-attached context (images, blocks, and selected
         // text) so the skill's agent sees the same attachments a non-slash-command user query
         // would. Other slash commands continue to pass `false` to preserve existing behavior.

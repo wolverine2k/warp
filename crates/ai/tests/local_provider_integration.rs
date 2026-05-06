@@ -758,6 +758,190 @@ async fn summarizer_surfaces_http_error_with_body_excerpt() {
     );
 }
 
+/// Spin up a chat-mock that captures the entire HTTP request body and
+/// returns a minimal stop-stop-DONE response. Used by the prune tests
+/// below to assert on what the model would see.
+async fn spawn_capture_chat_mock() -> (String, std::sync::Arc<tokio::sync::Mutex<Vec<u8>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{port}/v1");
+    let captured = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<u8>::new()));
+    let captured_for_task = captured.clone();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut acc = Vec::new();
+        let mut header_terminator_at: Option<usize> = None;
+        let mut content_length: Option<usize> = None;
+        // Keep reading until we have headers AND body (Content-Length bytes
+        // past the terminator). The prune tests push hundreds of KB of
+        // history; we can't bail out early on the first \r\n\r\n the way
+        // the simple SSE mock does.
+        loop {
+            let n = match tokio::time::timeout(Duration::from_secs(2), socket.read(&mut buf)).await
+            {
+                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+                Ok(Ok(n)) => n,
+            };
+            acc.extend_from_slice(&buf[..n]);
+            if header_terminator_at.is_none() {
+                if let Some(pos) = acc.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let term_at = pos + 4;
+                    header_terminator_at = Some(term_at);
+                    let headers = &acc[..pos];
+                    if let Ok(headers_str) = std::str::from_utf8(headers) {
+                        for line in headers_str.split("\r\n") {
+                            if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                                if let Ok(len) = rest.trim().parse::<usize>() {
+                                    content_length = Some(len);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if let (Some(term_at), Some(cl)) = (header_terminator_at, content_length) {
+                if acc.len() >= term_at + cl {
+                    break;
+                }
+            }
+        }
+        *captured_for_task.lock().await = acc;
+        let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
+        let _ = socket.write_all(header.as_bytes()).await;
+        let _ = socket
+            .write_all(
+                b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ack\"},\"finish_reason\":\"stop\"}]}\n\n",
+            )
+            .await;
+        let _ = socket.write_all(b"data: [DONE]\n\n").await;
+        let _ = socket.shutdown().await;
+    });
+    (url, captured)
+}
+
+/// Build a synthetic Task that exercises the prune walk: 3+ user turns
+/// where each prior turn carries a tool call + a fat tool result that's
+/// big enough on its own to overflow `PRUNE_PROTECT` (40k tokens).
+fn build_prune_test_task(turns: usize, tool_payload_chars: usize) -> api::Task {
+    let mut messages: Vec<api::Message> = Vec::new();
+    for i in 0..turns {
+        // user query
+        messages.push(api::Message {
+            id: format!("u{i}"),
+            message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+                query: format!("turn-{i}"),
+                ..Default::default()
+            })),
+            ..Default::default()
+        });
+        // assistant tool call
+        messages.push(api::Message {
+            id: format!("call{i}"),
+            message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+                tool_call_id: format!("tc{i}"),
+                tool: Some(api::message::tool_call::Tool::ReadFiles(
+                    api::message::tool_call::ReadFiles {
+                        files: vec![api::message::tool_call::read_files::File {
+                            name: format!("file{i}.rs"),
+                            line_ranges: vec![],
+                        }],
+                    },
+                )),
+            })),
+            ..Default::default()
+        });
+        // tool result with a fat payload (`server_message_data` is what
+        // `estimate_size_chars` falls back to for token counting).
+        messages.push(api::Message {
+            id: format!("result{i}"),
+            server_message_data: "x".repeat(tool_payload_chars),
+            message: Some(api::message::Message::ToolCallResult(
+                api::message::ToolCallResult {
+                    tool_call_id: format!("tc{i}"),
+                    result: Some(api::message::tool_call_result::Result::ReadFiles(
+                        api::ReadFilesResult {
+                            result: Some(api::read_files_result::Result::TextFilesSuccess(
+                                api::read_files_result::TextFilesSuccess { files: vec![] },
+                            )),
+                        },
+                    )),
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        });
+    }
+    api::Task {
+        id: "t1".into(),
+        messages,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn compaction_prunes_old_tool_outputs_in_outbound_request() {
+    init_crypto_provider();
+    // 5 turns × 200_000 chars per tool result = 1M chars total ≈ 250k
+    // tokens of tool output. Latest 2 user turns are kept intact; the
+    // older 3 should get pruned (>20k threshold, >40k protect).
+    let task = build_prune_test_task(5, 200_000);
+    let (url, captured) = spawn_capture_chat_mock().await;
+    let input = LocalProviderInput {
+        user_query: Some("anything new?".into()),
+        tasks: vec![task],
+        supported_tools: vec![],
+        ..Default::default()
+    };
+    let _events = collect_events(cfg_for(&url), input).await.unwrap();
+
+    let captured = captured.lock().await;
+    let body = String::from_utf8_lossy(&captured);
+    // Find the JSON body after the headers.
+    let body_start = body.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
+    let body = &body[body_start..];
+
+    // Older tool outputs should be replaced with the placeholder.
+    // 5 tool outputs total; the latest 2 user turns are preserved
+    // intact, so we expect 1-3 placeholders depending on exactly how the
+    // walk's accumulation lands. Most importantly: there must be fewer
+    // placeholders than tool outputs, proving prune kept some history.
+    let placeholder_count = body.matches("[tool output compacted]").count();
+    assert!(
+        placeholder_count >= 1,
+        "expected at least one placeholder, got 0 — body length {}",
+        body.len()
+    );
+    assert!(
+        placeholder_count < 5,
+        "expected fewer placeholders than total tool outputs (got {placeholder_count}); \
+         the latest 2 turns should always be preserved"
+    );
+}
+
+#[tokio::test]
+async fn compaction_skipped_when_under_threshold() {
+    init_crypto_provider();
+    // Tiny conversation: 2 turns × 4_000 chars each (~1k tokens). Under
+    // the PRUNE_MINIMUM threshold (20k tokens), so prune should no-op
+    // and the request body must NOT contain the placeholder.
+    let task = build_prune_test_task(2, 4_000);
+    let (url, captured) = spawn_capture_chat_mock().await;
+    let input = LocalProviderInput {
+        user_query: Some("anything new?".into()),
+        tasks: vec![task],
+        supported_tools: vec![],
+        ..Default::default()
+    };
+    let _events = collect_events(cfg_for(&url), input).await.unwrap();
+    let captured = captured.lock().await;
+    let body = String::from_utf8_lossy(&captured);
+    assert!(
+        !body.contains("[tool output compacted]"),
+        "small conversation should not trigger prune"
+    );
+}
+
 #[tokio::test]
 async fn auto_compact_round_trip_overflow_summarizes_and_commits() {
     use warp_multi_agent_api as api;
@@ -795,9 +979,17 @@ async fn auto_compact_round_trip_overflow_summarizes_and_commits() {
     };
     let http = reqwest::Client::new();
 
-    let outcome = try_compact(&messages, &mut state, &cfg, &compaction_cfg, tokens, &http)
-        .await
-        .expect("auto-compact succeeds");
+    let outcome = try_compact(
+        &messages,
+        &mut state,
+        &cfg,
+        &compaction_cfg,
+        tokens,
+        false, // manual
+        &http,
+    )
+    .await
+    .expect("auto-compact succeeds");
 
     match outcome {
         AutoCompactionOutcome::Compacted(o) => {

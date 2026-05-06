@@ -50,20 +50,27 @@ pub enum AutoCompactionError {
 /// `state.completed`. `tokens` should reflect the most recent observed
 /// usage (per-model accumulator on `AIConversation`).
 ///
-/// Returns `Ok(Skipped)` when `auto = false`, the model isn't overflowing,
-/// or `select` couldn't find a head/tail boundary. Returns `Ok(Compacted)`
-/// on success. The summarizer call is the only thing that can return an
-/// error here — overflow detection and message rendering are pure.
+/// `manual = true` (Phase B-4 `/compact` user command) skips both the
+/// `auto` and `is_overflow` gates and unconditionally proceeds when
+/// there's any history — the resulting [`CompletedCompaction`] is
+/// tagged `auto = false` so projection / debugging can distinguish it.
+///
+/// Returns `Ok(Skipped)` when `auto = false` (and `manual = false`),
+/// the model isn't overflowing, or `select` couldn't find a head/tail
+/// boundary. Returns `Ok(Compacted)` on success. The summarizer call is
+/// the only thing that can return an error here — overflow detection
+/// and message rendering are pure.
 pub async fn try_compact(
     messages: &[api::Message],
     state: &mut CompactionState,
     cfg: &LocalProviderConfig,
     compaction_cfg: &CompactionConfig,
     tokens: TokenCounts,
+    manual: bool,
     http: &reqwest::Client,
 ) -> Result<AutoCompactionOutcome, AutoCompactionError> {
     let model = ModelLimit::from_context_window(cfg.context_window.map(|n| n as usize));
-    if !is_overflow(compaction_cfg, tokens, model) {
+    if !manual && !is_overflow(compaction_cfg, tokens, model) {
         return Ok(AutoCompactionOutcome::Skipped);
     }
 
@@ -122,12 +129,15 @@ pub async fn try_compact(
     )
     .await?;
 
+    // overflow=true on the auto path so the synthesized continue prompt
+    // carries the "previous request exceeded..." preamble; manual `/compact`
+    // (manual=true) renders as a plain continue prompt.
     let outcome = commit_summarization(
         state,
         summary,
         select_result.tail_start_id,
-        true,  // overflow
-        false, // not manual
+        !manual, // overflow
+        manual,
     );
     Ok(AutoCompactionOutcome::Compacted(outcome))
 }
@@ -193,6 +203,7 @@ mod tests {
                 total: 1_000_000,
                 ..Default::default()
             },
+            false, // manual
             &http,
         )
         .await
@@ -219,6 +230,7 @@ mod tests {
                 total: 100, // way under usable budget
                 ..Default::default()
             },
+            false, // manual
             &http,
         )
         .await
