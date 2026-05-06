@@ -45,6 +45,24 @@ pub struct LocalProviderInput {
     /// reason as `conversation_id`. Should be the id of the most recent
     /// entry in `tasks` — the one the controller is actively driving.
     pub task_id: Option<String>,
+    /// Whether the adapter should emit `Action::CreateTask` to upgrade the
+    /// optimistic root task before its first `AddMessagesToTask`. True on the
+    /// very first turn of a fresh local-provider conversation (no server-
+    /// created tasks exist yet). False once any server-created task is
+    /// present — emitting CreateTask on an already-initialized task triggers
+    /// `UpgradeOptimisticTask::UnexpectedUpgrade` AND corrupts the task store
+    /// (the controller's `?` propagation leaves the just-removed root task
+    /// un-reinserted), cascading every subsequent action into TaskNotFound.
+    pub needs_create_task: bool,
+    /// Tool-call results carried alongside the request. Map of
+    /// `tool_call_id` → rendered result string. Populated from the
+    /// controller's `request_input.inputs` `ActionResult` entries — those
+    /// don't land in `task.messages` for local-provider conversations the
+    /// way they would for the server flow, so without this map the OpenAI
+    /// request body would carry an assistant `tool_calls` message with no
+    /// matching `role:"tool"` follow-up, and the upstream rejects with
+    /// HTTP 400 ("tool_calls must be followed by tool messages").
+    pub action_results: std::collections::HashMap<String, String>,
 }
 
 /// Build the OpenAI request body for a single turn.
@@ -68,6 +86,8 @@ pub fn compose_chat_completion_request(
             push_history_messages(&mut messages, proto_msg);
         }
     }
+
+    backfill_orphaned_tool_calls(&mut messages, &input.action_results);
 
     if let Some(q) = input.user_query.as_deref() {
         messages.push(ChatMessage {
@@ -117,6 +137,62 @@ fn system_message(local_tools: &[LocalTool], cfg: &LocalProviderConfig) -> ChatM
         tool_calls: None,
         tool_call_id: None,
         name: None,
+    }
+}
+
+/// Walk the rendered message list and ensure every assistant `tool_calls`
+/// entry is followed by matching `role:"tool"` messages before any non-tool
+/// message. For any `tool_call_id` that lacks a follower, splice in a
+/// synthetic tool message: the rendered result from `action_results` if we
+/// have one, or a placeholder so the upstream's strict-ordering validator
+/// stops rejecting the request with HTTP 400.
+fn backfill_orphaned_tool_calls(
+    messages: &mut Vec<ChatMessage>,
+    action_results: &std::collections::HashMap<String, String>,
+) {
+    use std::collections::HashSet;
+    let mut i = 0;
+    while i < messages.len() {
+        let needs_check = matches!(messages[i].role, Role::Assistant)
+            && messages[i].tool_calls.as_ref().is_some_and(|tcs| !tcs.is_empty());
+        if !needs_check {
+            i += 1;
+            continue;
+        }
+        let tool_call_ids: Vec<String> = messages[i]
+            .tool_calls
+            .as_ref()
+            .expect("checked above")
+            .iter()
+            .map(|tc| tc.id.clone())
+            .collect();
+        let mut satisfied: HashSet<String> = HashSet::new();
+        let mut j = i + 1;
+        while j < messages.len() && matches!(messages[j].role, Role::Tool) {
+            if let Some(id) = &messages[j].tool_call_id {
+                satisfied.insert(id.clone());
+            }
+            j += 1;
+        }
+        let mut insert_at = j;
+        for id in tool_call_ids.into_iter().filter(|id| !satisfied.contains(id)) {
+            let content = action_results
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| "(tool result not available)".to_string());
+            messages.insert(
+                insert_at,
+                ChatMessage {
+                    role: Role::Tool,
+                    content: Some(content),
+                    tool_calls: None,
+                    tool_call_id: Some(id),
+                    name: None,
+                },
+            );
+            insert_at += 1;
+        }
+        i = insert_at;
     }
 }
 
@@ -543,7 +619,10 @@ mod tests {
             ..Default::default()
         };
         let req = compose_chat_completion_request(&input, &cfg());
-        assert_eq!(req.messages.len(), 2);
+        // system + assistant(tool_calls) + synthetic tool message backfilled by
+        // `backfill_orphaned_tool_calls` so the upstream's strict-ordering
+        // validator doesn't reject the request with HTTP 400.
+        assert_eq!(req.messages.len(), 3);
         let assistant = &req.messages[1];
         assert!(matches!(assistant.role, Role::Assistant));
         assert!(assistant.content.is_none(), "tool-call assistant has no text content");
@@ -552,6 +631,47 @@ mod tests {
         assert_eq!(tcs[0].id, "call_xyz");
         assert_eq!(tcs[0].function.name, "read_files");
         assert!(tcs[0].function.arguments.contains("src/main.rs"));
+        let tool_followup = &req.messages[2];
+        assert!(matches!(tool_followup.role, Role::Tool));
+        assert_eq!(tool_followup.tool_call_id.as_deref(), Some("call_xyz"));
+    }
+
+    #[test]
+    fn orphaned_tool_call_gets_backfilled_from_action_results() {
+        let tool = api::message::tool_call::Tool::ReadFiles(api::message::tool_call::ReadFiles {
+            files: vec![api::message::tool_call::read_files::File {
+                name: "Cargo.toml".into(),
+                line_ranges: vec![],
+            }],
+        });
+        let task = api::Task {
+            id: "t1".into(),
+            messages: vec![api::Message {
+                id: "m1".into(),
+                message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+                    tool_call_id: "call_real".into(),
+                    tool: Some(tool),
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let mut action_results = std::collections::HashMap::new();
+        action_results.insert("call_real".to_string(), "[package]\nname = \"foo\"".to_string());
+        let input = LocalProviderInput {
+            user_query: Some("what's in Cargo.toml?".into()),
+            tasks: vec![task],
+            supported_tools: vec![],
+            action_results,
+            ..Default::default()
+        };
+        let req = compose_chat_completion_request(&input, &cfg());
+        // system + assistant(tool_calls) + tool(result) + user
+        assert_eq!(req.messages.len(), 4);
+        let tool_msg = &req.messages[2];
+        assert!(matches!(tool_msg.role, Role::Tool));
+        assert_eq!(tool_msg.tool_call_id.as_deref(), Some("call_real"));
+        assert_eq!(tool_msg.content.as_deref(), Some("[package]\nname = \"foo\""));
     }
 
     #[test]

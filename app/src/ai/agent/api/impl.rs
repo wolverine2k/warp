@@ -206,7 +206,28 @@ async fn route_to_local_provider(
         .conversation_token
         .as_ref()
         .map(|token| token.as_str().to_string());
-    let task_id = tasks.last().map(|t| t.id.clone());
+    // Prefer the controller's root task id (always set for normal turns), falling
+    // back to the most recent task in `tasks` for paths that pre-populate it.
+    // `params.tasks` is empty for local-only conversations because
+    // `compute_active_tasks()` filters out optimistic tasks and no
+    // server-driven `Action::CreateTask` ever upgrades the root.
+    let task_id = params
+        .root_task_id
+        .clone()
+        .or_else(|| tasks.last().map(|t| t.id.clone()));
+
+    // Emit CreateTask only on the very first turn — when no server-created
+    // tasks exist yet (compute_active_tasks() returned empty). On subsequent
+    // turns the optimistic root has already been upgraded; emitting CreateTask
+    // again triggers UnexpectedUpgrade and corrupts the task store.
+    let needs_create_task = tasks.is_empty();
+
+    // Tool-call results never make it into `task.messages` for local-provider
+    // conversations — the controller carries them through `request.input` as
+    // `AIAgentInput::ActionResult` instead. Pull them out here so the request
+    // translator can pair each assistant `tool_calls` entry with a matching
+    // `role:"tool"` follower (OpenAI rejects with HTTP 400 otherwise).
+    let action_results = collect_action_results(&params.input);
 
     let input = local_provider::request::LocalProviderInput {
         user_query,
@@ -214,6 +235,8 @@ async fn route_to_local_provider(
         supported_tools,
         conversation_id,
         task_id,
+        needs_create_task,
+        action_results,
     };
 
     let http = reqwest::Client::new();
@@ -244,6 +267,24 @@ fn extract_latest_user_query(input: &[crate::ai::agent::AIAgentInput]) -> Option
         }
     }
     None
+}
+
+/// Build a `tool_call_id -> rendered_result` map from the request's
+/// `AIAgentInput::ActionResult` entries. The action id is the same string the
+/// model used as the `tool_call_id` when it issued the call, so the request
+/// translator can use this map to splice in the missing `role:"tool"` messages.
+fn collect_action_results(
+    input: &[crate::ai::agent::AIAgentInput],
+) -> std::collections::HashMap<String, String> {
+    input
+        .iter()
+        .filter_map(|entry| match entry {
+            crate::ai::agent::AIAgentInput::ActionResult { result, .. } => {
+                Some((result.id.to_string(), format!("{}", result.result)))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {

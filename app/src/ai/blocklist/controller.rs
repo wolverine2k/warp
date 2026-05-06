@@ -1953,6 +1953,7 @@ impl BlocklistAIController {
                     .cloned(),
                 ambient_agent_task_id: self.ambient_agent_task_id,
                 existing_suggestions: None,
+                root_task_id: Some(task_id.to_string()),
             };
             (conversation_id, task_id, conversation_data)
         } else if !matches!(
@@ -1969,6 +1970,7 @@ impl BlocklistAIController {
                 forked_from_conversation_token: None,
                 ambient_agent_task_id: self.ambient_agent_task_id,
                 existing_suggestions: None,
+                root_task_id: Some(task_id.to_string()),
             };
             (conversation_id, task_id, conversation_data)
         } else {
@@ -2137,6 +2139,7 @@ impl BlocklistAIController {
             active_tasks,
             parent_agent_id,
             agent_name,
+            root_task_id,
         ) = {
             let Some(conversation) = history_model
                 .as_ref(ctx)
@@ -2149,6 +2152,7 @@ impl BlocklistAIController {
             };
 
             let active_tasks = conversation.compute_active_tasks();
+            let root_task_id = conversation.get_root_task_id().to_string();
 
             (
                 conversation.id(),
@@ -2159,6 +2163,7 @@ impl BlocklistAIController {
                 active_tasks,
                 conversation.parent_agent_id().map(str::to_string),
                 conversation.agent_name().map(str::to_string),
+                root_task_id,
             )
         };
 
@@ -2206,6 +2211,7 @@ impl BlocklistAIController {
                 .as_ref(ctx)
                 .existing_suggestions_for_conversation(conversation_id)
                 .cloned(),
+            root_task_id: Some(root_task_id),
         };
 
         // Log an error if tool call results do not have corresponding tool calls in task context

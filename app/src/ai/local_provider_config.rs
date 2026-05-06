@@ -15,7 +15,9 @@ use ai::LLMId;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
 
-use crate::ai::llms::{LLMInfo, LLMModelHost, LLMProvider, LLMUsageMetadata, RoutingHostConfig};
+use crate::ai::llms::{
+    LLMContextWindow, LLMInfo, LLMModelHost, LLMProvider, LLMUsageMetadata, RoutingHostConfig,
+};
 use crate::settings::ai::AISettings;
 
 /// Snapshot the user's local provider config. Returns `None` when:
@@ -91,6 +93,7 @@ pub fn synthetic_llm_info(cfg: &LocalProviderConfig) -> LLMInfo {
         provider: LLMProvider::Unknown,
         host_configs,
         discount_percentage: None,
+        context_window: LLMContextWindow::default(),
     }
 }
 

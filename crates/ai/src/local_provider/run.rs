@@ -64,15 +64,39 @@ pub async fn run_chat_turn(
     // `UpdateConversationError::TaskNotFound`, and the user sees no output.
     // Falls back to fresh ids when the caller didn't provide any (test paths
     // that drive the adapter in isolation, where matching isn't required).
-    let adapter = match (input.conversation_id.as_deref(), input.task_id.as_deref()) {
-        (Some(conversation_id), Some(task_id)) => OpenAiSseAdapter::with_ids(
-            conversation_id.to_string(),
+    // The task_id is the load-bearing match — every emitted AddMessagesToTask
+    // and AppendToMessageContent carries it, and the controller looks each up
+    // in `task_store`. The conversation_id only appears in the synthetic Init
+    // event (informational). Use the controller's task_id whenever it's set,
+    // synthesizing a conversation_id when missing (true on the very first
+    // turn, before any server token is assigned).
+    let mut adapter = if let Some(task_id) = input.task_id.as_deref() {
+        // The task_id is the load-bearing match — every emitted
+        // AddMessagesToTask and AppendToMessageContent carries it, and the
+        // controller looks each up in `task_store`. The conversation_id only
+        // appears in the synthetic Init event (informational). Synthesize a
+        // conversation_id when missing (true on the very first turn, before
+        // any server token is assigned).
+        let conversation_id = input
+            .conversation_id
+            .clone()
+            .unwrap_or_else(|| format!("local:{}", uuid::Uuid::new_v4()));
+        OpenAiSseAdapter::with_ids(
+            conversation_id,
             uuid::Uuid::new_v4().to_string(),
             uuid::Uuid::new_v4().to_string(),
             task_id.to_string(),
-        ),
-        _ => OpenAiSseAdapter::new(),
+        )
+    } else {
+        // Test paths that drive the adapter in isolation without a
+        // controller-supplied task_id. The synthetic UUIDs won't match any
+        // task in a real `task_store`, so this branch is not used in
+        // production.
+        OpenAiSseAdapter::new()
     };
+    if !input.needs_create_task {
+        adapter.skip_create_task();
+    }
 
     let mut request_builder = http
         .post(url)

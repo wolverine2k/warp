@@ -62,6 +62,14 @@ pub struct OpenAiSseAdapter {
     sent_init: bool,
     /// Whether we've emitted BeginTransaction yet.
     sent_begin: bool,
+    /// Whether we've emitted CreateTask yet. Local-only conversations need
+    /// the synthetic adapter to "initialize" the optimistic root task by
+    /// emitting `Action::CreateTask` (with the same id the controller already
+    /// has in `task_store`) — otherwise `AddMessagesToTask` returns
+    /// `UpdateTask(TaskNotInitialized)` and the entire transaction rolls back.
+    /// Server-driven responses get this for free; the local adapter has to
+    /// synthesize it.
+    sent_create_task: bool,
     /// Whether the in-progress assistant text message has been opened with AddMessagesToTask.
     text_message_id: Option<String>,
     /// Same for the in-progress reasoning message.
@@ -126,6 +134,7 @@ impl OpenAiSseAdapter {
             upstream_error: None,
             sent_init: false,
             sent_begin: false,
+            sent_create_task: false,
             text_message_id: None,
             reasoning_message_id: None,
             tool_buffers: HashMap::new(),
@@ -135,6 +144,15 @@ impl OpenAiSseAdapter {
 
     pub fn task_id(&self) -> &str {
         &self.task_id
+    }
+
+    /// Suppress the synthetic `CreateTask` emission. Used by the HTTP runner
+    /// on every turn after the first — the optimistic root task has already
+    /// been upgraded to a server-created task by the previous turn's
+    /// `CreateTask`, so re-emitting one would error with
+    /// `UpgradeOptimisticTask::UnexpectedUpgrade` and corrupt the task store.
+    pub fn skip_create_task(&mut self) {
+        self.sent_create_task = true;
     }
 
     pub fn conversation_id(&self) -> &str {
@@ -175,6 +193,10 @@ impl OpenAiSseAdapter {
         if !self.sent_begin {
             out.extend(self.build_action(client_action_begin()));
             self.sent_begin = true;
+        }
+        if !self.sent_create_task {
+            out.extend(self.build_action(client_action_create_task(&self.task_id)));
+            self.sent_create_task = true;
         }
 
         let chunk: ChatCompletionChunk = match serde_json::from_str(trimmed) {
@@ -263,6 +285,10 @@ impl OpenAiSseAdapter {
         if !self.sent_begin {
             out.extend(self.build_action(client_action_begin()));
             self.sent_begin = true;
+        }
+        if !self.sent_create_task {
+            out.extend(self.build_action(client_action_create_task(&self.task_id)));
+            self.sent_create_task = true;
         }
 
         let healthy = matches!(self.state, State::Done) && self.captured_finish.is_some();
@@ -515,6 +541,15 @@ fn build_tool_call_event(task_id: &str, buf: &ToolBuffer) -> Option<api::Respons
 
 fn client_action_begin() -> api::client_action::Action {
     api::client_action::Action::BeginTransaction(api::client_action::BeginTransaction {})
+}
+
+fn client_action_create_task(task_id: &str) -> api::client_action::Action {
+    api::client_action::Action::CreateTask(api::client_action::CreateTask {
+        task: Some(api::Task {
+            id: task_id.to_string(),
+            ..Default::default()
+        }),
+    })
 }
 
 fn client_action_commit() -> api::client_action::Action {

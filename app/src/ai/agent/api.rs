@@ -136,6 +136,10 @@ pub struct RequestParams {
     /// this to route a `local:*` model id directly to the user's endpoint instead
     /// of through warp.dev. See `specs/GH9303/`.
     pub local_provider_config: Option<ai::local_provider::LocalProviderConfig>,
+    /// See `ConversationData::root_task_id`. Carried through `RequestParams::new`
+    /// from the controller so `route_to_local_provider` can populate
+    /// `LocalProviderInput.task_id` with an id that exists in the controller.
+    pub root_task_id: Option<String>,
 }
 
 pub type Event = Result<warp_multi_agent_api::ResponseEvent, Arc<AIApiError>>;
@@ -157,6 +161,14 @@ pub struct ConversationData {
     pub forked_from_conversation_token: Option<ServerConversationToken>,
     pub ambient_agent_task_id: Option<AmbientAgentTaskId>,
     pub existing_suggestions: Option<Suggestions>,
+    /// Stringified id of the conversation's root task. Plumbed through to the
+    /// local-provider dispatch so the synthetic SSE adapter emits events with a
+    /// task_id the controller's `task_store` actually contains. Without this,
+    /// `compute_active_tasks()` returns an empty Vec for local-only
+    /// conversations (the root task stays "optimistic" because no
+    /// server-driven `Action::CreateTask` ever arrives), and every emitted
+    /// `AddMessagesToTask` is dropped with `TaskNotFound`.
+    pub root_task_id: Option<String>,
 }
 
 impl RequestParams {
@@ -339,6 +351,7 @@ impl RequestParams {
             parent_agent_id: None,
             agent_name: None,
             local_provider_config: crate::ai::local_provider_config::snapshot_from_app(app),
+            root_task_id: conversation.root_task_id,
         }
     }
 }
