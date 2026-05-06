@@ -158,14 +158,36 @@ impl TaskStatusSyncModel {
             // backend, so the server has no `agent_tasks` row to update.
             // Without this guard every status change emits a noisy
             // "failed to load AI task owner: Not found" error from the
-            // GraphQL response. `server_conversation_token` is the cleanest
-            // signal because warp.dev assigns it only after a server-side
-            // response, which the local provider never produces.
-            // Server-routed conversations that haven't received their token
-            // yet are caught up by the
-            // `BlocklistAIHistoryEvent::ConversationServerTokenAssigned`
-            // re-sync handler below.
-            if conversation.server_conversation_token().is_none() {
+            // GraphQL response.
+            //
+            // Two complementary signals — either is sufficient for "skip":
+            //
+            // 1. No `server_conversation_token` yet. warp.dev assigns it only
+            //    after a server-side response, which the local provider
+            //    never produces. Server-routed conversations that haven't
+            //    received their token yet are still caught up by the
+            //    `BlocklistAIHistoryEvent::ConversationServerTokenAssigned`
+            //    re-sync handler below.
+            //
+            // 2. The conversation has accumulated `token_usage` entries for
+            //    the user's currently-configured local model (or for the
+            //    SSE-fallback `"local"` model id used when the upstream
+            //    omits the field). This catches conversations that started
+            //    on warp.dev (have a stale `server_conversation_token`) but
+            //    have since switched to the local provider.
+            let has_no_server_token = conversation.server_conversation_token().is_none();
+            let local_cfg =
+                crate::ai::local_provider_config::snapshot_from_app(ctx);
+            let used_local_model = local_cfg
+                .as_ref()
+                .map(|cfg| {
+                    conversation
+                        .token_usage()
+                        .iter()
+                        .any(|u| u.model_id == cfg.model_id || u.model_id == "local")
+                })
+                .unwrap_or(false);
+            if has_no_server_token || used_local_model {
                 return;
             }
             let Some(task_id) = conversation.task_id() else {
