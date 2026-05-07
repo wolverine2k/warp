@@ -516,9 +516,7 @@ impl AIConversation {
     }
 
     #[allow(dead_code)] // Phase B-3 commit pipeline mutates this; for now read-only.
-    pub fn compaction_state_mut(
-        &mut self,
-    ) -> &mut ai::local_provider::compaction::CompactionState {
+    pub fn compaction_state_mut(&mut self) -> &mut ai::local_provider::compaction::CompactionState {
         &mut self.compaction_state
     }
 
@@ -958,6 +956,84 @@ impl AIConversation {
             .filter(|task| active_task_ids.contains(task.id.as_str()))
             .cloned()
             .collect()
+    }
+
+    /// Phase B-6: snapshot of per-conversation history the local-provider
+    /// dispatch fork needs to reconstruct the multi-turn agent loop.
+    ///
+    /// For each exchange in this conversation we walk
+    /// `AIAgentExchange::input` and produce two pieces:
+    ///
+    /// 1. `(anchor_id, query)` for any `AIAgentInput::UserQuery`: the
+    ///    anchor is the first task-message id added by this exchange (so
+    ///    the translator can interleave a `role:"user"` message before
+    ///    that anchor during history rendering). Exchanges with no output
+    ///    yet (the in-progress turn) are skipped — the current user query
+    ///    is still passed via `LocalProviderInput.user_query` and appended
+    ///    at the end of the messages list.
+    ///
+    /// 2. A `tool_call_id -> rendered_string` entry for any
+    ///    `AIAgentInput::ActionResult`: the action result's `Display`
+    ///    impl produces the same string `summarize_tool_result` would,
+    ///    and the local-provider request translator's
+    ///    `backfill_orphaned_tool_calls` looks the id up to populate
+    ///    `role:"tool"` content.
+    ///
+    /// Cheap to compute (one pass over exchanges + one pass per exchange
+    /// over its message ids), and called only when assembling
+    /// `RequestParams` for a turn — not in any hot rendering path.
+    pub fn compute_local_provider_history(&self) -> super::api::LocalProviderHistory {
+        let mut user_queries: Vec<(String, String)> = Vec::new();
+        let mut action_results: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
+        // Pre-collect proto-message ids per task in insertion order, so the
+        // per-exchange anchor lookup below stays O(messages) and doesn't
+        // re-walk the world for every exchange. The proto Message id is a
+        // String (from the wire); we wrap each in [`MessageId`] only when
+        // we need to test set membership against `added_message_ids`.
+        let ordered_message_ids: Vec<&str> = self
+            .all_tasks()
+            .flat_map(|task| task.messages().map(|m| m.id.as_str()))
+            .collect();
+
+        for exchange in self.all_exchanges() {
+            // Collect contributions from this exchange's input.
+            let mut exchange_user_query: Option<String> = None;
+            for input in &exchange.input {
+                match input {
+                    super::AIAgentInput::UserQuery { query, .. } => {
+                        if exchange_user_query.is_none() {
+                            exchange_user_query = Some(query.clone());
+                        }
+                    }
+                    super::AIAgentInput::ActionResult { result, .. } => {
+                        action_results.insert(result.id.to_string(), format!("{}", result.result));
+                    }
+                    _ => {}
+                }
+            }
+
+            if let Some(query) = exchange_user_query {
+                // Find the anchor: walk task.messages in order and find
+                // the first id that's in this exchange's added_message_ids.
+                // Skip exchanges with no output yet — those go through the
+                // ephemeral `LocalProviderInput.user_query` field instead.
+                let anchor = ordered_message_ids.iter().copied().find(|id| {
+                    exchange
+                        .added_message_ids
+                        .contains(&MessageId::new((*id).to_string()))
+                });
+                if let Some(anchor_id) = anchor {
+                    user_queries.push((anchor_id.to_string(), query));
+                }
+            }
+        }
+
+        super::api::LocalProviderHistory {
+            user_queries,
+            action_results,
+        }
     }
 
     /// Returns the titles from the CreateDocuments request corresponding to the given action ID (if any).

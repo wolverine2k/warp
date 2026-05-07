@@ -326,7 +326,7 @@ const DEBUG_RESPONSE_PATH: &str = "/tmp/warp-local-provider-last-response.log";
 fn debug_dump_enabled() -> bool {
     std::env::var(DEBUG_DUMP_ENV)
         .ok()
-        .map(|v| !v.is_empty() && v != "0" && v.to_ascii_lowercase() != "false")
+        .map(|v| !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false"))
         .unwrap_or(false)
 }
 

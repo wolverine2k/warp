@@ -6772,9 +6772,7 @@ impl LocalProviderWidget {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .local_provider_base_url
-                        .set_value(buffer_text, ctx));
+                    report_if_error!(settings.local_provider_base_url.set_value(buffer_text, ctx));
                 });
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
                     prefs.refresh_local_provider_entry(ctx);
@@ -6792,9 +6790,7 @@ impl LocalProviderWidget {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .local_provider_model_id
-                        .set_value(buffer_text, ctx));
+                    report_if_error!(settings.local_provider_model_id.set_value(buffer_text, ctx));
                 });
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
                     prefs.refresh_local_provider_entry(ctx);

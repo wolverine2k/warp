@@ -148,6 +148,10 @@ pub struct RequestParams {
     /// from `AIConversation::compaction_state` at request build time so the
     /// dispatch fork can hand it to the request translator.
     pub local_provider_compaction_state: ai::local_provider::compaction::CompactionState,
+    /// Phase B-6: per-conversation history snapshot (user queries + all
+    /// historical action results) so the local-provider dispatch fork can
+    /// reconstruct the multi-turn agent loop. See [`LocalProviderHistory`].
+    pub local_provider_history: LocalProviderHistory,
 }
 
 pub type Event = Result<warp_multi_agent_api::ResponseEvent, Arc<AIApiError>>;
@@ -160,6 +164,39 @@ pub type ResponseStream = Pin<Box<dyn Stream<Item = Event> + Send + 'static>>;
 // execution in WoW).
 #[cfg(target_family = "wasm")]
 pub type ResponseStream = Pin<Box<dyn Stream<Item = Event>>>;
+
+/// Phase B-6: per-conversation history snapshot used by the local-provider
+/// dispatch fork to reconstruct the multi-turn agent loop. For warp.dev
+/// conversations the server echoes `Message::UserQuery` and
+/// `Message::ToolCallResult` back into `task.messages`, so the model's view
+/// of history is complete by reading task messages alone. The local
+/// provider has no equivalent server echo — user queries live only on
+/// `AIAgentExchange::input` and tool results live only in
+/// `BlocklistAIActionModel::finished_action_results` (drained per-turn into
+/// `RequestInput`). Without re-injecting them, every follow-up turn looks
+/// like a sequence of unprompted assistant outputs followed by orphan tool
+/// calls. This struct surfaces the missing pieces in a shape the
+/// translator can interleave back into the OpenAI request body.
+///
+/// Empty default = warp.dev / legacy paths (no behavior change).
+#[derive(Debug, Clone, Default)]
+pub struct LocalProviderHistory {
+    /// `(anchor_message_id, user_query_text)` pairs in chronological order.
+    /// The anchor is the *first* task-message id of the exchange whose
+    /// `input` contained the user query — the translator emits a
+    /// `role:"user"` message immediately before that anchor, restoring the
+    /// `[user, assistant, ...]` ordering the model expects. Exchanges with
+    /// no output messages (e.g. a still-streaming current turn) are
+    /// excluded; the current turn's user query is appended at the end via
+    /// `LocalProviderInput.user_query` instead.
+    pub user_queries: Vec<(String, String)>,
+    /// `tool_call_id -> rendered_result` covering every action result the
+    /// controller has produced for this conversation, not just the most
+    /// recent turn. Used by `backfill_orphaned_tool_calls` so older
+    /// `role:"tool"` messages stop reverting to the
+    /// `"(tool result not available)"` placeholder.
+    pub action_results: std::collections::HashMap<String, String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct ConversationData {
@@ -180,6 +217,10 @@ pub struct ConversationData {
     /// Compaction sidecar snapshot (Phase B-2). Cloned from
     /// `AIConversation::compaction_state` at the call site.
     pub compaction_state: ai::local_provider::compaction::CompactionState,
+    /// Phase B-6 multi-turn-loop history snapshot for the local-provider
+    /// path. Empty default for warp.dev / paths that don't bother
+    /// populating it.
+    pub local_provider_history: LocalProviderHistory,
 }
 
 impl RequestParams {
@@ -366,6 +407,7 @@ impl RequestParams {
             local_provider_compaction_config:
                 crate::ai::local_provider_config::compaction_config_from_app(app),
             local_provider_compaction_state: conversation.compaction_state,
+            local_provider_history: conversation.local_provider_history,
         }
     }
 }

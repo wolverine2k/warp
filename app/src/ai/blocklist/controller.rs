@@ -1955,6 +1955,7 @@ impl BlocklistAIController {
                 existing_suggestions: None,
                 root_task_id: Some(task_id.to_string()),
                 compaction_state: conversation.compaction_state().clone(),
+                local_provider_history: conversation.compute_local_provider_history(),
             };
             (conversation_id, task_id, conversation_data)
         } else if !matches!(
@@ -1972,8 +1973,8 @@ impl BlocklistAIController {
                 ambient_agent_task_id: self.ambient_agent_task_id,
                 existing_suggestions: None,
                 root_task_id: Some(task_id.to_string()),
-                compaction_state:
-                    ai::local_provider::compaction::CompactionState::default(),
+                compaction_state: ai::local_provider::compaction::CompactionState::default(),
+                local_provider_history: api::LocalProviderHistory::default(),
             };
             (conversation_id, task_id, conversation_data)
         } else {
@@ -2144,6 +2145,7 @@ impl BlocklistAIController {
             agent_name,
             root_task_id,
             compaction_state,
+            local_provider_history,
         ) = {
             let Some(conversation) = history_model
                 .as_ref(ctx)
@@ -2158,6 +2160,11 @@ impl BlocklistAIController {
             let active_tasks = conversation.compute_active_tasks();
             let root_task_id = conversation.get_root_task_id().to_string();
             let compaction_state = conversation.compaction_state().clone();
+            // Phase B-6: walk exchanges *now* (before the borrow ends) so
+            // we can hand the snapshot off to `ConversationData`. Cheap —
+            // O(exchanges) plus a per-exchange linear scan of the proto
+            // task message ids to find each anchor.
+            let local_provider_history = conversation.compute_local_provider_history();
 
             (
                 conversation.id(),
@@ -2170,6 +2177,7 @@ impl BlocklistAIController {
                 conversation.agent_name().map(str::to_string),
                 root_task_id,
                 compaction_state,
+                local_provider_history,
             )
         };
 
@@ -2219,6 +2227,7 @@ impl BlocklistAIController {
                 .cloned(),
             root_task_id: Some(root_task_id),
             compaction_state,
+            local_provider_history,
         };
 
         // Log an error if tool call results do not have corresponding tool calls in task context

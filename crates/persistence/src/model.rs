@@ -1426,8 +1426,7 @@ mod tests {
             compaction_state_json: Some(r#"{"version":1}"#.to_string()),
         };
         let json = serde_json::to_string(&data).expect("serialize");
-        let roundtripped: AgentConversationData =
-            serde_json::from_str(&json).expect("deserialize");
+        let roundtripped: AgentConversationData = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(
             roundtripped.compaction_state_json.as_deref(),
             Some(r#"{"version":1}"#)

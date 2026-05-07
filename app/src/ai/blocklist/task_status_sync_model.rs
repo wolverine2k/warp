@@ -176,8 +176,7 @@ impl TaskStatusSyncModel {
             //    on warp.dev (have a stale `server_conversation_token`) but
             //    have since switched to the local provider.
             let has_no_server_token = conversation.server_conversation_token().is_none();
-            let local_cfg =
-                crate::ai::local_provider_config::snapshot_from_app(ctx);
+            let local_cfg = crate::ai::local_provider_config::snapshot_from_app(ctx);
             let used_local_model = local_cfg
                 .as_ref()
                 .map(|cfg| {

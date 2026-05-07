@@ -578,8 +578,7 @@ impl ServerApi {
                 // Detect the pattern here and downgrade to DEBUG so the
                 // error path is still observable without flooding
                 // stderr / log files.
-                let is_local_provider_task_sync_noise = operation_name
-                    .as_deref()
+                let is_local_provider_task_sync_noise = operation_name.as_deref()
                     == Some("UpdateAgentTask")
                     && errors.iter().any(|error| {
                         error.message.contains("task owner")

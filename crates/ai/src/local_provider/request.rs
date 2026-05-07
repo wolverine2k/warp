@@ -63,7 +63,23 @@ pub struct LocalProviderInput {
     /// request body would carry an assistant `tool_calls` message with no
     /// matching `role:"tool"` follow-up, and the upstream rejects with
     /// HTTP 400 ("tool_calls must be followed by tool messages").
+    ///
+    /// Phase B-6: this map now includes results from ALL prior exchanges
+    /// (not just the current turn), so multi-turn agent loops don't lose
+    /// historical tool output to the placeholder backfill.
     pub action_results: std::collections::HashMap<String, String>,
+    /// Phase B-6: synthetic user-query injections, paired with anchor
+    /// task-message ids. For local-provider conversations the warp.dev
+    /// server isn't around to echo `Message::UserQuery` back into
+    /// `task.messages`, so each historical user query is anchored to the
+    /// first task-message id of its exchange. The translator emits a
+    /// `role:"user"` message immediately *before* the message with that id
+    /// during history rendering, restoring the user-then-assistant turn
+    /// order the model needs to see.
+    ///
+    /// Empty `Vec` is the no-op default (warp.dev path / legacy local-only
+    /// tests).
+    pub synthetic_user_queries: Vec<(String, String)>,
     /// Phase A compaction config (defaults to `prune=true`,
     /// `tail_turns=DEFAULT_TAIL_TURNS`). Phase B-1 populates this from
     /// `AISettings.local_provider_compaction_*` at request build time.
@@ -136,6 +152,18 @@ pub fn compose_chat_completion_request(
         },
     };
 
+    // Phase B-6: pre-index synthetic user queries by anchor message id so
+    // we can inject them before the right task message in the rendering
+    // loop below. Each entry's anchor is the FIRST task-message id of an
+    // exchange whose `input` contained a `Message::UserQuery`-equivalent
+    // (`AIAgentInput::UserQuery`). The map is consumed during rendering
+    // — once an anchor matches, that user query is emitted exactly once.
+    let synthetic_user_query_by_anchor: std::collections::HashMap<&str, &str> = input
+        .synthetic_user_queries
+        .iter()
+        .map(|(anchor_id, query)| (anchor_id.as_str(), query.as_str()))
+        .collect();
+
     for task in &input.tasks {
         for proto_msg in &task.messages {
             match &mode {
@@ -148,6 +176,18 @@ pub fn compose_chat_completion_request(
                         continue;
                     }
                 }
+            }
+            // Phase B-6: emit the historical user query before its anchor
+            // message so the model sees `[user, assistant, ...]` rather
+            // than a sequence of unprompted assistant outputs.
+            if let Some(query) = synthetic_user_query_by_anchor.get(proto_msg.id.as_str()) {
+                messages.push(ChatMessage {
+                    role: Role::User,
+                    content: Some((*query).to_string()),
+                    tool_calls: None,
+                    tool_call_id: None,
+                    name: None,
+                });
             }
             push_history_messages(&mut messages, proto_msg);
         }
@@ -1155,5 +1195,245 @@ mod tests {
         let req = compose_chat_completion_request(&input, &cfg());
         assert_eq!(req.messages.len(), 2);
         assert_eq!(req.messages[1].content.as_deref(), Some("hi"));
+    }
+
+    // ---- Phase B-6 multi-turn agent loop ----
+
+    #[test]
+    fn synthetic_user_query_is_injected_before_anchor_message() {
+        // The local-provider path doesn't have a server echoing
+        // `Message::UserQuery` back into `task.messages`. The controller
+        // surfaces historical user queries as `(anchor_id, query)` pairs;
+        // the translator emits `role:"user"` immediately before the
+        // anchor's task message during history rendering.
+        let task = api::Task {
+            id: "t1".into(),
+            messages: vec![
+                agent_msg("a_old", "first answer"),
+                agent_msg("a_new", "second answer"),
+            ],
+            ..Default::default()
+        };
+        let input = LocalProviderInput {
+            tasks: vec![task],
+            // Anchor "a_old" -> "what is X?", anchor "a_new" -> "and Y?"
+            synthetic_user_queries: vec![
+                ("a_old".into(), "what is X?".into()),
+                ("a_new".into(), "and Y?".into()),
+            ],
+            ..Default::default()
+        };
+        let req = compose_chat_completion_request(&input, &cfg());
+        // [system, user("what is X?"), assistant("first answer"),
+        //  user("and Y?"), assistant("second answer")]
+        assert_eq!(req.messages.len(), 5);
+        assert!(matches!(req.messages[0].role, Role::System));
+        assert!(matches!(req.messages[1].role, Role::User));
+        assert_eq!(req.messages[1].content.as_deref(), Some("what is X?"));
+        assert!(matches!(req.messages[2].role, Role::Assistant));
+        assert_eq!(req.messages[2].content.as_deref(), Some("first answer"));
+        assert!(matches!(req.messages[3].role, Role::User));
+        assert_eq!(req.messages[3].content.as_deref(), Some("and Y?"));
+        assert!(matches!(req.messages[4].role, Role::Assistant));
+        assert_eq!(req.messages[4].content.as_deref(), Some("second answer"));
+    }
+
+    #[test]
+    fn synthetic_user_query_with_unmatched_anchor_is_dropped_silently() {
+        // Defensive: if the anchor id no longer exists in task.messages
+        // (e.g. compaction dropped it), we silently skip emitting the
+        // synthetic user message rather than appending it at an arbitrary
+        // position. Anchored injection is a hint, not a hard guarantee —
+        // the translator must stay correct even when the anchor is gone.
+        let task = api::Task {
+            id: "t1".into(),
+            messages: vec![agent_msg("a1", "answer")],
+            ..Default::default()
+        };
+        let input = LocalProviderInput {
+            tasks: vec![task],
+            synthetic_user_queries: vec![("missing".into(), "ghost".into())],
+            ..Default::default()
+        };
+        let req = compose_chat_completion_request(&input, &cfg());
+        // [system, assistant("answer")] — no ghost user message.
+        assert_eq!(req.messages.len(), 2);
+        assert!(matches!(req.messages[0].role, Role::System));
+        assert!(matches!(req.messages[1].role, Role::Assistant));
+        assert_eq!(req.messages[1].content.as_deref(), Some("answer"));
+    }
+
+    #[test]
+    fn historical_action_results_resolve_orphan_tool_calls_across_turns() {
+        // Simulates a multi-turn agent loop: turn 1 produced a tool call
+        // (whose result lives in `action_results`), turn 2 produced
+        // another tool call (whose result is also in `action_results`),
+        // and turn 3 is the current user query. The translator must pair
+        // each historical assistant `tool_calls` entry with its real
+        // `role:"tool"` follower instead of the
+        // `"(tool result not available)"` placeholder.
+        let tool_1 = api::message::tool_call::Tool::ReadFiles(api::message::tool_call::ReadFiles {
+            files: vec![api::message::tool_call::read_files::File {
+                name: "Cargo.toml".into(),
+                line_ranges: vec![],
+            }],
+        });
+        let tool_2 = api::message::tool_call::Tool::Grep(api::message::tool_call::Grep {
+            queries: vec!["fn main".into()],
+            path: ".".into(),
+        });
+        let task = api::Task {
+            id: "t1".into(),
+            messages: vec![
+                api::Message {
+                    id: "m_call_1".into(),
+                    message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+                        tool_call_id: "call_alpha".into(),
+                        tool: Some(tool_1),
+                    })),
+                    ..Default::default()
+                },
+                api::Message {
+                    id: "m_call_2".into(),
+                    message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+                        tool_call_id: "call_beta".into(),
+                        tool: Some(tool_2),
+                    })),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mut action_results = std::collections::HashMap::new();
+        action_results.insert("call_alpha".into(), "[package]\nname = \"foo\"".into());
+        action_results.insert("call_beta".into(), "src/main.rs: lines 1\n".into());
+
+        let input = LocalProviderInput {
+            user_query: Some("now what?".into()),
+            tasks: vec![task],
+            supported_tools: vec![api::ToolType::ReadFiles, api::ToolType::Grep],
+            action_results,
+            ..Default::default()
+        };
+        let req = compose_chat_completion_request(&input, &cfg());
+
+        // [system, assistant(tool_calls call_alpha), tool(real result for alpha),
+        //  assistant(tool_calls call_beta), tool(real result for beta),
+        //  user("now what?")]
+        assert_eq!(req.messages.len(), 6, "{:#?}", req.messages);
+        assert!(matches!(req.messages[1].role, Role::Assistant));
+        assert!(matches!(req.messages[2].role, Role::Tool));
+        assert_eq!(req.messages[2].tool_call_id.as_deref(), Some("call_alpha"));
+        assert_eq!(
+            req.messages[2].content.as_deref(),
+            Some("[package]\nname = \"foo\"")
+        );
+        assert!(matches!(req.messages[3].role, Role::Assistant));
+        assert!(matches!(req.messages[4].role, Role::Tool));
+        assert_eq!(req.messages[4].tool_call_id.as_deref(), Some("call_beta"));
+        // No placeholder anywhere.
+        for m in &req.messages {
+            assert_ne!(
+                m.content.as_deref(),
+                Some("(tool result not available)"),
+                "placeholder leaked: {:?}",
+                m
+            );
+        }
+        assert!(matches!(req.messages[5].role, Role::User));
+        assert_eq!(req.messages[5].content.as_deref(), Some("now what?"));
+    }
+
+    #[test]
+    fn full_multi_turn_loop_round_trip() {
+        // End-to-end shape of a 3-turn local-provider conversation:
+        //
+        //   Turn 1 — user asks "read Cargo.toml"
+        //     assistant emits tool_call call_alpha (ReadFiles)
+        //   Turn 2 — controller threads call_alpha's result back
+        //     assistant emits tool_call call_beta (Grep)
+        //   Turn 3 — controller threads call_beta's result back; new
+        //     user query "summarize"
+        //
+        // The captured-bug scenario from `phase-b-6-multi-turn-agent-loop.md`:
+        // 0 user messages, all tool messages "(tool result not available)".
+        // After Phase B-6 the request body must contain BOTH historical
+        // user messages (anchored) plus the current one, and BOTH tool
+        // results' real content.
+        let tool_1 = api::message::tool_call::Tool::ReadFiles(api::message::tool_call::ReadFiles {
+            files: vec![api::message::tool_call::read_files::File {
+                name: "Cargo.toml".into(),
+                line_ranges: vec![],
+            }],
+        });
+        let tool_2 = api::message::tool_call::Tool::Grep(api::message::tool_call::Grep {
+            queries: vec!["fn main".into()],
+            path: ".".into(),
+        });
+        let task = api::Task {
+            id: "t1".into(),
+            messages: vec![
+                api::Message {
+                    id: "m_t1_call".into(),
+                    message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+                        tool_call_id: "call_alpha".into(),
+                        tool: Some(tool_1),
+                    })),
+                    ..Default::default()
+                },
+                api::Message {
+                    id: "m_t2_call".into(),
+                    message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+                        tool_call_id: "call_beta".into(),
+                        tool: Some(tool_2),
+                    })),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mut action_results = std::collections::HashMap::new();
+        action_results.insert("call_alpha".into(), "Cargo.toml body".into());
+        action_results.insert("call_beta".into(), "src/main.rs hits".into());
+
+        let input = LocalProviderInput {
+            user_query: Some("summarize".into()),
+            tasks: vec![task],
+            supported_tools: vec![api::ToolType::ReadFiles, api::ToolType::Grep],
+            action_results,
+            // Turn-1 user query is anchored to the first task message
+            // ("m_t1_call"). Turn-2 had no fresh user query (auto follow-
+            // up from action result).
+            synthetic_user_queries: vec![("m_t1_call".into(), "read Cargo.toml".into())],
+            ..Default::default()
+        };
+        let req = compose_chat_completion_request(&input, &cfg());
+
+        // Expected (in order):
+        //   0: system
+        //   1: user "read Cargo.toml"
+        //   2: assistant tool_calls call_alpha
+        //   3: tool call_alpha "Cargo.toml body"
+        //   4: assistant tool_calls call_beta
+        //   5: tool call_beta "src/main.rs hits"
+        //   6: user "summarize"
+        assert_eq!(req.messages.len(), 7);
+        assert!(matches!(req.messages[0].role, Role::System));
+        assert!(matches!(req.messages[1].role, Role::User));
+        assert_eq!(req.messages[1].content.as_deref(), Some("read Cargo.toml"));
+        assert!(matches!(req.messages[2].role, Role::Assistant));
+        assert!(matches!(req.messages[3].role, Role::Tool));
+        assert_eq!(req.messages[3].content.as_deref(), Some("Cargo.toml body"));
+        assert!(matches!(req.messages[4].role, Role::Assistant));
+        assert!(matches!(req.messages[5].role, Role::Tool));
+        assert_eq!(req.messages[5].content.as_deref(), Some("src/main.rs hits"));
+        assert!(matches!(req.messages[6].role, Role::User));
+        assert_eq!(req.messages[6].content.as_deref(), Some("summarize"));
+
+        // Tools advertised non-null on every multi-turn body.
+        let tools = req.tools.expect("tools should be advertised");
+        assert!(!tools.is_empty());
     }
 }

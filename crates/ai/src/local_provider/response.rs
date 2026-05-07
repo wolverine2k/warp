@@ -383,7 +383,6 @@ impl OpenAiSseAdapter {
         out
     }
 
-
     // ---------- internals ----------
 
     fn build_init(&self) -> api::ResponseEvent {

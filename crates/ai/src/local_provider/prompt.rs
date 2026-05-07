@@ -84,7 +84,10 @@ mod tests {
     #[test]
     fn lists_supplied_tools() {
         let p = compose_system_prompt(
-            &["read_files: read text files from disk", "grep: search files for a regex"],
+            &[
+                "read_files: read text files from disk",
+                "grep: search files for a regex",
+            ],
             None,
             false,
         );

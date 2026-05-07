@@ -116,7 +116,9 @@ pub fn compaction_config_from_app(
         (n > 0).then_some(n as usize)
     };
     let tail_turns_raw = s.local_provider_compaction_tail_turns.to_string();
-    let preserve_raw = s.local_provider_compaction_preserve_recent_tokens.to_string();
+    let preserve_raw = s
+        .local_provider_compaction_preserve_recent_tokens
+        .to_string();
     let reserved_raw = s.local_provider_compaction_reserved.to_string();
     CompactionConfig {
         auto: *s.local_provider_compaction_auto,

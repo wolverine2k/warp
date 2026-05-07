@@ -791,7 +791,9 @@ async fn spawn_capture_chat_mock() -> (String, std::sync::Arc<tokio::sync::Mutex
                     let headers = &acc[..pos];
                     if let Ok(headers_str) = std::str::from_utf8(headers) {
                         for line in headers_str.split("\r\n") {
-                            if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                            if let Some(rest) =
+                                line.to_ascii_lowercase().strip_prefix("content-length:")
+                            {
                                 if let Ok(len) = rest.trim().parse::<usize>() {
                                     content_length = Some(len);
                                 }
@@ -1136,5 +1138,142 @@ async fn next_turn_after_compaction_drops_pre_compaction_history() {
     assert!(
         request_str.contains("post-compaction question"),
         "post-compaction tail should be preserved, got:\n{request_str}"
+    );
+}
+
+// ---------- Phase B-6 multi-turn agent loop ----------
+
+#[tokio::test]
+async fn multi_turn_request_carries_user_query_and_real_tool_results() {
+    // Reproduces the captured-bug scenario from
+    // `specs/GH9303/phase-b-6-multi-turn-agent-loop.md`: on follow-up
+    // turns the model would see no user messages and every tool message
+    // as `"(tool result not available)"`. After Phase B-6 the controller
+    // hands the local-provider routing the per-conversation history
+    // snapshot, and the request body must carry:
+    //   1. The historical user query as a `role:"user"` message anchored
+    //      to its exchange's first task message.
+    //   2. The historical action result as a `role:"tool"` message with
+    //      its real content (not the placeholder).
+    //   3. A non-null `tools` array.
+    init_crypto_provider();
+
+    // Synthesize a "turn 1 already happened" task: the assistant emitted
+    // a tool_call (`call_alpha` for ReadFiles), and this lives in
+    // task.messages because the SSE adapter wrote it via
+    // AddMessagesToTask. The user query and tool result, however, are
+    // NOT in task.messages — they were on the exchange's `input` field
+    // (UserQuery on turn 1, ActionResult on the auto-follow-up turn).
+    let tool = api::message::tool_call::Tool::ReadFiles(api::message::tool_call::ReadFiles {
+        files: vec![api::message::tool_call::read_files::File {
+            name: "Cargo.toml".into(),
+            line_ranges: vec![],
+        }],
+    });
+    let task = api::Task {
+        id: "t1".into(),
+        messages: vec![api::Message {
+            id: "m_call_alpha".into(),
+            message: Some(api::message::Message::ToolCall(api::message::ToolCall {
+                tool_call_id: "call_alpha".into(),
+                tool: Some(tool),
+            })),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let mut action_results = std::collections::HashMap::new();
+    action_results.insert(
+        "call_alpha".into(),
+        "[package]\nname = \"phase-b-6\"".into(),
+    );
+
+    // Capture-style mock server (same shape as the api-key /
+    // post-compaction tests). Reads the request body, ACKs with a tiny
+    // SSE response, closes.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let url = format!("http://127.0.0.1:{port}/v1");
+    let captured = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<u8>::new()));
+    let captured_for_task = captured.clone();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buf = vec![0u8; 16 * 1024];
+        let mut acc = Vec::new();
+        loop {
+            let n = match socket.read(&mut buf).await {
+                Ok(0) | Err(_) => break,
+                Ok(n) => n,
+            };
+            acc.extend_from_slice(&buf[..n]);
+            if acc.windows(4).any(|w| w == b"\r\n\r\n") {
+                let _ = tokio::time::timeout(Duration::from_millis(50), socket.read(&mut buf))
+                    .await
+                    .ok()
+                    .and_then(|res| res.ok())
+                    .map(|n| acc.extend_from_slice(&buf[..n]));
+                break;
+            }
+        }
+        *captured_for_task.lock().await = acc;
+        let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n";
+        let _ = socket.write_all(header.as_bytes()).await;
+        let _ = socket
+            .write_all(
+                b"data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+            )
+            .await;
+        let _ = socket.write_all(b"data: [DONE]\n\n").await;
+        let _ = socket.shutdown().await;
+    });
+
+    let input = LocalProviderInput {
+        // Current turn: a fresh user query is what the controller would
+        // pass when the user types again after the model's tool turn
+        // finished. (Auto-follow-up turns would pass `None` here; we
+        // exercise the "user typed again" variant.)
+        user_query: Some("now what?".into()),
+        tasks: vec![task],
+        supported_tools: vec![api::ToolType::ReadFiles, api::ToolType::Grep],
+        action_results,
+        synthetic_user_queries: vec![("m_call_alpha".into(), "read Cargo.toml".into())],
+        ..Default::default()
+    };
+    let _events = collect_events(cfg_for(&url), input).await.unwrap();
+
+    let captured = captured.lock().await;
+    let request_str = String::from_utf8_lossy(&captured);
+    // Body lives after the empty line; isolate the JSON for clearer error
+    // messages even if the body assertions live on the full string.
+    let body_start = request_str
+        .find("\r\n\r\n")
+        .map(|i| i + 4)
+        .unwrap_or_default();
+    let body = &request_str[body_start..];
+
+    // 1. Historical user query was injected before its anchor.
+    assert!(
+        body.contains("\"role\":\"user\"") && body.contains("read Cargo.toml"),
+        "expected role:user with the historical query, got:\n{body}"
+    );
+    // 2. Historical tool result has its REAL content, not the placeholder.
+    assert!(
+        body.contains("[package]") && body.contains("phase-b-6"),
+        "expected real tool result content, got:\n{body}"
+    );
+    assert!(
+        !body.contains("(tool result not available)"),
+        "placeholder leaked into request body:\n{body}"
+    );
+    // 3. The tools array is non-null on this multi-turn body.
+    assert!(
+        body.contains("\"tools\":[") || body.contains("\"tools\": ["),
+        "expected non-null tools array, got:\n{body}"
+    );
+    // 4. The current user query made it through too.
+    assert!(
+        body.contains("now what?"),
+        "expected current user query in body, got:\n{body}"
     );
 }

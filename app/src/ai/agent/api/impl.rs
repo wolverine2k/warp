@@ -195,10 +195,25 @@ async fn route_to_local_provider(
     cfg: ai::local_provider::LocalProviderConfig,
     cancellation_rx: futures::channel::oneshot::Receiver<()>,
 ) -> Result<ResponseStream, ConvertToAPITypeError> {
-    let supported_tools = params
-        .supported_tools_override
-        .take()
-        .unwrap_or_else(|| get_supported_tools(&params));
+    // Phase B-6: prefer the override only when it's non-empty. Some
+    // controller paths (passive suggestions, certain integration tests)
+    // set `supported_tools_override = Some(empty Vec)` to mean "no extra
+    // tools," which the local provider then renders as `"tools": null`
+    // and the system prompt's
+    // `"No tools are currently available; respond with plain text."`
+    // line — making the model give up on a multi-turn loop. Treat an
+    // empty override as "fall back to the full default list" so the
+    // local-provider conversation always advertises the v1 curated set
+    // as long as `cfg.supports_tools` is on.
+    let supported_tools = match params.supported_tools_override.take() {
+        Some(override_list) if !override_list.is_empty() => override_list,
+        _ => get_supported_tools(&params),
+    };
+    log::debug!(
+        "[local-provider] routing turn: supported_tools.len={}, supports_tools={}",
+        supported_tools.len(),
+        cfg.supports_tools,
+    );
 
     let user_query = extract_latest_user_query(&params.input);
     let tasks = std::mem::take(&mut params.tasks);
@@ -237,7 +252,24 @@ async fn route_to_local_provider(
     // `AIAgentInput::ActionResult` instead. Pull them out here so the request
     // translator can pair each assistant `tool_calls` entry with a matching
     // `role:"tool"` follower (OpenAI rejects with HTTP 400 otherwise).
-    let action_results = collect_action_results(&params.input);
+    //
+    // Phase B-6: merge the current turn's results into a copy of the
+    // controller's full per-conversation snapshot so older `tool_call_id`s
+    // also resolve to real content. Without this, every follow-up turn
+    // looked at *only* its own `params.input`, found nothing for prior
+    // turns' tool calls, and the placeholder
+    // `"(tool result not available)"` filled in instead.
+    let mut action_results = params.local_provider_history.action_results.clone();
+    for (id, rendered) in collect_action_results(&params.input) {
+        action_results.insert(id, rendered);
+    }
+
+    // Phase B-6: synthetic user-query injections, anchored to the first
+    // task-message id of each historical exchange that began with a user
+    // query. The controller built this snapshot from
+    // `AIAgentExchange::input` for us; without it the model never sees
+    // the user's prior queries (only the latest one is in `params.input`).
+    let synthetic_user_queries = params.local_provider_history.user_queries.clone();
 
     let input = local_provider::request::LocalProviderInput {
         user_query,
@@ -247,6 +279,7 @@ async fn route_to_local_provider(
         task_id,
         needs_create_task,
         action_results,
+        synthetic_user_queries,
         compaction_config: params.local_provider_compaction_config.clone(),
         compaction_state: params.local_provider_compaction_state.clone(),
     };

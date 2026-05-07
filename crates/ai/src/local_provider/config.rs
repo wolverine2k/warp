@@ -103,8 +103,12 @@ mod tests {
 
     #[test]
     fn validate_happy_path() {
-        assert!(cfg("http://localhost:11434/v1", "llama3.1").validate().is_ok());
-        assert!(cfg("https://api.example.com/v1", "gpt-4").validate().is_ok());
+        assert!(cfg("http://localhost:11434/v1", "llama3.1")
+            .validate()
+            .is_ok());
+        assert!(cfg("https://api.example.com/v1", "gpt-4")
+            .validate()
+            .is_ok());
     }
 
     #[test]
@@ -118,13 +122,19 @@ mod tests {
     #[test]
     fn validate_rejects_non_http_scheme() {
         let result = cfg("ftp://nope/v1", "llama3.1").validate();
-        assert!(matches!(result, Err(LocalProviderConfigError::InvalidBaseUrl(_))));
+        assert!(matches!(
+            result,
+            Err(LocalProviderConfigError::InvalidBaseUrl(_))
+        ));
     }
 
     #[test]
     fn validate_rejects_unparseable_url() {
         let result = cfg("not a url", "llama3.1").validate();
-        assert!(matches!(result, Err(LocalProviderConfigError::InvalidBaseUrl(_))));
+        assert!(matches!(
+            result,
+            Err(LocalProviderConfigError::InvalidBaseUrl(_))
+        ));
     }
 
     #[test]
@@ -137,8 +147,14 @@ mod tests {
 
     #[test]
     fn synthetic_llm_id_format() {
-        assert_eq!(cfg("http://x/v1", "llama3.1").synthetic_llm_id(), "local:llama3.1");
-        assert_eq!(cfg("http://x/v1", "qwen2.5-coder:7b").synthetic_llm_id(), "local:qwen2.5-coder:7b");
+        assert_eq!(
+            cfg("http://x/v1", "llama3.1").synthetic_llm_id(),
+            "local:llama3.1"
+        );
+        assert_eq!(
+            cfg("http://x/v1", "qwen2.5-coder:7b").synthetic_llm_id(),
+            "local:qwen2.5-coder:7b"
+        );
     }
 
     #[test]

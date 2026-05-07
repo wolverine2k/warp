@@ -52,9 +52,13 @@ impl LocalTool {
     /// Description shown in the system prompt's tool list.
     pub fn description(self) -> &'static str {
         match self {
-            LocalTool::ReadFiles => "read_files: read one or more text files from the user's filesystem.",
+            LocalTool::ReadFiles => {
+                "read_files: read one or more text files from the user's filesystem."
+            }
             LocalTool::ApplyFileDiffs => "apply_file_diffs: apply search/replace edits to files.",
-            LocalTool::RunShellCommand => "run_shell_command: run a single shell command in the user's terminal.",
+            LocalTool::RunShellCommand => {
+                "run_shell_command: run a single shell command in the user's terminal."
+            }
             LocalTool::Grep => "grep: search files for a regex pattern.",
             LocalTool::FileGlobV2 => "file_glob_v2: list files matching a glob pattern.",
         }
@@ -101,7 +105,8 @@ pub fn translate_openai_tool_call(
     name: &str,
     arguments_json: &str,
 ) -> Result<api::message::ToolCall, ToolParseError> {
-    let tool = LocalTool::from_name(name).ok_or_else(|| ToolParseError::UnknownTool(name.into()))?;
+    let tool =
+        LocalTool::from_name(name).ok_or_else(|| ToolParseError::UnknownTool(name.into()))?;
     let args: Value = serde_json::from_str(arguments_json)
         .map_err(|e| ToolParseError::InvalidJson(e.to_string()))?;
     let inner = build_tool_inner(tool, &args)?;
@@ -281,9 +286,7 @@ fn run_shell_command_schema() -> Value {
     })
 }
 
-fn build_run_shell_command(
-    args: &Value,
-) -> Result<api::message::tool_call::Tool, ToolParseError> {
+fn build_run_shell_command(args: &Value) -> Result<api::message::tool_call::Tool, ToolParseError> {
     let command = args
         .get("command")
         .and_then(|v| v.as_str())
@@ -324,10 +327,12 @@ fn build_grep(args: &Value) -> Result<api::message::tool_call::Tool, ToolParseEr
     let queries_value = args
         .get("queries")
         .ok_or(ToolParseError::MissingField("queries"))?;
-    let arr = queries_value.as_array().ok_or(ToolParseError::TypeMismatch {
-        field: "queries",
-        detail: format!("expected array, got {queries_value}"),
-    })?;
+    let arr = queries_value
+        .as_array()
+        .ok_or(ToolParseError::TypeMismatch {
+            field: "queries",
+            detail: format!("expected array, got {queries_value}"),
+        })?;
     let mut queries = Vec::with_capacity(arr.len());
     for (i, q) in arr.iter().enumerate() {
         let s = q.as_str().ok_or(ToolParseError::TypeMismatch {
@@ -373,10 +378,12 @@ fn build_file_glob_v2(args: &Value) -> Result<api::message::tool_call::Tool, Too
     let patterns_value = args
         .get("patterns")
         .ok_or(ToolParseError::MissingField("patterns"))?;
-    let arr = patterns_value.as_array().ok_or(ToolParseError::TypeMismatch {
-        field: "patterns",
-        detail: format!("expected array, got {patterns_value}"),
-    })?;
+    let arr = patterns_value
+        .as_array()
+        .ok_or(ToolParseError::TypeMismatch {
+            field: "patterns",
+            detail: format!("expected array, got {patterns_value}"),
+        })?;
     let mut patterns = Vec::with_capacity(arr.len());
     for (i, p) in arr.iter().enumerate() {
         let s = p.as_str().ok_or(ToolParseError::TypeMismatch {
@@ -390,7 +397,10 @@ fn build_file_glob_v2(args: &Value) -> Result<api::message::tool_call::Tool, Too
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let max_matches = args.get("max_matches").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+    let max_matches = args
+        .get("max_matches")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0) as i32;
     let max_depth = args.get("max_depth").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
     let min_depth = args.get("min_depth").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
     Ok(api::message::tool_call::Tool::FileGlobV2(

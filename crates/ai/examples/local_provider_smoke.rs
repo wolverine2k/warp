@@ -225,10 +225,7 @@ async fn main() -> ExitCode {
         eprintln!("FAIL: stream did not produce a Finished event");
         return ExitCode::from(5);
     }
-    if matches!(
-        finish_label.as_str(),
-        "Done"
-    ) {
+    if matches!(finish_label.as_str(), "Done") {
         ExitCode::SUCCESS
     } else {
         eprintln!("FAIL: stream finished with non-Done reason: {finish_label}");
@@ -302,7 +299,12 @@ fn handle_message(
                 Some(_) => "<other>",
                 None => "<unparsed>",
             };
-            tool_calls.push(format!("{}: id={} typed={}", tool_name, tc.tool_call_id, tc.tool.is_some()));
+            tool_calls.push(format!(
+                "{}: id={} typed={}",
+                tool_name,
+                tc.tool_call_id,
+                tc.tool.is_some()
+            ));
             println!();
             println!("[tool_call name={tool_name} id={}]", tc.tool_call_id);
         }

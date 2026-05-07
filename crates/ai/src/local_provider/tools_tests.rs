@@ -3,9 +3,7 @@
 
 use warp_multi_agent_api as api;
 
-use super::tools::{
-    tool_definitions, translate_openai_tool_call, LocalTool, ToolParseError,
-};
+use super::tools::{tool_definitions, translate_openai_tool_call, LocalTool, ToolParseError};
 
 #[test]
 fn from_name_round_trip() {
@@ -64,12 +62,9 @@ fn read_files_schema_advertises_paths_array() {
 
 #[test]
 fn read_files_translate_minimal_valid() {
-    let result = translate_openai_tool_call(
-        "call_abc",
-        "read_files",
-        r#"{"paths":["src/main.rs"]}"#,
-    )
-    .unwrap();
+    let result =
+        translate_openai_tool_call("call_abc", "read_files", r#"{"paths":["src/main.rs"]}"#)
+            .unwrap();
     assert_eq!(result.tool_call_id, "call_abc");
     let inner = result.tool.as_ref().expect("tool variant present");
     match inner {
@@ -101,23 +96,27 @@ fn read_files_translate_multiple_paths() {
 
 #[test]
 fn read_files_missing_paths_field() {
-    let err =
-        translate_openai_tool_call("id", "read_files", r#"{"foo":"bar"}"#).unwrap_err();
+    let err = translate_openai_tool_call("id", "read_files", r#"{"foo":"bar"}"#).unwrap_err();
     assert_eq!(err, ToolParseError::MissingField("paths"));
 }
 
 #[test]
 fn read_files_paths_wrong_type() {
-    let err = translate_openai_tool_call("id", "read_files", r#"{"paths":"not-array"}"#)
-        .unwrap_err();
-    assert!(matches!(err, ToolParseError::TypeMismatch { field: "paths", .. }));
+    let err =
+        translate_openai_tool_call("id", "read_files", r#"{"paths":"not-array"}"#).unwrap_err();
+    assert!(matches!(
+        err,
+        ToolParseError::TypeMismatch { field: "paths", .. }
+    ));
 }
 
 #[test]
 fn read_files_paths_element_wrong_type() {
-    let err = translate_openai_tool_call("id", "read_files", r#"{"paths":["ok",42]}"#)
-        .unwrap_err();
-    assert!(matches!(err, ToolParseError::TypeMismatch { field: "paths", .. }));
+    let err = translate_openai_tool_call("id", "read_files", r#"{"paths":["ok",42]}"#).unwrap_err();
+    assert!(matches!(
+        err,
+        ToolParseError::TypeMismatch { field: "paths", .. }
+    ));
 }
 
 #[test]
@@ -147,8 +146,8 @@ fn unknown_tool_name_surfaces_as_error() {
 
 #[test]
 fn run_shell_command_minimal_valid() {
-    let tc = translate_openai_tool_call("id", "run_shell_command", r#"{"command":"ls -la"}"#)
-        .unwrap();
+    let tc =
+        translate_openai_tool_call("id", "run_shell_command", r#"{"command":"ls -la"}"#).unwrap();
     if let api::message::tool_call::Tool::RunShellCommand(rsc) = tc.tool.unwrap() {
         assert_eq!(rsc.command, "ls -la");
     } else {
@@ -166,12 +165,9 @@ fn run_shell_command_missing_command() {
 
 #[test]
 fn grep_minimal_valid() {
-    let tc = translate_openai_tool_call(
-        "id",
-        "grep",
-        r#"{"queries":["TODO","FIXME"],"path":"src"}"#,
-    )
-    .unwrap();
+    let tc =
+        translate_openai_tool_call("id", "grep", r#"{"queries":["TODO","FIXME"],"path":"src"}"#)
+            .unwrap();
     if let api::message::tool_call::Tool::Grep(g) = tc.tool.unwrap() {
         assert_eq!(g.queries, vec!["TODO", "FIXME"]);
         assert_eq!(g.path, "src");
@@ -199,12 +195,8 @@ fn grep_queries_required() {
 
 #[test]
 fn grep_special_chars_pass_through_unaltered() {
-    let tc = translate_openai_tool_call(
-        "id",
-        "grep",
-        r#"{"queries":["fn\\s+main\\(\\)"]}"#,
-    )
-    .unwrap();
+    let tc =
+        translate_openai_tool_call("id", "grep", r#"{"queries":["fn\\s+main\\(\\)"]}"#).unwrap();
     if let api::message::tool_call::Tool::Grep(g) = tc.tool.unwrap() {
         assert_eq!(g.queries, vec!["fn\\s+main\\(\\)"]);
     } else {
@@ -216,12 +208,8 @@ fn grep_special_chars_pass_through_unaltered() {
 
 #[test]
 fn file_glob_v2_minimal_valid() {
-    let tc = translate_openai_tool_call(
-        "id",
-        "file_glob_v2",
-        r#"{"patterns":["**/*.rs"]}"#,
-    )
-    .unwrap();
+    let tc =
+        translate_openai_tool_call("id", "file_glob_v2", r#"{"patterns":["**/*.rs"]}"#).unwrap();
     if let api::message::tool_call::Tool::FileGlobV2(g) = tc.tool.unwrap() {
         assert_eq!(g.patterns, vec!["**/*.rs"]);
         assert_eq!(g.search_dir, "");
@@ -290,8 +278,8 @@ fn apply_file_diffs_minimal_valid() {
 
 #[test]
 fn apply_file_diffs_diffs_required() {
-    let err = translate_openai_tool_call("id", "apply_file_diffs", r#"{"summary":"empty"}"#)
-        .unwrap_err();
+    let err =
+        translate_openai_tool_call("id", "apply_file_diffs", r#"{"summary":"empty"}"#).unwrap_err();
     assert_eq!(err, ToolParseError::MissingField("diffs"));
 }
 
