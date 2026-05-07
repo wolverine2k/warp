@@ -6704,8 +6704,8 @@ impl AgentProvidersWidget {
         let model_id_initial = ai_settings.local_provider_model_id.value().clone();
         let context_window_initial = ai_settings.local_provider_context_window.value().clone();
         let api_key_initial: String = ::ai::local_provider::AgentProviderSecrets::as_ref(ctx)
-            .key()
-            .map(str::to_string)
+            .get(::ai::local_provider::LEGACY_PROVIDER_PLACEHOLDER_ID)
+            .map(str::to_owned)
             .unwrap_or_default();
 
         // Build a single-line editor with the standard AI-settings styling.
@@ -6807,11 +6807,14 @@ impl AgentProvidersWidget {
         ctx.subscribe_to_view(&api_key_editor, |_, editor, event, ctx| {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                let key = buffer_text.is_empty().not().then_some(buffer_text);
                 ::ai::local_provider::AgentProviderSecrets::handle(ctx).update(
                     ctx,
                     |model, ctx| {
-                        model.set_key(key, ctx);
+                        model.set(
+                            ::ai::local_provider::LEGACY_PROVIDER_PLACEHOLDER_ID,
+                            buffer_text,
+                            ctx,
+                        );
                     },
                 );
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {

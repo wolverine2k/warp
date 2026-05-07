@@ -1,98 +1,137 @@
-//! Singleton manager for the local provider's optional API key.
+//! `AgentProviderSecrets`: per-provider API keys stored in OS secure storage.
 //!
-//! Mirrors `crate::api_keys::ApiKeyManager` so the same secure-storage and
-//! event-emission patterns are reused. We keep this as a SEPARATE manager
-//! from `ApiKeyManager` because:
+//! Data shape: `HashMap<provider_id, api_key>` serialized as JSON under the
+//! `AgentProviderSecrets` keychain key.
 //!
-//! - `ApiKeyManager`'s on-the-wire `ApiKeys` struct mirrors the proto type
-//!   `warp_multi_agent_api::request::settings::ApiKeys`. Adding a non-wire
-//!   field there would confuse readers.
-//! - The local provider key has no relationship with Warp's BYO-keys
-//!   serialization; a separate manager has a clean blast radius and can be
-//!   removed without touching the BYO-keys path.
-//!
-//! Per `specs/GH9303/tech.md` §2-3, the secure-storage key is
-//! `LocalProviderApiKey` and the value is the bearer token to send as
-//! `Authorization: Bearer <key>` on outgoing requests.
+//! Phase 1b-2: introduced as a refactor of the prior single-key singleton.
+//! On first load, if no V2 blob exists at `AgentProviderSecrets`, the legacy
+//! V1 blob at `LocalProviderApiKey` is read; its single api_key (if any) is
+//! ported into the new map under the stable placeholder id
+//! `LEGACY_PROVIDER_PLACEHOLDER_ID = "__legacy__"`. Phase 1b-2 Task 4's
+//! migration helper later moves that entry to a UUID. Phase 1b-4 cleanup
+//! removes the legacy keychain entry.
 
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+use serde::Deserialize;
 use warpui::{Entity, ModelContext, SingletonEntity};
 use warpui_extras::secure_storage::{self, AppContextExt};
 
-const SECURE_STORAGE_KEY: &str = "LocalProviderApiKey";
+const SECURE_STORAGE_KEY: &str = "AgentProviderSecrets";
+const LEGACY_SECURE_STORAGE_KEY: &str = "LocalProviderApiKey";
 
-/// Emitted when the user-provided local-provider API key is updated in-memory.
+/// Stable placeholder id for the legacy single-provider api key carried over
+/// from V1. `LocalProviderConfig::snapshot_from_app` looks up the legacy
+/// secret under this id during the transition window. Phase 1b-2 Task 4's
+/// migration replaces this with a fresh UUID.
+pub const LEGACY_PROVIDER_PLACEHOLDER_ID: &str = "__legacy__";
+
+/// Emitted when any provider's api key changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentProviderSecretsEvent {
-    KeyUpdated,
+    KeysUpdated,
 }
 
-/// On-disk shape (JSON-encoded) of the secure-storage payload. Wraps the key
-/// so future additions (e.g. per-provider expiration) don't break old clients.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
-struct StoredKey {
+/// V1 (legacy) on-disk shape — single api_key wrapped in a tagged struct so
+/// future additions don't break old clients. Read-only here; we never write
+/// the V1 shape after Phase 1b-2.
+#[derive(Debug, Default, Deserialize)]
+struct LegacyStoredKey {
     api_key: Option<String>,
 }
 
-/// Singleton holding the optional local-provider API key.
+/// Singleton: per-provider API keys.
 pub struct AgentProviderSecrets {
-    key: Option<String>,
+    keys: HashMap<String, String>,
 }
 
 impl AgentProviderSecrets {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
-        let key = Self::load_from_secure_storage(ctx);
-        Self { key }
+        let keys = Self::load_from_storage(ctx);
+        Self { keys }
     }
 
-    /// The current API key, if set. Returns `None` when no key is configured.
-    pub fn key(&self) -> Option<&str> {
-        self.key.as_deref()
+    pub fn get(&self, provider_id: &str) -> Option<&str> {
+        self.keys.get(provider_id).map(String::as_str)
     }
 
-    /// Update the key (or clear it by passing `None`). Persists to secure
-    /// storage and emits `KeyUpdated`.
-    pub fn set_key(&mut self, key: Option<String>, ctx: &mut ModelContext<Self>) {
-        // Treat empty strings as "clear" so the UI doesn't accidentally
-        // serialize an Authorization header with an empty token.
-        self.key = key.filter(|s| !s.is_empty());
-        ctx.emit(AgentProviderSecretsEvent::KeyUpdated);
-        self.write_to_secure_storage(ctx);
+    pub fn set(&mut self, provider_id: &str, api_key: String, ctx: &mut ModelContext<Self>) {
+        if api_key.is_empty() {
+            if self.keys.remove(provider_id).is_none() {
+                return;
+            }
+        } else {
+            self.keys.insert(provider_id.to_owned(), api_key);
+        }
+        ctx.emit(AgentProviderSecretsEvent::KeysUpdated);
+        self.persist(ctx);
     }
 
-    fn load_from_secure_storage(ctx: &mut ModelContext<Self>) -> Option<String> {
-        let key_json = match ctx.secure_storage().read_value(SECURE_STORAGE_KEY) {
+    pub fn remove(&mut self, provider_id: &str, ctx: &mut ModelContext<Self>) {
+        if self.keys.remove(provider_id).is_some() {
+            ctx.emit(AgentProviderSecretsEvent::KeysUpdated);
+            self.persist(ctx);
+        }
+    }
+
+    pub fn provider_ids(&self) -> impl Iterator<Item = &str> {
+        self.keys.keys().map(String::as_str)
+    }
+
+    fn load_from_storage(ctx: &mut ModelContext<Self>) -> HashMap<String, String> {
+        // Try the V2 keychain blob first.
+        match ctx.secure_storage().read_value(SECURE_STORAGE_KEY) {
+            Ok(json) => match serde_json::from_str::<HashMap<String, String>>(&json) {
+                Ok(map) => return map,
+                Err(e) => {
+                    log::error!("Failed to deserialize AgentProviderSecrets V2 blob: {e:#}");
+                    // Fall through to V1 fallback as a recovery path.
+                }
+            },
+            Err(secure_storage::Error::NotFound) => { /* fall through to V1 */ }
+            Err(e) => {
+                log::error!("Failed to read AgentProviderSecrets: {e:#}");
+                return HashMap::new();
+            }
+        }
+
+        // V1 fallback: legacy single-key blob.
+        let legacy_raw = match ctx.secure_storage().read_value(LEGACY_SECURE_STORAGE_KEY) {
+            Ok(json) => json,
+            Err(secure_storage::Error::NotFound) => return HashMap::new(),
+            Err(e) => {
+                log::error!("Failed to read legacy LocalProviderApiKey blob: {e:#}");
+                return HashMap::new();
+            }
+        };
+        let legacy: LegacyStoredKey = serde_json::from_str(&legacy_raw).unwrap_or_else(|e| {
+            log::error!("Failed to deserialize legacy LocalProviderApiKey blob: {e:#}");
+            LegacyStoredKey::default()
+        });
+
+        let mut map = HashMap::new();
+        if let Some(k) = legacy.api_key.filter(|k| !k.is_empty()) {
+            map.insert(LEGACY_PROVIDER_PLACEHOLDER_ID.to_owned(), k);
+            // Persist immediately under V2 so the next launch skips the V1 path.
+            let json =
+                serde_json::to_string(&map).expect("HashMap<String,String> always serializes");
+            if let Err(e) = ctx.secure_storage().write_value(SECURE_STORAGE_KEY, &json) {
+                log::error!("Failed to write V2 AgentProviderSecrets after V1 migration: {e:#}");
+            }
+        }
+        map
+    }
+
+    fn persist(&self, ctx: &mut ModelContext<Self>) {
+        let json = match serde_json::to_string(&self.keys) {
             Ok(json) => json,
             Err(e) => {
-                if !matches!(e, secure_storage::Error::NotFound) {
-                    log::error!("Failed to read local provider key from secure storage: {e:#}");
-                }
-                return None;
-            }
-        };
-        let stored: StoredKey = match serde_json::from_str(&key_json) {
-            Ok(v) => v,
-            Err(e) => {
-                log::error!("Failed to deserialize local provider key: {e:#}");
-                return None;
-            }
-        };
-        stored.api_key.filter(|s| !s.is_empty())
-    }
-
-    fn write_to_secure_storage(&self, ctx: &mut ModelContext<Self>) {
-        let stored = StoredKey {
-            api_key: self.key.clone(),
-        };
-        let json = match serde_json::to_string(&stored) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Failed to serialize local provider key: {e:#}");
+                log::error!("Failed to serialize AgentProviderSecrets: {e:#}");
                 return;
             }
         };
         if let Err(e) = ctx.secure_storage().write_value(SECURE_STORAGE_KEY, &json) {
-            log::error!("Failed to write local provider key to secure storage: {e:#}");
+            log::error!("Failed to write AgentProviderSecrets: {e:#}");
         }
     }
 }

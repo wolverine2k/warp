@@ -43,8 +43,12 @@ pub fn snapshot_from_app(ctx: &AppContext) -> Option<LocalProviderConfig> {
         .ok()
         .filter(|n| *n > 0);
 
-    // Capture the key from the singleton manager.
-    let api_key = AgentProviderSecrets::as_ref(ctx).key().map(str::to_string);
+    // Capture the key from the singleton manager using the legacy placeholder id
+    // during the transition window (Phase 1b-2). Task 4's migration will replace
+    // "__legacy__" with the real provider UUID once the AgentProvider is created.
+    let api_key = AgentProviderSecrets::as_ref(ctx)
+        .get(::ai::local_provider::LEGACY_PROVIDER_PLACEHOLDER_ID)
+        .map(str::to_owned);
 
     let cfg = LocalProviderConfig {
         display_name,

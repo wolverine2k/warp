@@ -25,7 +25,9 @@ pub mod run;
 pub mod tools;
 pub mod wire;
 
-pub use agent_provider_secrets::{AgentProviderSecrets, AgentProviderSecretsEvent};
+pub use agent_provider_secrets::{
+    AgentProviderSecrets, AgentProviderSecretsEvent, LEGACY_PROVIDER_PLACEHOLDER_ID,
+};
 pub use config::{LocalProviderConfig, LocalProviderConfigError};
 pub use response::{AdapterError, OpenAiSseAdapter};
 pub use run::{run_chat_turn, LocalResponseStream, LocalRunError};
