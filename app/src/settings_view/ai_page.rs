@@ -1512,7 +1512,7 @@ impl AISettingsPageView {
                 }
                 widgets.push(Box::new(CLIAgentWidget::default()));
                 widgets.push(Box::new(ApiKeysWidget::new(ctx)));
-                widgets.push(Box::new(LocalProviderWidget::new(ctx)));
+                widgets.push(Box::new(AgentProvidersWidget::new(ctx)));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
@@ -1553,7 +1553,7 @@ impl AISettingsPageView {
                     widgets.push(Box::new(VoiceWidget::default()));
                 }
                 widgets.push(Box::new(ApiKeysWidget::new(ctx)));
-                widgets.push(Box::new(LocalProviderWidget::new(ctx)));
+                widgets.push(Box::new(AgentProvidersWidget::new(ctx)));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
@@ -6684,7 +6684,7 @@ impl SettingsWidget for ApiKeysWidget {
 /// The API key is stored separately via `AgentProviderSecrets` (OS secure
 /// storage). All other fields are AISettings entries persisted to the user's
 /// settings TOML.
-struct LocalProviderWidget {
+struct AgentProvidersWidget {
     enabled_toggle: SwitchStateHandle,
     display_name_editor: ViewHandle<EditorView>,
     base_url_editor: ViewHandle<EditorView>,
@@ -6694,7 +6694,7 @@ struct LocalProviderWidget {
     context_window_editor: ViewHandle<EditorView>,
 }
 
-impl LocalProviderWidget {
+impl AgentProvidersWidget {
     fn new(ctx: &mut ViewContext<<Self as SettingsWidget>::View>) -> Self {
         let ai_settings = AISettings::as_ref(ctx);
         let is_any_ai_enabled = ai_settings.is_any_ai_enabled(ctx);
@@ -6938,7 +6938,7 @@ impl LocalProviderWidget {
     }
 }
 
-impl SettingsWidget for LocalProviderWidget {
+impl SettingsWidget for AgentProvidersWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
