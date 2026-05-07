@@ -6681,7 +6681,7 @@ impl SettingsWidget for ApiKeysWidget {
 /// enable toggle, display name, base URL, model id, optional API key,
 /// supports-tools toggle, and an optional context-window hint.
 ///
-/// The API key is stored separately via `LocalProviderKeyManager` (OS secure
+/// The API key is stored separately via `AgentProviderSecrets` (OS secure
 /// storage). All other fields are AISettings entries persisted to the user's
 /// settings TOML.
 struct LocalProviderWidget {
@@ -6703,7 +6703,7 @@ impl LocalProviderWidget {
         let base_url_initial = ai_settings.local_provider_base_url.value().clone();
         let model_id_initial = ai_settings.local_provider_model_id.value().clone();
         let context_window_initial = ai_settings.local_provider_context_window.value().clone();
-        let api_key_initial: String = ::ai::local_provider::LocalProviderKeyManager::as_ref(ctx)
+        let api_key_initial: String = ::ai::local_provider::AgentProviderSecrets::as_ref(ctx)
             .key()
             .map(str::to_string)
             .unwrap_or_default();
@@ -6808,7 +6808,7 @@ impl LocalProviderWidget {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
                 let key = buffer_text.is_empty().not().then_some(buffer_text);
-                ::ai::local_provider::LocalProviderKeyManager::handle(ctx).update(
+                ::ai::local_provider::AgentProviderSecrets::handle(ctx).update(
                     ctx,
                     |model, ctx| {
                         model.set_key(key, ctx);
@@ -6902,7 +6902,7 @@ impl LocalProviderWidget {
     }
 
     /// Render a `<label> + <text input>` row for the API key, which is stored
-    /// in `LocalProviderKeyManager` (not an AISetting), so it has no
+    /// in `AgentProviderSecrets` (not an AISetting), so it has no
     /// sync-to-cloud icon.
     fn render_api_key_input(
         appearance: &Appearance,

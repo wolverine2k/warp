@@ -23,7 +23,7 @@ const SECURE_STORAGE_KEY: &str = "LocalProviderApiKey";
 
 /// Emitted when the user-provided local-provider API key is updated in-memory.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LocalProviderKeyManagerEvent {
+pub enum AgentProviderSecretsEvent {
     KeyUpdated,
 }
 
@@ -35,11 +35,11 @@ struct StoredKey {
 }
 
 /// Singleton holding the optional local-provider API key.
-pub struct LocalProviderKeyManager {
+pub struct AgentProviderSecrets {
     key: Option<String>,
 }
 
-impl LocalProviderKeyManager {
+impl AgentProviderSecrets {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let key = Self::load_from_secure_storage(ctx);
         Self { key }
@@ -56,7 +56,7 @@ impl LocalProviderKeyManager {
         // Treat empty strings as "clear" so the UI doesn't accidentally
         // serialize an Authorization header with an empty token.
         self.key = key.filter(|s| !s.is_empty());
-        ctx.emit(LocalProviderKeyManagerEvent::KeyUpdated);
+        ctx.emit(AgentProviderSecretsEvent::KeyUpdated);
         self.write_to_secure_storage(ctx);
     }
 
@@ -97,8 +97,8 @@ impl LocalProviderKeyManager {
     }
 }
 
-impl Entity for LocalProviderKeyManager {
-    type Event = LocalProviderKeyManagerEvent;
+impl Entity for AgentProviderSecrets {
+    type Event = AgentProviderSecretsEvent;
 }
 
-impl SingletonEntity for LocalProviderKeyManager {}
+impl SingletonEntity for AgentProviderSecrets {}

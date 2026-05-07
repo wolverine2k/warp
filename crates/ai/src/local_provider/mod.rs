@@ -16,7 +16,7 @@
 
 pub mod compaction;
 pub mod config;
-pub mod key_manager;
+pub mod agent_provider_secrets;
 pub mod prompt;
 pub mod request;
 pub mod response;
@@ -25,7 +25,7 @@ pub mod tools;
 pub mod wire;
 
 pub use config::{LocalProviderConfig, LocalProviderConfigError};
-pub use key_manager::{LocalProviderKeyManager, LocalProviderKeyManagerEvent};
+pub use agent_provider_secrets::{AgentProviderSecrets, AgentProviderSecretsEvent};
 pub use response::{AdapterError, OpenAiSseAdapter};
 pub use run::{run_chat_turn, LocalResponseStream, LocalRunError};
 

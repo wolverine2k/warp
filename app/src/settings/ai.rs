@@ -1464,7 +1464,7 @@ define_settings_group!(AISettings, settings: [
     // ---------------------------------------------------------------------
     // Custom Local LLM Provider — see specs/GH9303/. Gated by
     // FeatureFlag::LocalLlmProvider. Settings live here; the API key is
-    // stored separately via LocalProviderKeyManager (secure storage).
+    // stored separately via AgentProviderSecrets (secure storage).
     // ---------------------------------------------------------------------
 
     local_provider_enabled: LocalProviderEnabled {

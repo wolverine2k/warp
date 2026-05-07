@@ -1,5 +1,5 @@
 //! App-level glue that snapshots `LocalProviderConfig` from `AISettings` plus
-//! the `LocalProviderKeyManager` singleton. Lives here (under `app/`) rather
+//! the `AgentProviderSecrets` singleton. Lives here (under `app/`) rather
 //! than in `crates/ai/` because it depends on `AISettings`, which is defined
 //! in the app crate.
 //!
@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use ai::local_provider::{LocalProviderConfig, LocalProviderKeyManager};
+use ai::local_provider::{AgentProviderSecrets, LocalProviderConfig};
 use ai::LLMId;
 use warp_core::features::FeatureFlag;
 use warpui::{AppContext, SingletonEntity};
@@ -44,7 +44,7 @@ pub fn snapshot_from_app(ctx: &AppContext) -> Option<LocalProviderConfig> {
         .filter(|n| *n > 0);
 
     // Capture the key from the singleton manager.
-    let api_key = LocalProviderKeyManager::as_ref(ctx)
+    let api_key = AgentProviderSecrets::as_ref(ctx)
         .key()
         .map(str::to_string);
 

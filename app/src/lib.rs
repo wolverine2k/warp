@@ -1272,9 +1272,9 @@ pub(crate) fn initialize_app(
     // Custom Local LLM Provider key manager (specs/GH9303/). Must be
     // registered BEFORE LLMPreferences because LLMPreferences::new calls
     // local_provider_config::inject_local_provider_choice which reads the
-    // key via LocalProviderKeyManager::as_ref(ctx). Without this, the very
+    // key via AgentProviderSecrets::as_ref(ctx). Without this, the very
     // first model-list inject panics looking for an unregistered singleton.
-    ctx.add_singleton_model(::ai::local_provider::LocalProviderKeyManager::new);
+    ctx.add_singleton_model(::ai::local_provider::AgentProviderSecrets::new);
 
     ctx.add_singleton_model(AntivirusInfo::new);
 
