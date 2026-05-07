@@ -44,6 +44,7 @@ fn request_params_with_ask_user_question_enabled(ask_user_question_enabled: bool
         root_task_id: None,
         local_provider_compaction_config: Default::default(),
         local_provider_compaction_state: Default::default(),
+        local_provider_history: Default::default(),
     }
 }
 
