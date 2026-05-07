@@ -24,8 +24,8 @@
 **Files modified (symbol references only):**
 - `crates/ai/src/local_provider/mod.rs` — module declaration + re-exports
 - `app/src/lib.rs` — singleton model registration (line ~1275-1277)
-- `app/src/settings/ai.rs` — doc comment (line ~1467) + widget instantiation (lines ~1515, ~1556)
-- `app/src/settings_view/ai_page.rs` — widget definition + key manager call sites (lines ~6684, ~6687, ~6697, ~6706, ~6811, ~6905, ~6941)
+- `app/src/settings/ai.rs` — Task 1 doc comment only (line ~1467)
+- `app/src/settings_view/ai_page.rs` — Task 1 key manager call sites (lines ~6684, ~6706, ~6811, ~6905) + Task 2 widget definition, two impls, and two instantiation sites (lines ~1515, ~1556, ~6687, ~6697, ~6941)
 - `app/src/ai/local_provider_config.rs` — module-doc comment (line ~2), import (line ~13), call site (line ~47)
 
 **Symbols UNCHANGED (Phase 1b will handle):**
@@ -347,9 +347,8 @@ Expected: commit succeeds.
 
 **Files:**
 - Modify: `app/src/settings_view/ai_page.rs`
-- Modify: `app/src/settings/ai.rs`
 
-The widget struct is defined inline in `ai_page.rs` (no separate file) and instantiated in `settings/ai.rs`. Two files, isolated change.
+All 5 occurrences of `LocalProviderWidget` (struct definition, two impls, **and** the two `widgets.push(Box::new(...))` instantiation sites) live in `ai_page.rs`. The earlier draft of this plan listed `settings/ai.rs` as a second file — that was wrong. Verify with `grep -n "LocalProviderWidget" app/src/settings_view/ai_page.rs` before editing; you should see exactly 5 lines.
 
 - [ ] **Step 2.1: Rename struct definition in `ai_page.rs`**
 
@@ -391,9 +390,9 @@ grep -n "LocalProviderWidget" app/src/settings_view/ai_page.rs
 ```
 Expected: zero matches. (The widget body uses `Self`, so no other call sites should exist inside `ai_page.rs`.)
 
-- [ ] **Step 2.3: Update instantiation in `app/src/settings/ai.rs`**
+- [ ] **Step 2.3: Update instantiation sites in `app/src/settings_view/ai_page.rs`**
 
-Open `app/src/settings/ai.rs`. Around lines 1515 and 1556:
+Same file as Steps 2.1 — the widget is instantiated nearby in the page's branch logic. Around lines 1515 and 1556:
 
 ```rust
 widgets.push(Box::new(LocalProviderWidget::new(ctx)));
@@ -403,7 +402,7 @@ widgets.push(Box::new(LocalProviderWidget::new(ctx)));
 widgets.push(Box::new(AgentProvidersWidget::new(ctx)));
 ```
 
-There should be exactly two such sites. Use `grep -n "LocalProviderWidget" app/src/settings/ai.rs` to verify.
+There should be exactly two such sites. Use `grep -n "LocalProviderWidget::new" app/src/settings_view/ai_page.rs` to verify.
 
 - [ ] **Step 2.4: Confirm no other references exist**
 
@@ -433,10 +432,10 @@ Expected: same green count as before.
 
 Run:
 ```bash
-git add app/src/settings_view/ai_page.rs app/src/settings/ai.rs
+git add app/src/settings_view/ai_page.rs
 git status --short
 ```
-Expected: two `M` lines.
+Expected: one `M` line for `ai_page.rs` (plus the ignorable untracked `.claude/` and `.omc/` entries).
 
 Then:
 ```bash
@@ -447,6 +446,9 @@ Phase 1a of multi-provider work — pure symbol rename, no behavior change.
 The widget body, settings keys, and AISettingsPageAction variants are
 all left as-is; Phase 1b replaces this widget with one that renders a list
 of providers.
+
+Note: all 5 occurrences live in ai_page.rs; an earlier draft of this plan
+incorrectly listed settings/ai.rs as also touched.
 
 See specs/multi-local-llm/design.md §8 (Phase 1a table).
 EOF
