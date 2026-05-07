@@ -44,9 +44,7 @@ pub fn snapshot_from_app(ctx: &AppContext) -> Option<LocalProviderConfig> {
         .filter(|n| *n > 0);
 
     // Capture the key from the singleton manager.
-    let api_key = AgentProviderSecrets::as_ref(ctx)
-        .key()
-        .map(str::to_string);
+    let api_key = AgentProviderSecrets::as_ref(ctx).key().map(str::to_string);
 
     let cfg = LocalProviderConfig {
         display_name,

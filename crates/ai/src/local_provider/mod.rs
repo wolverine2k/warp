@@ -14,9 +14,9 @@
 //!    of `warp_multi_agent_api::ResponseEvent`s matching the contract the
 //!    Warp client controller already speaks.
 
+pub mod agent_provider_secrets;
 pub mod compaction;
 pub mod config;
-pub mod agent_provider_secrets;
 pub mod prompt;
 pub mod request;
 pub mod response;
@@ -24,8 +24,8 @@ pub mod run;
 pub mod tools;
 pub mod wire;
 
-pub use config::{LocalProviderConfig, LocalProviderConfigError};
 pub use agent_provider_secrets::{AgentProviderSecrets, AgentProviderSecretsEvent};
+pub use config::{LocalProviderConfig, LocalProviderConfigError};
 pub use response::{AdapterError, OpenAiSseAdapter};
 pub use run::{run_chat_turn, LocalResponseStream, LocalRunError};
 
