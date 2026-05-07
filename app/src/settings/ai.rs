@@ -736,6 +736,7 @@ fn default_true() -> bool {
     Debug,
     Clone,
     Copy,
+    Default,
     PartialEq,
     Eq,
     Hash,
@@ -747,13 +748,8 @@ fn default_true() -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum AgentProviderKind {
     /// OpenAI-compatible Chat Completions / `/v1/models` protocol.
+    #[default]
     OpenAiCompatible,
-}
-
-impl Default for AgentProviderKind {
-    fn default() -> Self {
-        Self::OpenAiCompatible
-    }
 }
 
 /// The wire-protocol variant the provider's `base_url` actually speaks. Used
@@ -764,6 +760,7 @@ impl Default for AgentProviderKind {
     Debug,
     Clone,
     Copy,
+    Default,
     PartialEq,
     Eq,
     Hash,
@@ -777,6 +774,7 @@ pub enum AgentProviderApiType {
     /// OpenAI Chat Completions (`POST /v1/chat/completions`). Covers OpenAI,
     /// DeepSeek, SiliconFlow, OpenRouter, Moonshot, vLLM, llama.cpp, Ollama
     /// behind its OpenAI-compat shim, and most "OpenAI-compatible" gateways.
+    #[default]
     OpenAi,
     /// OpenAI Responses API (`POST /v1/responses`). Used by GPT-5 / Codex /
     /// Pro tier models.
@@ -792,12 +790,6 @@ pub enum AgentProviderApiType {
     /// models require `reasoning_content` round-tripped back to the server;
     /// only this variant handles that field.
     DeepSeek,
-}
-
-impl Default for AgentProviderApiType {
-    fn default() -> Self {
-        Self::OpenAi
-    }
 }
 
 /// One user-configured Agent provider (a base URL + a list of models the
