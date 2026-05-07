@@ -56,6 +56,7 @@ pub async fn run_chat_turn(
     let url = cfg.chat_completions_url()?;
     let body = compose_chat_completion_request(&input, &cfg);
     let body_json = serde_json::to_string(&body)?;
+    debug_dump_request(&body_json);
 
     // Construct the SSE adapter with the conversation's actual ids when the
     // caller plumbed them through (real agent flow). Without this, the
@@ -240,6 +241,7 @@ fn synthesize_stream(
                     continue;
                 }
                 Poll::Ready(Some(Ok(Event::Message(msg)))) => {
+                    debug_dump_response_chunk(&msg.data);
                     for ev in adapter.feed(&msg.data) {
                         pending.push_back(ev);
                     }
@@ -305,6 +307,69 @@ fn synthesize_stream(
 // panic in unit-test contexts depending on workspace TLS-provider setup.
 // The pieces this function composes (config validation, request translation,
 // SSE adapter) are independently unit-tested in their own modules.
+
+// ---------- diagnostic dump (env-gated, dev-only) ----------
+//
+// Set `WARP_LOCAL_PROVIDER_DEBUG_DUMP=1` to write the outbound request body
+// to `/tmp/warp-local-provider-last-request.json` (overwritten per turn) and
+// each inbound SSE chunk to `/tmp/warp-local-provider-last-response.log`
+// (appended; cleared on each new turn). Useful for diagnosing
+// "model isn't following our system prompt / tools advertisement" issues
+// when the upstream is a third-party OpenAI-compat endpoint that may
+// transform messages in unexpected ways. Defaults to no-op so production
+// builds don't touch the filesystem unless an operator opts in.
+
+const DEBUG_DUMP_ENV: &str = "WARP_LOCAL_PROVIDER_DEBUG_DUMP";
+const DEBUG_REQUEST_PATH: &str = "/tmp/warp-local-provider-last-request.json";
+const DEBUG_RESPONSE_PATH: &str = "/tmp/warp-local-provider-last-response.log";
+
+fn debug_dump_enabled() -> bool {
+    std::env::var(DEBUG_DUMP_ENV)
+        .ok()
+        .map(|v| !v.is_empty() && v != "0" && v.to_ascii_lowercase() != "false")
+        .unwrap_or(false)
+}
+
+fn debug_dump_request(body_json: &str) {
+    if !debug_dump_enabled() {
+        return;
+    }
+    // Pretty-print so the body is readable; fall back to the original
+    // string if reparse fails (very unlikely — we just serialized it).
+    let pretty = serde_json::from_str::<serde_json::Value>(body_json)
+        .ok()
+        .and_then(|v| serde_json::to_string_pretty(&v).ok())
+        .unwrap_or_else(|| body_json.to_string());
+    if let Err(e) = std::fs::write(DEBUG_REQUEST_PATH, pretty) {
+        log::warn!("debug_dump_request: failed to write {DEBUG_REQUEST_PATH}: {e}");
+        return;
+    }
+    // Also truncate the response log so each turn starts fresh.
+    let _ = std::fs::write(DEBUG_RESPONSE_PATH, "");
+    log::info!(
+        "[local-provider-debug] wrote request body to {DEBUG_REQUEST_PATH} \
+         (response chunks will accumulate at {DEBUG_RESPONSE_PATH})"
+    );
+}
+
+fn debug_dump_response_chunk(chunk_data: &str) {
+    if !debug_dump_enabled() {
+        return;
+    }
+    use std::io::Write;
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(DEBUG_RESPONSE_PATH)
+    {
+        Ok(mut f) => {
+            let _ = writeln!(f, "{chunk_data}");
+        }
+        Err(e) => {
+            log::warn!("debug_dump_response_chunk: failed to append {DEBUG_RESPONSE_PATH}: {e}");
+        }
+    }
+}
 
 // ---------- summarizer (non-streaming) ----------
 
