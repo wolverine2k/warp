@@ -17,6 +17,7 @@
 pub mod agent_provider_secrets;
 pub mod compaction;
 pub mod config;
+pub mod llm_id;
 pub mod prompt;
 pub mod request;
 pub mod response;
