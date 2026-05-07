@@ -707,6 +707,277 @@ impl settings_value::SettingsValue for ToolbarCommandMap {
     }
 }
 
+// ===== BYOP (Bring Your Own Provider) data model — Phase 1b-1 =====
+//
+// These types describe the user-configured Agent providers stored under
+// `agents.warp_agent.providers`. They are not yet read by any dispatch path
+// (Phase 1b-2 wires dispatch + migration + the secrets HashMap; Phase 1b-3
+// rebuilds the settings widget). They live alongside the existing
+// LocalProviderConfig + agents.local_provider.* schema with zero behavior
+// change.
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+fn is_true(v: &bool) -> bool {
+    *v
+}
+fn default_true() -> bool {
+    true
+}
+
+/// Top-level kind of an Agent provider. Currently a single variant —
+/// "user-managed OpenAI-compatible endpoint". The wire-protocol decision is
+/// made by [`AgentProviderApiType`], not by this enum.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    strum_macros::EnumIter,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProviderKind {
+    /// OpenAI-compatible Chat Completions / `/v1/models` protocol.
+    OpenAiCompatible,
+}
+
+impl Default for AgentProviderKind {
+    fn default() -> Self {
+        Self::OpenAiCompatible
+    }
+}
+
+/// The wire-protocol variant the provider's `base_url` actually speaks. Used
+/// at request time by the dispatch layer to choose the right
+/// request/response codec. Phase 1b-1 only defines the enum; Phase 3 adds
+/// per-variant adapter implementations beyond OpenAI.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    strum_macros::EnumIter,
+    schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProviderApiType {
+    /// OpenAI Chat Completions (`POST /v1/chat/completions`). Covers OpenAI,
+    /// DeepSeek, SiliconFlow, OpenRouter, Moonshot, vLLM, llama.cpp, Ollama
+    /// behind its OpenAI-compat shim, and most "OpenAI-compatible" gateways.
+    OpenAi,
+    /// OpenAI Responses API (`POST /v1/responses`). Used by GPT-5 / Codex /
+    /// Pro tier models.
+    OpenAiResp,
+    /// Google Gemini native protocol (generativelanguage.googleapis.com).
+    Gemini,
+    /// Anthropic Messages API native protocol (api.anthropic.com).
+    Anthropic,
+    /// Ollama native protocol (`/api/chat`). Distinct from Ollama's
+    /// OpenAI-compat shim, which uses `OpenAi` instead.
+    Ollama,
+    /// DeepSeek native protocol. Differs from `OpenAi` in that thinking-mode
+    /// models require `reasoning_content` round-tripped back to the server;
+    /// only this variant handles that field.
+    DeepSeek,
+}
+
+impl Default for AgentProviderApiType {
+    fn default() -> Self {
+        Self::OpenAi
+    }
+}
+
+/// One user-configured Agent provider (a base URL + a list of models the
+/// user wants exposed in the picker). The API key is stored separately in
+/// `AgentProviderSecrets` keyed by [`AgentProvider::id`]; this struct
+/// deliberately doesn't carry the secret.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct AgentProvider {
+    /// Stable provider identifier, generated on first creation. Used as the
+    /// keychain map key for the API secret and embedded in the BYOP `LLMId`
+    /// (`byop:<id>:<model_id>`).
+    #[serde(default = "AgentProvider::default_id")]
+    pub id: String,
+
+    /// User-visible display name (e.g. "DeepSeek Official", "Local Ollama").
+    pub name: String,
+
+    /// Kind discriminator — currently always `OpenAiCompatible`.
+    #[serde(default)]
+    pub kind: AgentProviderKind,
+
+    /// Wire-protocol variant. Old configs without this field deserialize as
+    /// `OpenAi` (the original behavior).
+    #[serde(default)]
+    pub api_type: AgentProviderApiType,
+
+    /// API base URL, e.g. `https://api.deepseek.com/v1` or
+    /// `http://localhost:11434/v1`. Stored without trailing slash by
+    /// convention; the request layer does its own normalization.
+    pub base_url: String,
+
+    /// Models exposed to the picker for this provider. Each entry's `id` is
+    /// what gets sent as the upstream `model` field; `name` is the picker
+    /// display.
+    #[serde(default)]
+    pub models: Vec<AgentProviderModel>,
+}
+
+impl AgentProvider {
+    fn default_id() -> String {
+        uuid::Uuid::new_v4().to_string()
+    }
+}
+
+impl Default for AgentProvider {
+    fn default() -> Self {
+        Self {
+            id: AgentProvider::default_id(),
+            name: Default::default(),
+            kind: Default::default(),
+            api_type: Default::default(),
+            base_url: Default::default(),
+            models: Default::default(),
+        }
+    }
+}
+
+impl settings_value::SettingsValue for AgentProvider {}
+
+/// One model entry within an [`AgentProvider`]. The custom `Deserialize`
+/// impl supports both the full struct shape and a bare-string shorthand
+/// (`models = ["llama3.1"]`) for ergonomic TOML hand-editing.
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+pub struct AgentProviderModel {
+    pub name: String,
+    pub id: String,
+
+    /// Context window in tokens. 0 means "unknown" — dispatch falls back to
+    /// not enforcing a token budget locally and lets the upstream surface
+    /// any 4xx context-overflow errors.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub context_window: u32,
+
+    /// Max output tokens per response. 0 means "unspecified".
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub max_output_tokens: u32,
+
+    /// Whether this model emits CoT/reasoning output. Phase 4c wires this
+    /// into the streaming layer; Phase 1b-1 only persists the value.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reasoning: bool,
+
+    /// Whether to advertise tool/function-calling schemas to this model.
+    /// Default `true` — preserves the existing behavior of the
+    /// single-provider config's `supports_tools` toggle, which defaulted on.
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub tool_call: bool,
+
+    // Multimodal capability flags — three-state semantics:
+    //   None         = "Auto", inferred at runtime (Phase 4c).
+    //   Some(true)   = user-forced ON.
+    //   Some(false)  = user-forced OFF.
+    /// Image input capability (image/* MIME).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<bool>,
+    /// PDF input capability (application/pdf).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pdf: Option<bool>,
+    /// Audio input capability (audio/* MIME).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<bool>,
+}
+
+impl AgentProviderModel {
+    pub fn from_id(id: String) -> Self {
+        Self {
+            name: id.clone(),
+            id,
+            context_window: 0,
+            max_output_tokens: 0,
+            reasoning: false,
+            tool_call: true,
+            image: None,
+            pdf: None,
+            audio: None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentProviderModel {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Either {
+            Plain(String),
+            Full {
+                #[serde(default)]
+                name: String,
+                id: String,
+                #[serde(default)]
+                context_window: u32,
+                #[serde(default)]
+                max_output_tokens: u32,
+                #[serde(default)]
+                reasoning: bool,
+                #[serde(default = "default_true")]
+                tool_call: bool,
+                #[serde(default)]
+                image: Option<bool>,
+                #[serde(default)]
+                pdf: Option<bool>,
+                #[serde(default)]
+                audio: Option<bool>,
+            },
+        }
+        match Either::deserialize(deserializer)? {
+            Either::Plain(id) => Ok(AgentProviderModel::from_id(id)),
+            Either::Full {
+                name,
+                id,
+                context_window,
+                max_output_tokens,
+                reasoning,
+                tool_call,
+                image,
+                pdf,
+                audio,
+            } => {
+                let name = if name.is_empty() { id.clone() } else { name };
+                Ok(AgentProviderModel {
+                    name,
+                    id,
+                    context_window,
+                    max_output_tokens,
+                    reasoning,
+                    tool_call,
+                    image,
+                    pdf,
+                    audio,
+                })
+            }
+        }
+    }
+}
+
+impl settings_value::SettingsValue for AgentProviderModel {}
+
 define_settings_group!(AISettings, settings: [
     // If `false`, all AI features are disabled.
     is_any_ai_enabled: IsAnyAIEnabled {
@@ -1585,6 +1856,109 @@ define_settings_group!(AISettings, settings: [
         private: false,
         toml_path: "agents.local_provider.compaction.reserved",
         description: "Override the reserved-output buffer subtracted from the context window. Empty/0 uses min(20000, max_output).",
+    }
+
+    // ===== BYOP settings (Phase 1b-1) — list + last-used + compaction =====
+
+    // The user-configured Agent providers list. Each provider's API key
+    // lives in `AgentProviderSecrets` keyed by `AgentProvider::id` (Phase
+    // 1b-2 refactors that singleton; for now the legacy `LocalProviderApiKey`
+    // keychain key is still in effect and unrelated to these entries).
+    agent_providers: AgentProviders {
+        type: Vec<AgentProvider>,
+        default: Vec::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        private: false,
+        toml_path: "agents.warp_agent.providers",
+        description: "User-configured custom Agent providers (OpenAI-compatible).",
+    }
+
+    // The most-recently picked BYOP model encoded as a `byop:<provider_id>:<model_id>`
+    // LLMId string. Empty = no last-used yet; new tabs/sessions fall back to
+    // the profile default. Hydrated from this setting by the picker so the
+    // user's choice persists across restarts.
+    byop_last_used_model_id: ByopLastUsedModelId {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop.last_used_model_id",
+        description: "Last selected BYOP model id (picker hydrates new tabs/sessions from this).",
+    }
+
+    // Auto-trigger compaction on token-overflow. Mirrors the existing
+    // `local_provider_compaction_auto` field — Phase 1b-2 will read this
+    // path going forward, after migration copies the legacy value across.
+    byop_compaction_auto: ByopCompactionAuto {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop_compaction.auto",
+        description: "Enable BYOP automatic conversation compaction on context overflow.",
+    }
+
+    byop_compaction_prune: ByopCompactionPrune {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop_compaction.prune",
+        description: "Auto-prune older tool outputs to free BYOP context.",
+    }
+
+    byop_compaction_tail_turns: ByopCompactionTailTurns {
+        type: u32,
+        default: 2u32,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop_compaction.tail_turns",
+        description: "Number of recent user turns to keep verbatim during compaction.",
+    }
+
+    byop_compaction_preserve_recent_tokens: ByopCompactionPreserveRecentTokens {
+        type: u32,
+        default: 0u32,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop_compaction.preserve_recent_tokens",
+        description: "Override the recent-tokens preservation budget (0 = auto).",
+    }
+
+    byop_compaction_reserved: ByopCompactionReserved {
+        type: u32,
+        default: 0u32,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop_compaction.reserved",
+        description: "Reserved buffer tokens for compaction overflow check (0 = auto).",
+    }
+
+    byop_compaction_model_provider_id: ByopCompactionModelProviderId {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop_compaction.model.provider_id",
+        description: "Optional dedicated provider id for compaction LLM calls.",
+    }
+
+    byop_compaction_model_id: ByopCompactionModelId {
+        type: String,
+        default: String::new(),
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.byop_compaction.model.model_id",
+        description: "Optional dedicated model id for compaction LLM calls.",
     }
 ]);
 
