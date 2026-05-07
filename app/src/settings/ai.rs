@@ -1888,9 +1888,12 @@ define_settings_group!(AISettings, settings: [
         description: "Last selected BYOP model id (picker hydrates new tabs/sessions from this).",
     }
 
-    // Auto-trigger compaction on token-overflow. Mirrors the existing
-    // `local_provider_compaction_auto` field — Phase 1b-2 will read this
-    // path going forward, after migration copies the legacy value across.
+    // Auto-trigger compaction on token-overflow. Adopts openwarp's
+    // `SyncToCloud::Globally(RespectUserSyncSetting::Yes)` policy so
+    // compaction preferences sync across a user's devices; the legacy
+    // `local_provider_compaction_auto` uses `SyncToCloud::Never` and the
+    // divergence is intentional. Phase 1b-2 will read this path going
+    // forward, after migration copies the legacy value across.
     byop_compaction_auto: ByopCompactionAuto {
         type: bool,
         default: true,
