@@ -85,7 +85,13 @@ impl AgentProviderSecrets {
                 Ok(map) => return map,
                 Err(e) => {
                     log::error!("Failed to deserialize AgentProviderSecrets V2 blob: {e:#}");
-                    // Fall through to V1 fallback as a recovery path.
+                    // Fall through to V1 fallback as a recovery path while V1
+                    // data is still authoritative during the transition. Once
+                    // Phase 1b-4 removes the V1 keychain entry, this path
+                    // would silently mask V2 corruption with an empty map —
+                    // change to `return HashMap::new()` then so the user is
+                    // alerted via the missing-key UI rather than confused
+                    // dispatch errors.
                 }
             },
             Err(secure_storage::Error::NotFound) => { /* fall through to V1 */ }
