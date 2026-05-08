@@ -402,7 +402,10 @@ impl RequestParams {
             supported_tools_override: request_input.supported_tools_override.clone(),
             parent_agent_id: None,
             agent_name: None,
-            local_provider_config: crate::ai::local_provider_config::snapshot_from_app(app),
+            local_provider_config: crate::ai::local_provider_config::snapshot_for_request(
+                app,
+                &request_input.model_id,
+            ),
             root_task_id: conversation.root_task_id,
             local_provider_compaction_config:
                 crate::ai::local_provider_config::compaction_config_from_app(app),

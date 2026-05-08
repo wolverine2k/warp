@@ -65,6 +65,61 @@ pub fn snapshot_from_app(ctx: &AppContext) -> Option<LocalProviderConfig> {
     Some(cfg)
 }
 
+/// Build a `LocalProviderConfig` for an outgoing request, branching on the
+/// LLMId prefix:
+///
+/// - `byop:<provider_id>:<model_id>` → look up via
+///   `agent_providers::lookup_byop` and build a `LocalProviderConfig`
+///   snapshot from the resulting `(AgentProvider, api_key, model_id)`
+///   triple. This is the path taken after Phase 1b-2 migration runs.
+/// - Anything else → fall back to `snapshot_from_app` (legacy
+///   `agents.local_provider.*` settings + the `__legacy__` keychain
+///   placeholder). Used only for the brief transition window between the
+///   user's first launch with this build and the migration kick-off.
+///
+/// Returns `None` if neither path produces a valid config — dispatch
+/// then falls through to the cloud-Warp path.
+pub fn snapshot_for_request(ctx: &AppContext, model: &LLMId) -> Option<LocalProviderConfig> {
+    if !FeatureFlag::LocalLlmProvider.is_enabled() {
+        return None;
+    }
+
+    if let Some((provider, api_key, model_id)) =
+        crate::ai::agent_providers::lookup_byop(ctx, model)
+    {
+        // The single model entry corresponding to model_id within the
+        // provider's models list — fall back to first if the LLMId
+        // references a model id that's no longer in the list.
+        let model_entry = provider
+            .models
+            .iter()
+            .find(|m| m.id == model_id)
+            .or_else(|| provider.models.first())?;
+        let context_window = if model_entry.context_window > 0 {
+            Some(model_entry.context_window)
+        } else {
+            None
+        };
+        let cfg = LocalProviderConfig {
+            display_name: if provider.name.is_empty() {
+                model_id.clone()
+            } else {
+                provider.name.clone()
+            },
+            base_url: provider.base_url.clone(),
+            model_id: model_id.clone(),
+            api_key: Some(api_key),
+            supports_tools: model_entry.tool_call,
+            context_window,
+        };
+        cfg.validate().ok()?;
+        return Some(cfg);
+    }
+
+    // Legacy path — used only until the migration helper has run.
+    snapshot_from_app(ctx)
+}
+
 /// Build a synthetic `LLMInfo` for the local provider so it appears in the
 /// model picker alongside server-provided models. The synthetic LLMId carries
 /// the `local:` prefix the dispatch router checks (per tech.md §5).
