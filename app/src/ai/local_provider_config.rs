@@ -84,8 +84,7 @@ pub fn snapshot_for_request(ctx: &AppContext, model: &LLMId) -> Option<LocalProv
         return None;
     }
 
-    if let Some((provider, api_key, model_id)) =
-        crate::ai::agent_providers::lookup_byop(ctx, model)
+    if let Some((provider, api_key, model_id)) = crate::ai::agent_providers::lookup_byop(ctx, model)
     {
         // The single model entry corresponding to model_id within the
         // provider's models list — fall back to first if the LLMId

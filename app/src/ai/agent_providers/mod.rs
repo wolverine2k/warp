@@ -141,10 +141,7 @@ pub fn build_byop_models_by_feature(app: &AppContext) -> ModelsByFeature {
 /// configured. Callers should map `None` to a structured "provider
 /// unavailable" error so the conversation pane can surface a recoverable
 /// banner instead of a hard crash.
-pub fn lookup_byop(
-    app: &AppContext,
-    id: &ai::LLMId,
-) -> Option<(AgentProvider, String, String)> {
+pub fn lookup_byop(app: &AppContext, id: &ai::LLMId) -> Option<(AgentProvider, String, String)> {
     let (provider_id, model_id) = llm_id::decode(id)?;
     let providers = AISettings::as_ref(app).agent_providers.value().clone();
     let provider = providers.into_iter().find(|p| p.id == provider_id)?;

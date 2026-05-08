@@ -29,7 +29,7 @@ use crate::editor::{
 use crate::settings::{AISettings, AgentProvider, AgentProviderApiType, AgentProviderModel};
 
 use super::ai_page::{AISettingsPageAction, AISettingsPageView};
-use super::settings_page::{HEADER_PADDING, SettingsWidget, build_sub_header, render_separator};
+use super::settings_page::{build_sub_header, render_separator, SettingsWidget, HEADER_PADDING};
 
 const CARD_BUTTON_FONT_SIZE: f32 = 12.0;
 const CARD_BUTTON_PADDING: f32 = 6.0;
@@ -691,7 +691,8 @@ impl SettingsWidget for AgentProvidersWidget {
         .with_padding_bottom(HEADER_PADDING)
         .finish();
 
-        let description_text = "Configure your own OpenAI-compatible LLM endpoints (Ollama, LM Studio, \
+        let description_text =
+            "Configure your own OpenAI-compatible LLM endpoints (Ollama, LM Studio, \
              vLLM, llama.cpp, NIM, etc.) so their models appear in the Agent Mode picker. \
              Requests to these providers bypass warp.dev for the LLM call.";
         let description = Container::new(
