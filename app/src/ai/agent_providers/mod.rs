@@ -23,7 +23,7 @@ use crate::settings::{AISettings, AgentProvider};
 /// "Valid" = provider has a non-empty `base_url`, at least one model, and
 /// has an API key in `AgentProviderSecrets`. Invalid providers are silently
 /// skipped — the user can spot them via the (Phase 1b-3) settings widget.
-fn build_byop_llm_infos(app: &AppContext) -> Vec<LLMInfo> {
+pub fn build_byop_llm_infos(app: &AppContext) -> Vec<LLMInfo> {
     let providers = AISettings::as_ref(app).agent_providers.value().clone();
     let secrets = AgentProviderSecrets::as_ref(app);
     let mut out = Vec::new();
@@ -141,7 +141,6 @@ pub fn build_byop_models_by_feature(app: &AppContext) -> ModelsByFeature {
 /// configured. Callers should map `None` to a structured "provider
 /// unavailable" error so the conversation pane can surface a recoverable
 /// banner instead of a hard crash.
-#[allow(dead_code)] // Wired up by Phase 1b-2 Task 6 (dispatch).
 pub fn lookup_byop(
     app: &AppContext,
     id: &ai::LLMId,

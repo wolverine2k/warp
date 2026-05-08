@@ -187,36 +187,64 @@ pub fn compaction_config_from_app(
     }
 }
 
-/// Inject (or refresh) the synthetic local-provider entry across every feature
-/// list in `ModelsByFeature`. Called after a model-list refresh so the picker
-/// shows the local model alongside server-provided ones. Idempotent: any prior
-/// `local:*` entries are removed before the new one is added, so calling this
-/// after the user changes their local-provider config produces the latest
-/// state without duplicate entries accumulating.
+/// Inject (or refresh) custom-provider entries across every feature list in
+/// `ModelsByFeature`. Called after a model-list refresh so the picker shows
+/// the user's BYOP models alongside server-provided ones.
+///
+/// Idempotent: any prior `local:*` (legacy single-provider) and `byop:*`
+/// (Phase 1b-2 multi-provider) entries are purged before the latest set is
+/// re-pushed. Both prefixes are purged regardless of which one this function
+/// ends up adding so the picker doesn't accumulate duplicates across the
+/// migration boundary.
+///
+/// Wires:
+/// - During the brief pre-migration transition window, `snapshot_from_app`
+///   returns the legacy single-provider config and `synthetic_llm_info`
+///   adds one `local:` entry.
+/// - Post-migration (the steady state), `agent_providers::build_byop_llm_infos`
+///   enumerates the user's `Vec<AgentProvider>` and emits one entry per
+///   `(provider, model)` pair using the `byop:<id>:<model>` LLMId format.
+/// - Both paths are tried; whichever produces entries wins. In practice
+///   only one will be active at a time.
 pub fn inject_local_provider_choice(
     models: &mut crate::ai::llms::ModelsByFeature,
     ctx: &AppContext,
 ) {
-    fn purge_local(choices: &mut Vec<LLMInfo>) {
-        choices.retain(|info| !is_local_llm_id(&info.id));
+    fn is_byop_llm_id(id: &LLMId) -> bool {
+        id.as_str().starts_with("byop:")
     }
-    purge_local(models.agent_mode.choices_mut());
-    purge_local(models.coding.choices_mut());
+    fn purge(choices: &mut Vec<LLMInfo>) {
+        choices.retain(|info| !is_local_llm_id(&info.id) && !is_byop_llm_id(&info.id));
+    }
+    purge(models.agent_mode.choices_mut());
+    purge(models.coding.choices_mut());
     if let Some(cli) = models.cli_agent.as_mut() {
-        purge_local(cli.choices_mut());
+        purge(cli.choices_mut());
     }
     if let Some(cu) = models.computer_use.as_mut() {
-        purge_local(cu.choices_mut());
+        purge(cu.choices_mut());
     }
 
-    let Some(cfg) = snapshot_from_app(ctx) else {
-        return;
-    };
-    let info = synthetic_llm_info(&cfg);
-    // Append to agent_mode and coding (the two features we expect a local
-    // model to participate in). cli_agent and computer_use stay server-only
-    // because the local provider's tool catalog (5 v1 tools) doesn't include
-    // long-running shell or computer-use variants.
-    models.agent_mode.choices_mut().push(info.clone());
-    models.coding.choices_mut().push(info);
+    // BYOP path: enumerate every valid (provider, model) pair from
+    // agents.warp_agent.providers + AgentProviderSecrets.
+    let byop_infos = crate::ai::agent_providers::build_byop_llm_infos(ctx);
+    for info in &byop_infos {
+        models.agent_mode.choices_mut().push(info.clone());
+        models.coding.choices_mut().push(info.clone());
+    }
+
+    // Legacy local: path — only active during the pre-migration transition
+    // window. After Phase 1b-2's migration helper runs, snapshot_from_app
+    // returns None (no api_key under the __legacy__ placeholder), so this
+    // branch becomes a no-op.
+    if let Some(cfg) = snapshot_from_app(ctx) {
+        let info = synthetic_llm_info(&cfg);
+        // Append to agent_mode and coding (the two features we expect a
+        // local model to participate in). cli_agent and computer_use stay
+        // server-only because the local provider's tool catalog (5 v1
+        // tools) doesn't include long-running shell or computer-use
+        // variants.
+        models.agent_mode.choices_mut().push(info.clone());
+        models.coding.choices_mut().push(info);
+    }
 }
