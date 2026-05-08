@@ -14,6 +14,7 @@
 //!    of `warp_multi_agent_api::ResponseEvent`s matching the contract the
 //!    Warp client controller already speaks.
 
+pub mod adapters;
 pub mod agent_provider_secrets;
 pub mod api_type;
 pub mod compaction;
@@ -26,6 +27,10 @@ pub mod run;
 pub mod tools;
 pub mod wire;
 
+pub use adapters::{
+    select_adapter, AdapterError as ProviderAdapterError, OpenAiAdapter, ProviderAdapter,
+    StreamDecoder, StreamIds,
+};
 pub use agent_provider_secrets::{
     AgentProviderSecrets, AgentProviderSecretsEvent, LEGACY_PROVIDER_PLACEHOLDER_ID,
 };
