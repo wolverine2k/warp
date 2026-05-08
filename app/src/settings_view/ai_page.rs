@@ -1,9 +1,9 @@
 #[cfg(not(target_family = "wasm"))]
 use crate::ai::aws_credentials::refresh_aws_credentials;
+use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::blocklist::agent_view::agent_input_footer::editor::{
     AgentToolbarEditorMode, AgentToolbarInlineEditor,
 };
-use crate::ai::blocklist::BlocklistAIPermissions;
 use crate::ai::execution_profiles::model_menu_items::available_model_menu_items;
 use crate::ai::execution_profiles::profiles::{
     AIExecutionProfilesModel, AIExecutionProfilesModelEvent, ClientProfileId,
@@ -12,13 +12,13 @@ use crate::ai::execution_profiles::{AIExecutionProfile, ActionPermission, WriteT
 use crate::ai::llms::{LLMContextWindow, LLMId, LLMPreferences, LLMPreferencesEvent};
 use crate::ai::mcp::TemplatableMCPServerManager;
 use crate::ai::paths::host_native_absolute_path;
+use crate::auth::AuthStateProvider;
 use crate::auth::auth_manager::{AuthManager, LoginGatedFeature};
 use crate::auth::auth_view_modal::AuthViewVariant;
-use crate::auth::AuthStateProvider;
-use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 use crate::cloud_object::GenericStringObjectFormat::Json;
 use crate::cloud_object::JsonObjectType;
 use crate::cloud_object::ObjectType;
+use crate::cloud_object::model::persistence::{CloudModel, CloudModelEvent};
 
 use crate::editor::{EditorOptions, InteractionState, SingleLineEditorOptions, TextColors};
 use crate::settings::InputSettings;
@@ -37,11 +37,12 @@ use crate::settings::{
     ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
     WarpDriveContextEnabled,
 };
-use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
+use crate::settings::{AgentProvider, AgentProviderModel};
 use crate::terminal::CLIAgent;
+use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::view_components::{
-    action_button::{ActionButton, ButtonSize, SecondaryTheme},
     FilterableDropdown, SubmittableTextInput, SubmittableTextInputEvent,
+    action_button::{ActionButton, ButtonSize, SecondaryTheme},
 };
 use crate::workspaces::user_workspaces::UserWorkspacesEvent;
 use ::ai::api_keys::{ApiKeyManager, ApiKeys};
@@ -63,6 +64,8 @@ use warpui::id;
 use warpui::keymap::ContextPredicate;
 use warpui::ui_components::slider::SliderStateHandle;
 use warpui::{
+    Action, AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
+    ViewHandle,
     elements::{
         Container, Flex, FormattedTextElement, HighlightedHyperlink, HyperlinkUrl, ParentElement,
     },
@@ -71,23 +74,20 @@ use warpui::{
         components::{Coords, UiComponent, UiComponentStyles},
         switch::{SwitchStateHandle, TooltipConfig},
     },
-    Action, AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext,
-    ViewHandle,
 };
 
 use super::execution_profile_view::{ExecutionProfileView, ExecutionProfileViewEvent};
 use super::settings_page::{render_custom_size_header, render_settings_info_banner};
 use super::{
-    flags,
+    SettingActionPairContexts, SettingActionPairDescriptions, SettingsAction, SettingsSection,
+    ToggleSettingActionPair, flags,
     settings_page::{
+        HEADER_PADDING, InputListItem, LocalOnlyIconState, MatchData, PageType, SettingsPageMeta,
+        SettingsPageViewHandle, SettingsWidget, TOGGLE_BUTTON_RIGHT_PADDING, ToggleState,
         build_sub_header, build_toggle_element, render_body_item_label,
         render_body_item_label_with_icon, render_dropdown_item, render_dropdown_item_label,
-        render_full_pane_width_ai_button, render_input_list, render_separator, InputListItem,
-        LocalOnlyIconState, MatchData, PageType, SettingsPageMeta, SettingsPageViewHandle,
-        SettingsWidget, ToggleState, HEADER_PADDING, TOGGLE_BUTTON_RIGHT_PADDING,
+        render_full_pane_width_ai_button, render_input_list, render_separator,
     },
-    SettingActionPairContexts, SettingActionPairDescriptions, SettingsAction, SettingsSection,
-    ToggleSettingActionPair,
 };
 
 /// Identifies which subpage of the AI settings the user is viewing.
@@ -125,6 +125,7 @@ use crate::server::telemetry::{
 use crate::ui_components::icons::Icon;
 use crate::view_components::dropdown::DropdownAction;
 use crate::workspaces::workspace::{AdminEnablementSetting, CustomerType};
+use crate::{TelemetryEvent, UserWorkspaces};
 use crate::{
     appearance::Appearance,
     editor::Event as EditorEvent,
@@ -135,7 +136,6 @@ use crate::{
     view_components::{Dropdown, DropdownItem},
 };
 use crate::{report_error, report_if_error, send_telemetry_from_ctx};
-use crate::{TelemetryEvent, UserWorkspaces};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -169,132 +169,154 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     builder: fn(SettingsAction) -> T,
 ) {
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::new(
-            "AI",
-            builder(SettingsAction::AI(AISettingsPageAction::ToggleGlobalAI)),
-            context,
-            flags::IS_ANY_AI_ENABLED,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)],
+        vec![
+            ToggleSettingActionPair::new(
+                "AI",
+                builder(SettingsAction::AI(AISettingsPageAction::ToggleGlobalAI)),
+                context,
+                flags::IS_ANY_AI_ENABLED,
+            )
+            .with_group(bindings::BindingGroup::WarpAi),
+        ],
         app,
     );
 
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::new(
-            "Active AI",
-            builder(SettingsAction::AI(AISettingsPageAction::ToggleActiveAI)),
-            &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
-            flags::IS_ACTIVE_AI_ENABLED,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)],
+        vec![
+            ToggleSettingActionPair::new(
+                "Active AI",
+                builder(SettingsAction::AI(AISettingsPageAction::ToggleActiveAI)),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::IS_ACTIVE_AI_ENABLED,
+            )
+            .with_group(bindings::BindingGroup::WarpAi),
+        ],
         app,
     );
 
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::new(
-            if FeatureFlag::AgentView.is_enabled() {
-                "terminal command autodetection in agent input"
-            } else {
-                "natural language detection"
-            },
-            builder(SettingsAction::AI(
-                AISettingsPageAction::ToggleAIInputAutoDetection,
-            )),
-            &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
-            flags::AI_INPUT_AUTODETECTION_FLAG,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)
-        .with_enabled(|| FeatureFlag::AgentMode.is_enabled())],
+        vec![
+            ToggleSettingActionPair::new(
+                if FeatureFlag::AgentView.is_enabled() {
+                    "terminal command autodetection in agent input"
+                } else {
+                    "natural language detection"
+                },
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleAIInputAutoDetection,
+                )),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::AI_INPUT_AUTODETECTION_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| FeatureFlag::AgentMode.is_enabled()),
+        ],
         app,
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::new(
-            "agent prompt autodetection in terminal input",
-            builder(SettingsAction::AI(
-                AISettingsPageAction::ToggleNLDInTerminal,
-            )),
-            &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
-            flags::NLD_IN_TERMINAL_FLAG,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)
-        .with_enabled(|| FeatureFlag::AgentView.is_enabled())],
+        vec![
+            ToggleSettingActionPair::new(
+                "agent prompt autodetection in terminal input",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleNLDInTerminal,
+                )),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::NLD_IN_TERMINAL_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| FeatureFlag::AgentView.is_enabled()),
+        ],
         app,
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::new(
-            "Next Command",
-            builder(SettingsAction::AI(
-                AISettingsPageAction::ToggleIntelligentAutosuggestions,
-            )),
-            &(context.clone() & id!(flags::IS_ACTIVE_AI_ENABLED)),
-            flags::INTELLIGENT_AUTOSUGGESTIONS_FLAG,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)],
+        vec![
+            ToggleSettingActionPair::new(
+                "Next Command",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleIntelligentAutosuggestions,
+                )),
+                &(context.clone() & id!(flags::IS_ACTIVE_AI_ENABLED)),
+                flags::INTELLIGENT_AUTOSUGGESTIONS_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi),
+        ],
         app,
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::new(
-            "prompt suggestions",
-            builder(SettingsAction::AI(
-                AISettingsPageAction::TogglePromptSuggestions,
-            )),
-            &(context.clone() & id!(flags::IS_ACTIVE_AI_ENABLED)),
-            flags::PROMPT_SUGGESTIONS_FLAG,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)],
+        vec![
+            ToggleSettingActionPair::new(
+                "prompt suggestions",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::TogglePromptSuggestions,
+                )),
+                &(context.clone() & id!(flags::IS_ACTIVE_AI_ENABLED)),
+                flags::PROMPT_SUGGESTIONS_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi),
+        ],
         app,
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::new(
-            "code suggestions",
-            builder(SettingsAction::AI(
-                AISettingsPageAction::ToggleCodeSuggestions,
-            )),
-            &(context.clone()
-                & id!(flags::IS_ACTIVE_AI_ENABLED)
-                & id!(flags::PROMPT_SUGGESTIONS_FLAG)),
-            flags::CODE_SUGGESTIONS_FLAG,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)],
+        vec![
+            ToggleSettingActionPair::new(
+                "code suggestions",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleCodeSuggestions,
+                )),
+                &(context.clone()
+                    & id!(flags::IS_ACTIVE_AI_ENABLED)
+                    & id!(flags::PROMPT_SUGGESTIONS_FLAG)),
+                flags::CODE_SUGGESTIONS_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi),
+        ],
         app,
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::custom(
-            SettingActionPairDescriptions::new("Show agent tips", "Hide agent tips"),
-            builder(SettingsAction::AI(
-                AISettingsPageAction::ToggleShowAgentTips,
-            )),
-            SettingActionPairContexts::new(
-                context.clone() & id!(flags::IS_ANY_AI_ENABLED) & !id!(flags::SHOW_AGENT_TIPS_FLAG),
-                context.clone() & id!(flags::IS_ANY_AI_ENABLED) & id!(flags::SHOW_AGENT_TIPS_FLAG),
-            ),
-            None,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)
-        .with_enabled(|| FeatureFlag::AgentTips.is_enabled())],
+        vec![
+            ToggleSettingActionPair::custom(
+                SettingActionPairDescriptions::new("Show agent tips", "Hide agent tips"),
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleShowAgentTips,
+                )),
+                SettingActionPairContexts::new(
+                    context.clone()
+                        & id!(flags::IS_ANY_AI_ENABLED)
+                        & !id!(flags::SHOW_AGENT_TIPS_FLAG),
+                    context.clone()
+                        & id!(flags::IS_ANY_AI_ENABLED)
+                        & id!(flags::SHOW_AGENT_TIPS_FLAG),
+                ),
+                None,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| FeatureFlag::AgentTips.is_enabled()),
+        ],
         app,
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::custom(
-            SettingActionPairDescriptions::new(
-                "Show Oz changelog in new agent conversation view",
-                "Hide Oz changelog in new agent conversation view",
-            ),
-            builder(SettingsAction::AI(
-                AISettingsPageAction::ToggleShowOzUpdatesInZeroState,
-            )),
-            SettingActionPairContexts::new(
-                context.clone()
-                    & id!(flags::IS_ANY_AI_ENABLED)
-                    & !id!(flags::SHOW_OZ_UPDATES_IN_ZERO_STATE_FLAG),
-                context.clone()
-                    & id!(flags::IS_ANY_AI_ENABLED)
-                    & id!(flags::SHOW_OZ_UPDATES_IN_ZERO_STATE_FLAG),
-            ),
-            None,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)
-        .with_enabled(|| FeatureFlag::AgentView.is_enabled())],
+        vec![
+            ToggleSettingActionPair::custom(
+                SettingActionPairDescriptions::new(
+                    "Show Oz changelog in new agent conversation view",
+                    "Hide Oz changelog in new agent conversation view",
+                ),
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleShowOzUpdatesInZeroState,
+                )),
+                SettingActionPairContexts::new(
+                    context.clone()
+                        & id!(flags::IS_ANY_AI_ENABLED)
+                        & !id!(flags::SHOW_OZ_UPDATES_IN_ZERO_STATE_FLAG),
+                    context.clone()
+                        & id!(flags::IS_ANY_AI_ENABLED)
+                        & id!(flags::SHOW_OZ_UPDATES_IN_ZERO_STATE_FLAG),
+                ),
+                None,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| FeatureFlag::AgentView.is_enabled()),
+        ],
         app,
     );
     {
@@ -324,60 +346,70 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
         app.register_fixed_bindings(mode_bindings);
     }
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::new(
-            "natural language autosuggestions",
-            builder(SettingsAction::AI(
-                AISettingsPageAction::ToggleNaturalLanguageAutosuggestions,
-            )),
-            &(context.clone() & id!(flags::IS_ACTIVE_AI_ENABLED)),
-            flags::NATURAL_LANGUAGE_AUTOSUGGESTIONS_FLAG,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)
-        .with_enabled(|| FeatureFlag::PredictAMQueries.is_enabled())],
+        vec![
+            ToggleSettingActionPair::new(
+                "natural language autosuggestions",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleNaturalLanguageAutosuggestions,
+                )),
+                &(context.clone() & id!(flags::IS_ACTIVE_AI_ENABLED)),
+                flags::NATURAL_LANGUAGE_AUTOSUGGESTIONS_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| FeatureFlag::PredictAMQueries.is_enabled()),
+        ],
         app,
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::new(
-            "shared block title generation",
-            builder(SettingsAction::AI(
-                AISettingsPageAction::ToggleSharedTitleGeneration,
-            )),
-            &(context.clone() & id!(flags::IS_ACTIVE_AI_ENABLED)),
-            flags::SHARED_BLOCK_TITLE_GENERATION_FLAG,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)
-        .with_enabled(|| FeatureFlag::SharedBlockTitleGeneration.is_enabled())],
+        vec![
+            ToggleSettingActionPair::new(
+                "shared block title generation",
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleSharedTitleGeneration,
+                )),
+                &(context.clone() & id!(flags::IS_ACTIVE_AI_ENABLED)),
+                flags::SHARED_BLOCK_TITLE_GENERATION_FLAG,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| FeatureFlag::SharedBlockTitleGeneration.is_enabled()),
+        ],
         app,
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::new(
-            "voice input",
-            builder(SettingsAction::AI(AISettingsPageAction::ToggleVoiceInput)),
-            &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
-            flags::IS_VOICE_INPUT_ENABLED,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)
-        .with_enabled(|| cfg!(feature = "voice_input"))],
+        vec![
+            ToggleSettingActionPair::new(
+                "voice input",
+                builder(SettingsAction::AI(AISettingsPageAction::ToggleVoiceInput)),
+                &(context.clone() & id!(flags::IS_ANY_AI_ENABLED)),
+                flags::IS_VOICE_INPUT_ENABLED,
+            )
+            .with_group(bindings::BindingGroup::WarpAi)
+            .with_enabled(|| cfg!(feature = "voice_input")),
+        ],
         app,
     );
     ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
-        vec![ToggleSettingActionPair::custom(
-            SettingActionPairDescriptions::new(
-                "Show \"Use Agent\" footer",
-                "Hide \"Use Agent\" footer",
-            ),
-            builder(SettingsAction::AI(
-                AISettingsPageAction::ToggleUseAgentToolbar,
-            )),
-            SettingActionPairContexts::new(
-                context.clone()
-                    & id!(flags::IS_ANY_AI_ENABLED)
-                    & !id!(flags::USE_AGENT_FOOTER_FLAG),
-                context.clone() & id!(flags::IS_ANY_AI_ENABLED) & id!(flags::USE_AGENT_FOOTER_FLAG),
-            ),
-            None,
-        )
-        .with_group(bindings::BindingGroup::WarpAi)],
+        vec![
+            ToggleSettingActionPair::custom(
+                SettingActionPairDescriptions::new(
+                    "Show \"Use Agent\" footer",
+                    "Hide \"Use Agent\" footer",
+                ),
+                builder(SettingsAction::AI(
+                    AISettingsPageAction::ToggleUseAgentToolbar,
+                )),
+                SettingActionPairContexts::new(
+                    context.clone()
+                        & id!(flags::IS_ANY_AI_ENABLED)
+                        & !id!(flags::USE_AGENT_FOOTER_FLAG),
+                    context.clone()
+                        & id!(flags::IS_ANY_AI_ENABLED)
+                        & id!(flags::USE_AGENT_FOOTER_FLAG),
+                ),
+                None,
+            )
+            .with_group(bindings::BindingGroup::WarpAi),
+        ],
         app,
     );
     if !FeatureFlag::FullSourceCodeEmbedding.is_enabled() {
@@ -2290,6 +2322,84 @@ pub enum AISettingsPageAction {
     // `AISettingsPageView::handle_action` — same pattern as `AwsBedrockWidget`.
     ToggleLocalProviderEnabled,
     ToggleLocalProviderSupportsTools,
+
+    // ----- BYOP multi-provider actions (Phase 1b-3) -----
+    // Dispatched by the rebuilt `AgentProvidersWidget` in
+    // `agent_providers_widget.rs`. Each handler mutates the
+    // `agent_providers: Vec<AgentProvider>` setting (or
+    // `AgentProviderSecrets` for API keys), then notifies / rebuilds.
+    /// Add a fresh `AgentProvider` with a generated UUID and empty fields.
+    /// Triggers a page rebuild so the new card gets EditorView handles.
+    AddAgentProvider,
+
+    /// Remove the provider at the given index. Also wipes its API key from
+    /// `AgentProviderSecrets`.
+    RemoveAgentProvider {
+        provider_index: usize,
+    },
+
+    /// Update the provider's display name. Fires on EditorView blur/Enter.
+    UpdateAgentProviderName {
+        provider_index: usize,
+        name: String,
+    },
+
+    /// Update the provider's base URL.
+    UpdateAgentProviderBaseUrl {
+        provider_index: usize,
+        base_url: String,
+    },
+
+    /// Update the provider's API key. Routes to `AgentProviderSecrets`,
+    /// not to the settings TOML.
+    UpdateAgentProviderApiKey {
+        provider_index: usize,
+        api_key: String,
+    },
+
+    /// Set the provider's wire-protocol api_type (chip selector).
+    UpdateAgentProviderApiType {
+        provider_index: usize,
+        api_type: crate::settings::AgentProviderApiType,
+    },
+
+    /// Append a fresh empty model row to the provider's models list.
+    AddAgentProviderModel {
+        provider_index: usize,
+    },
+
+    /// Remove the model at `(provider_index, model_index)`.
+    RemoveAgentProviderModel {
+        provider_index: usize,
+        model_index: usize,
+    },
+
+    /// Update a model's display name.
+    UpdateAgentProviderModelName {
+        provider_index: usize,
+        model_index: usize,
+        name: String,
+    },
+
+    /// Update a model's upstream model id.
+    UpdateAgentProviderModelId {
+        provider_index: usize,
+        model_index: usize,
+        id: String,
+    },
+
+    /// Update a model's context window (tokens).
+    UpdateAgentProviderModelContextWindow {
+        provider_index: usize,
+        model_index: usize,
+        context_window: u32,
+    },
+
+    /// Toggle a model's tool_call capability flag.
+    ToggleAgentProviderModelToolCall {
+        provider_index: usize,
+        model_index: usize,
+    },
 }
 
 impl From<&AISettingsPageAction> for LoginGatedFeature {
@@ -2313,9 +2423,11 @@ impl TypedActionView for AISettingsPageView {
             AISettingsPageAction::SetVoiceInputToggleKey(key) => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     report_if_error!(settings.voice_input_toggle_key.set_value(*key, ctx));
-                    report_if_error!(settings
-                        .explicitly_interacted_with_voice
-                        .set_value(true, ctx));
+                    report_if_error!(
+                        settings
+                            .explicitly_interacted_with_voice
+                            .set_value(true, ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -2550,17 +2662,21 @@ impl TypedActionView for AISettingsPageView {
             }
             AISettingsPageAction::ToggleAutoOpenRichInputOnCLIAgentStart => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .auto_open_rich_input_on_cli_agent_start
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .auto_open_rich_input_on_cli_agent_start
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 ctx.notify();
             }
             AISettingsPageAction::ToggleAutoDismissRichInputAfterSubmit => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .auto_dismiss_rich_input_after_submit
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .auto_dismiss_rich_input_after_submit
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -2624,9 +2740,11 @@ impl TypedActionView for AISettingsPageView {
             }
             AISettingsPageAction::ToggleCanUseWarpCreditsWithByok => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .can_use_warp_credits_with_byok
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .can_use_warp_credits_with_byok
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -2668,9 +2786,11 @@ impl TypedActionView for AISettingsPageView {
             }
             AISettingsPageAction::ToggleShowOzUpdatesInZeroState => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .should_show_oz_updates_in_zero_state
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .should_show_oz_updates_in_zero_state
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -2960,9 +3080,11 @@ impl TypedActionView for AISettingsPageView {
             }
             AISettingsPageAction::ToggleAwsBedrockCredentialsEnabled => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .aws_bedrock_credentials_enabled
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .aws_bedrock_credentials_enabled
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -2975,9 +3097,11 @@ impl TypedActionView for AISettingsPageView {
             }
             AISettingsPageAction::ToggleCloudAgentComputerUse => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .cloud_agent_computer_use_enabled
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .cloud_agent_computer_use_enabled
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -2989,9 +3113,11 @@ impl TypedActionView for AISettingsPageView {
             }
             AISettingsPageAction::ToggleIncludeAgentCommandsInHistory => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .include_agent_commands_in_history
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .include_agent_commands_in_history
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -3000,9 +3126,11 @@ impl TypedActionView for AISettingsPageView {
                 crate::util::file::external_editor::EditorSettings::handle(ctx).update(
                     ctx,
                     |settings, ctx| {
-                        report_if_error!(settings
-                            .open_conversation_layout_preference
-                            .set_value(*layout, ctx));
+                        report_if_error!(
+                            settings
+                                .open_conversation_layout_preference
+                                .set_value(*layout, ctx)
+                        );
                     },
                 );
                 send_telemetry_from_ctx!(
@@ -3022,9 +3150,11 @@ impl TypedActionView for AISettingsPageView {
             }
             AISettingsPageAction::ToggleShowConversationHistory => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .show_conversation_history
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .show_conversation_history
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -3033,9 +3163,11 @@ impl TypedActionView for AISettingsPageView {
                 // `CloudPreferencesSyncer` as a `JsonPreference` GSO keyed
                 // `Global_AgentAttributionEnabled`; no bespoke server call needed.
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .agent_attribution_enabled
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .agent_attribution_enabled
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 ctx.notify();
             }
@@ -3051,12 +3183,231 @@ impl TypedActionView for AISettingsPageView {
             }
             AISettingsPageAction::ToggleLocalProviderSupportsTools => {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .local_provider_supports_tools
-                        .toggle_and_save_value(ctx));
+                    report_if_error!(
+                        settings
+                            .local_provider_supports_tools
+                            .toggle_and_save_value(ctx)
+                    );
                 });
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
                     prefs.refresh_local_provider_entry(ctx);
+                });
+                ctx.notify();
+            }
+
+            // ----- BYOP multi-provider actions (Phase 1b-3) -----
+            AISettingsPageAction::AddAgentProvider => {
+                let new_provider = AgentProvider::default();
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    providers.push(new_provider);
+                    report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                });
+                // Rebuild the page so the new card gets fresh EditorView handles.
+                self.page = Self::build_page(self.active_subpage, ctx);
+                ctx.notify();
+            }
+
+            AISettingsPageAction::RemoveAgentProvider { provider_index } => {
+                let provider_index = *provider_index;
+                let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
+                if let Some(provider) = providers.get(provider_index) {
+                    let provider_id = provider.id.clone();
+                    // Remove the API key from secure storage.
+                    ::ai::local_provider::AgentProviderSecrets::handle(ctx).update(
+                        ctx,
+                        |secrets, ctx| {
+                            secrets.remove(&provider_id, ctx);
+                        },
+                    );
+                }
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if provider_index < providers.len() {
+                        providers.remove(provider_index);
+                    }
+                    report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                });
+                // Rebuild the page so removed card's handles are dropped.
+                self.page = Self::build_page(self.active_subpage, ctx);
+                ctx.notify();
+            }
+
+            AISettingsPageAction::UpdateAgentProviderName {
+                provider_index,
+                name,
+            } => {
+                let provider_index = *provider_index;
+                let name = name.clone();
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        p.name = name;
+                        report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                    }
+                });
+                ctx.notify();
+            }
+
+            AISettingsPageAction::UpdateAgentProviderBaseUrl {
+                provider_index,
+                base_url,
+            } => {
+                let provider_index = *provider_index;
+                let base_url = base_url.clone();
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        p.base_url = base_url;
+                        report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                    }
+                });
+                ctx.notify();
+            }
+
+            AISettingsPageAction::UpdateAgentProviderApiKey {
+                provider_index,
+                api_key,
+            } => {
+                let provider_index = *provider_index;
+                let api_key = api_key.clone();
+                let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
+                if let Some(provider) = providers.get(provider_index) {
+                    let provider_id = provider.id.clone();
+                    ::ai::local_provider::AgentProviderSecrets::handle(ctx).update(
+                        ctx,
+                        |secrets, ctx| {
+                            secrets.set(&provider_id, api_key, ctx);
+                        },
+                    );
+                }
+                ctx.notify();
+            }
+
+            AISettingsPageAction::UpdateAgentProviderApiType {
+                provider_index,
+                api_type,
+            } => {
+                let provider_index = *provider_index;
+                let api_type = *api_type;
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        p.api_type = api_type;
+                        report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                    }
+                });
+                ctx.notify();
+            }
+
+            AISettingsPageAction::AddAgentProviderModel { provider_index } => {
+                let provider_index = *provider_index;
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        p.models.push(AgentProviderModel::from_id(String::new()));
+                        report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                    }
+                });
+                // Rebuild the page so the new model row gets fresh EditorView handles.
+                self.page = Self::build_page(self.active_subpage, ctx);
+                ctx.notify();
+            }
+
+            AISettingsPageAction::RemoveAgentProviderModel {
+                provider_index,
+                model_index,
+            } => {
+                let provider_index = *provider_index;
+                let model_index = *model_index;
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        if model_index < p.models.len() {
+                            p.models.remove(model_index);
+                        }
+                        report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                    }
+                });
+                // Rebuild the page so removed model row handles are dropped.
+                self.page = Self::build_page(self.active_subpage, ctx);
+                ctx.notify();
+            }
+
+            AISettingsPageAction::UpdateAgentProviderModelName {
+                provider_index,
+                model_index,
+                name,
+            } => {
+                let provider_index = *provider_index;
+                let model_index = *model_index;
+                let name = name.clone();
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        if let Some(m) = p.models.get_mut(model_index) {
+                            m.name = name;
+                            report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                        }
+                    }
+                });
+                ctx.notify();
+            }
+
+            AISettingsPageAction::UpdateAgentProviderModelId {
+                provider_index,
+                model_index,
+                id,
+            } => {
+                let provider_index = *provider_index;
+                let model_index = *model_index;
+                let id = id.clone();
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        if let Some(m) = p.models.get_mut(model_index) {
+                            m.id = id;
+                            report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                        }
+                    }
+                });
+                ctx.notify();
+            }
+
+            AISettingsPageAction::UpdateAgentProviderModelContextWindow {
+                provider_index,
+                model_index,
+                context_window,
+            } => {
+                let provider_index = *provider_index;
+                let model_index = *model_index;
+                let context_window = *context_window;
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        if let Some(m) = p.models.get_mut(model_index) {
+                            m.context_window = context_window;
+                            report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                        }
+                    }
+                });
+                ctx.notify();
+            }
+
+            AISettingsPageAction::ToggleAgentProviderModelToolCall {
+                provider_index,
+                model_index,
+            } => {
+                let provider_index = *provider_index;
+                let model_index = *model_index;
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        if let Some(m) = p.models.get_mut(model_index) {
+                            m.tool_call = !m.tool_call;
+                            report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                        }
+                    }
                 });
                 ctx.notify();
             }
@@ -6751,9 +7102,11 @@ impl AgentProvidersWidget {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .local_provider_display_name
-                        .set_value(buffer_text, ctx));
+                    report_if_error!(
+                        settings
+                            .local_provider_display_name
+                            .set_value(buffer_text, ctx)
+                    );
                 });
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
                     prefs.refresh_local_provider_entry(ctx);
@@ -6834,9 +7187,11 @@ impl AgentProvidersWidget {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
-                    report_if_error!(settings
-                        .local_provider_context_window
-                        .set_value(buffer_text, ctx));
+                    report_if_error!(
+                        settings
+                            .local_provider_context_window
+                            .set_value(buffer_text, ctx)
+                    );
                 });
                 LLMPreferences::handle(ctx).update(ctx, |prefs, ctx| {
                     prefs.refresh_local_provider_entry(ctx);
