@@ -1276,6 +1276,13 @@ pub(crate) fn initialize_app(
     // first model-list inject panics looking for an unregistered singleton.
     ctx.add_singleton_model(::ai::local_provider::AgentProviderSecrets::new);
 
+    // Phase 1b-2 stage B: one-time migration of legacy `agents.local_provider.*`
+    // config into the BYOP shape. Must run AFTER both AISettings (registered
+    // earlier via settings::init) and AgentProviderSecrets are present — the
+    // helper reads from both and writes to both. Idempotent — re-runs no-op
+    // once the marker is set.
+    crate::ai::agent_providers::migration::migrate_legacy_local_provider_if_needed(ctx);
+
     ctx.add_singleton_model(AntivirusInfo::new);
 
     cfg_if::cfg_if! {
