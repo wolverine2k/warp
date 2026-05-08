@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 
+use settings::Setting;
 use strum::IntoEnumIterator;
 use warpui::elements::{
     ChildView, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex, MainAxisAlignment,
@@ -111,7 +112,7 @@ impl AgentProvidersWidget {
         ctx.subscribe_to_view(&name_editor, move |_, editor, event, ctx| {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                ctx.dispatch_typed_action(AISettingsPageAction::UpdateAgentProviderName {
+                ctx.dispatch_typed_action_deferred(AISettingsPageAction::UpdateAgentProviderName {
                     provider_index,
                     name: buffer_text,
                 });
@@ -133,10 +134,12 @@ impl AgentProvidersWidget {
         ctx.subscribe_to_view(&base_url_editor, move |_, editor, event, ctx| {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                ctx.dispatch_typed_action(AISettingsPageAction::UpdateAgentProviderBaseUrl {
-                    provider_index,
-                    base_url: buffer_text,
-                });
+                ctx.dispatch_typed_action_deferred(
+                    AISettingsPageAction::UpdateAgentProviderBaseUrl {
+                        provider_index,
+                        base_url: buffer_text,
+                    },
+                );
             }
         });
 
@@ -158,10 +161,12 @@ impl AgentProvidersWidget {
         ctx.subscribe_to_view(&api_key_editor, move |_, editor, event, ctx| {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                ctx.dispatch_typed_action(AISettingsPageAction::UpdateAgentProviderApiKey {
-                    provider_index,
-                    api_key: buffer_text,
-                });
+                ctx.dispatch_typed_action_deferred(
+                    AISettingsPageAction::UpdateAgentProviderApiKey {
+                        provider_index,
+                        api_key: buffer_text,
+                    },
+                );
             }
         });
 
@@ -213,11 +218,13 @@ impl AgentProvidersWidget {
         ctx.subscribe_to_view(&name_editor, move |_, editor, event, ctx| {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                ctx.dispatch_typed_action(AISettingsPageAction::UpdateAgentProviderModelName {
-                    provider_index,
-                    model_index,
-                    name: buffer_text,
-                });
+                ctx.dispatch_typed_action_deferred(
+                    AISettingsPageAction::UpdateAgentProviderModelName {
+                        provider_index,
+                        model_index,
+                        name: buffer_text,
+                    },
+                );
             }
         });
 
@@ -236,11 +243,13 @@ impl AgentProvidersWidget {
         ctx.subscribe_to_view(&id_editor, move |_, editor, event, ctx| {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
-                ctx.dispatch_typed_action(AISettingsPageAction::UpdateAgentProviderModelId {
-                    provider_index,
-                    model_index,
-                    id: buffer_text,
-                });
+                ctx.dispatch_typed_action_deferred(
+                    AISettingsPageAction::UpdateAgentProviderModelId {
+                        provider_index,
+                        model_index,
+                        id: buffer_text,
+                    },
+                );
             }
         });
 
@@ -264,7 +273,7 @@ impl AgentProvidersWidget {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
                 let value = parse_token_count(&buffer_text);
-                ctx.dispatch_typed_action(
+                ctx.dispatch_typed_action_deferred(
                     AISettingsPageAction::UpdateAgentProviderModelContextWindow {
                         provider_index,
                         model_index,
@@ -576,7 +585,7 @@ impl AgentProvidersWidget {
                         appearance.ui_font_family(),
                         appearance.ui_font_size(),
                     )
-                    .with_color(appearance.theme().warning().into())
+                    .with_color(appearance.theme().ui_warning_color().into())
                     .soft_wrap(true)
                     .finish(),
                 )
