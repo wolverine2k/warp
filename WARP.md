@@ -58,7 +58,7 @@ This is a Rust-based terminal emulator with a custom UI framework called **WarpU
 
 **Main App** (`app/`):
 - Terminal emulation and shell management (`terminal/`)
-- AI integration including Agent Mode (`ai/`)
+- AI integration including Agent Mode (`ai/`). Agent Mode dispatches through warp.dev for cloud models and through `local_provider` for user-configured local LLM endpoints; multi-provider (BYOP) support adds a `Vec<AgentProvider>` settings model and `byop:<provider_id>:<model_id>` LLMIds — see `specs/multi-local-llm/` for the design and phased plans.
 - Cloud synchronization and Drive features (`drive/`)
 - Authentication and user management (`auth/`)
 - Settings and preferences (`settings/`)
