@@ -507,6 +507,23 @@ impl OpenAiSseAdapter {
     }
 }
 
+// Phase 2: trait impl forwarding to the existing inherent methods so
+// `OpenAiAdapter::create_stream_decoder` can return `Box<dyn StreamDecoder>`.
+impl crate::local_provider::adapters::StreamDecoder for OpenAiSseAdapter {
+    fn feed(&mut self, data: &str) -> Vec<api::ResponseEvent> {
+        Self::feed(self, data)
+    }
+    fn finish(&mut self) -> Vec<api::ResponseEvent> {
+        Self::finish(self)
+    }
+    fn is_terminal(&self) -> bool {
+        Self::is_terminal(self)
+    }
+    fn record_upstream_error(&mut self, msg: String) {
+        Self::record_upstream_error(self, msg)
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum MessageKind {
     AgentOutput,

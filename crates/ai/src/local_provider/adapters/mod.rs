@@ -16,9 +16,26 @@ use crate::local_provider::{
 pub mod openai;
 pub use openai::OpenAiAdapter;
 
-// Sibling test files added in Task 4 once OpenAiAdapter has real bodies:
-//   #[cfg(test)] #[path = "adapters_tests.rs"] mod adapters_tests;
-//   #[cfg(test)] #[path = "probe_tests.rs"]    mod probe_tests;
+#[cfg(test)]
+#[path = "adapters_tests.rs"]
+mod adapters_tests;
+
+#[cfg(test)]
+#[path = "probe_tests.rs"]
+mod probe_tests;
+
+/// Install the rustls aws-lc-rs crypto provider exactly once per test
+/// process. `reqwest::Client::new()` panics with "No provider set" without
+/// this; the workspace doesn't pin a default. Mirrors the pattern in
+/// `crates/ai/tests/local_provider_integration.rs` and `compaction/auto.rs`.
+#[cfg(test)]
+pub(super) fn ensure_rustls_provider() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
 
 /// Trait-level errors. Distinct from `response::AdapterError` (parser-level).
 #[derive(Debug, Error)]

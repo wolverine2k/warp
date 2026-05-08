@@ -494,7 +494,7 @@ pub async fn run_summarizer_turn(
     Ok(summary_text)
 }
 
-fn first_chars(s: &str, n: usize) -> String {
+pub(crate) fn first_chars(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
 
