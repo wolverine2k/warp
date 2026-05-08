@@ -101,7 +101,7 @@ impl AgentProvidersWidget {
         let initial_name = provider.name.clone();
         let name_editor = ctx.add_typed_action_view(move |ctx| {
             let appearance = Appearance::handle(ctx).as_ref(ctx);
-            let options = single_line_editor_options(&appearance, false);
+            let options = single_line_editor_options(appearance, false);
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text("Provider name", ctx);
             if !initial_name.is_empty() {
@@ -123,7 +123,7 @@ impl AgentProvidersWidget {
         let initial_base_url = provider.base_url.clone();
         let base_url_editor = ctx.add_typed_action_view(move |ctx| {
             let appearance = Appearance::handle(ctx).as_ref(ctx);
-            let options = single_line_editor_options(&appearance, false);
+            let options = single_line_editor_options(appearance, false);
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text("http://localhost:11434/v1", ctx);
             if !initial_base_url.is_empty() {
@@ -150,7 +150,7 @@ impl AgentProvidersWidget {
             .unwrap_or_default();
         let api_key_editor = ctx.add_typed_action_view(move |ctx| {
             let appearance = Appearance::handle(ctx).as_ref(ctx);
-            let options = single_line_editor_options(&appearance, true);
+            let options = single_line_editor_options(appearance, true);
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text("optional bearer token", ctx);
             if !initial_api_key.is_empty() {
@@ -207,7 +207,7 @@ impl AgentProvidersWidget {
         let initial_name = model.name.clone();
         let name_editor = ctx.add_typed_action_view(move |ctx| {
             let appearance = Appearance::handle(ctx).as_ref(ctx);
-            let options = single_line_editor_options(&appearance, false);
+            let options = single_line_editor_options(appearance, false);
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text("Display name", ctx);
             if !initial_name.is_empty() {
@@ -232,7 +232,7 @@ impl AgentProvidersWidget {
         let initial_id = model.id.clone();
         let id_editor = ctx.add_typed_action_view(move |ctx| {
             let appearance = Appearance::handle(ctx).as_ref(ctx);
-            let options = single_line_editor_options(&appearance, false);
+            let options = single_line_editor_options(appearance, false);
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text("model-id", ctx);
             if !initial_id.is_empty() {
@@ -261,7 +261,7 @@ impl AgentProvidersWidget {
         };
         let context_editor = ctx.add_typed_action_view(move |ctx| {
             let appearance = Appearance::handle(ctx).as_ref(ctx);
-            let options = single_line_editor_options(&appearance, false);
+            let options = single_line_editor_options(appearance, false);
             let mut editor = EditorView::single_line(options, ctx);
             editor.set_placeholder_text("32768", ctx);
             if !initial_context.is_empty() {
@@ -585,7 +585,7 @@ impl AgentProvidersWidget {
                         appearance.ui_font_family(),
                         appearance.ui_font_size(),
                     )
-                    .with_color(appearance.theme().ui_warning_color().into())
+                    .with_color(appearance.theme().ui_warning_color())
                     .soft_wrap(true)
                     .finish(),
                 )
