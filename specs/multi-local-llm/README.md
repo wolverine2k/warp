@@ -6,7 +6,13 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 
 ## Status
 
-**Phase 1 complete and tagged at `v0.1.0`.** All four sub-phases shipped on `multi-local-llm`. Phase 1b-4 (legacy cleanup) is drafted and queued — execution gated on telemetry confirming migration adoption.
+# ✅ Phase 1 — COMPLETE
+
+**Tagged `v0.1.0` on 2026-05-08.** All four sub-phases (1a / 1b-1 / 1b-2 / 1b-3) shipped end-to-end on `multi-local-llm` and are on `origin`. The branch is 31 commits ahead of `nmehta/local-llm-provider` (its forking point); end-to-end manual smoke testing on macOS confirmed BYOP picker entries route to local endpoints and cloud-Warp picks route to warp.dev.
+
+**Phase 1b-4 (legacy cleanup)** is drafted and queued in [`plan-phase-1b-4-cleanup.md`](plan-phase-1b-4-cleanup.md). Execution is gated on telemetry confirming migration adoption ≥ 99% — see the plan's preamble for the gating checklist.
+
+**Future phases (2 / 3 / 4)** — provider-adapter trait, native non-OpenAI adapters, polish features (`/models` fetch, models.dev catalog, multimodal, dedicated compaction model) — remain unscheduled and will get their own design + plan when started.
 
 | Phase | Plan | Status |
 |---|---|---|

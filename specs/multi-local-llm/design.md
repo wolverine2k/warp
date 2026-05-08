@@ -1,9 +1,9 @@
 # Multi-Local-LLM Provider Support — Design
 
-**Status:** Draft
+**Status:** ✅ **Phase 1 complete** (tagged `v0.1.0`, 2026-05-08). Phases 1a / 1b-1 / 1b-2 / 1b-3 shipped end-to-end; Phase 1b-4 cleanup is drafted and queued. Phases 2 / 3 / 4 (provider-adapter trait, native non-OpenAI adapters, polish) remain future work — each gets its own design + plan when started.
 **Author:** nmehta
-**Date:** 2026-05-07
-**Branch:** `multi-local-llm` (forked from `nmehta/local-llm-provider` @ `64d5172a`)
+**Date:** 2026-05-07 (initial design); 2026-05-08 (Phase 1 shipped)
+**Branch:** `multi-local-llm` (forked from `nmehta/local-llm-provider` @ `64d5172a`, tagged `v0.1.0` at the dispatch-scoping fix)
 **Related work:** `specs/GH9303/` (single-provider Phase A/B), `openwarp` branch (full BYOP reference design)
 
 ## Goal
