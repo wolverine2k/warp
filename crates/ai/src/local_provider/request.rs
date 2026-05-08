@@ -608,6 +608,7 @@ mod tests {
             api_key: None,
             supports_tools: true,
             context_window: None,
+            api_type: crate::local_provider::AgentProviderApiType::OpenAi,
         }
     }
 

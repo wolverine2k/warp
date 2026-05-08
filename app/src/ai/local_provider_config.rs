@@ -57,6 +57,8 @@ pub fn snapshot_from_app(ctx: &AppContext) -> Option<LocalProviderConfig> {
         api_key,
         supports_tools,
         context_window,
+        // Legacy single-provider config has always been OpenAI-compatible.
+        api_type: ::ai::local_provider::AgentProviderApiType::OpenAi,
     };
 
     // Honor the validation contract: invalid configs round-trip as None so
@@ -118,6 +120,9 @@ pub fn snapshot_for_request(ctx: &AppContext, model: &LLMId) -> Option<LocalProv
             api_key: Some(api_key),
             supports_tools: model_entry.tool_call,
             context_window,
+            // Phase 2: thread the provider's wire-protocol selector through
+            // the runtime config so adapter selection works at dispatch time.
+            api_type: provider.api_type,
         };
         cfg.validate().ok()?;
         return Some(cfg);

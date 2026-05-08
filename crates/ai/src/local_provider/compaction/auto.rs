@@ -170,6 +170,7 @@ mod tests {
             supports_tools: true,
             // Tiny context window so even a single small turn overflows.
             context_window: Some(64),
+            api_type: crate::local_provider::AgentProviderApiType::OpenAi,
         }
     }
 

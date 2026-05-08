@@ -107,6 +107,7 @@ async fn main() -> ExitCode {
         api_key: args.api_key.clone(),
         supports_tools: args.with_tools,
         context_window: args.context_window,
+        api_type: ai::local_provider::AgentProviderApiType::OpenAi,
     };
     if let Err(e) = cfg.validate() {
         eprintln!("Config validation failed: {e}");

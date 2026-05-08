@@ -117,6 +117,7 @@ fn cfg_for(url: &str) -> LocalProviderConfig {
         api_key: None,
         supports_tools: true,
         context_window: None,
+        api_type: ai::local_provider::AgentProviderApiType::OpenAi,
     }
 }
 
