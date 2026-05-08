@@ -12,7 +12,9 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 
 **Phase 1b-4 (legacy cleanup)** is drafted and queued in [`plan-phase-1b-4-cleanup.md`](plan-phase-1b-4-cleanup.md). Execution is gated on telemetry confirming migration adoption ≥ 99% — see the plan's preamble for the gating checklist.
 
-**Future phases (2 / 3 / 4)** — provider-adapter trait, native non-OpenAI adapters, polish features (`/models` fetch, models.dev catalog, multimodal, dedicated compaction model) — remain unscheduled and will get their own design + plan when started.
+**Phase 2 (ProviderAdapter trait + Test connection button)** is drafted in [`plan-phase-2.md`](plan-phase-2.md). Hoists the OpenAI-compatible wire code behind a `ProviderAdapter` / `StreamDecoder` trait pair so Phase 3 can plug in native non-OpenAI adapters without touching `run.rs`. **No user-visible behavior change** for OpenAI; the existing test suite stays green and exercises the same paths through the trait.
+
+**Future phases (3 / 4)** — native non-OpenAI adapters and polish features (`/models` fetch, models.dev catalog, multimodal, dedicated compaction model) — remain unscheduled and will get their own design + plan when started.
 
 | Phase | Plan | Status |
 |---|---|---|
@@ -21,6 +23,7 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 | 1b-2 — secrets HashMap + migration helper + dispatch routing + picker injection | [`plan-phase-1b-2-dispatch.md`](plan-phase-1b-2-dispatch.md) | ✅ shipped |
 | 1b-3 — settings UI rebuild (`AgentProvidersWidget` list view) | [`plan-phase-1b-3-settings-ui.md`](plan-phase-1b-3-settings-ui.md) | ✅ shipped |
 | 1b-4 — legacy `local:` cleanup | [`plan-phase-1b-4-cleanup.md`](plan-phase-1b-4-cleanup.md) | 📋 queued (gated on migration adoption) |
+| 2 — `ProviderAdapter` trait + `OpenAiAdapter` + Test connection probe | [`plan-phase-2.md`](plan-phase-2.md) | 🚧 in progress |
 
 The full design — data model, dispatch flow, migration strategy, risks — is in [`design.md`](design.md).
 
