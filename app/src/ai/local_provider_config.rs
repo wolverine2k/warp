@@ -66,24 +66,32 @@ pub fn snapshot_from_app(ctx: &AppContext) -> Option<LocalProviderConfig> {
 }
 
 /// Build a `LocalProviderConfig` for an outgoing request, branching on the
-/// LLMId prefix:
+/// LLMId prefix. The override is **scoped to the LLMIds the user explicitly
+/// flagged as local-routed**, so picking a cloud-Warp model from the picker
+/// keeps using the cloud-Warp dispatch path:
 ///
 /// - `byop:<provider_id>:<model_id>` → look up via
 ///   `agent_providers::lookup_byop` and build a `LocalProviderConfig`
 ///   snapshot from the resulting `(AgentProvider, api_key, model_id)`
-///   triple. This is the path taken after Phase 1b-2 migration runs.
-/// - Anything else → fall back to `snapshot_from_app` (legacy
-///   `agents.local_provider.*` settings + the `__legacy__` keychain
-///   placeholder). Used only for the brief transition window between the
-///   user's first launch with this build and the migration kick-off.
-///
-/// Returns `None` if neither path produces a valid config — dispatch
-/// then falls through to the cloud-Warp path.
+///   triple. The post-migration steady-state path.
+/// - Legacy `local:<model_id>` → fall through to `snapshot_from_app`
+///   (legacy `agents.local_provider.*` settings + the `__legacy__`
+///   keychain placeholder). Keeps unmigrated/transitional `local:` IDs
+///   in pre-existing conversations working.
+/// - Anything else (cloud Warp model ids like `claude-3-5-sonnet`,
+///   `gpt-4o`, etc.) → return `None` so dispatch falls through to the
+///   cloud-Warp path. Phase 1b-2 originally cascaded these through
+///   `snapshot_from_app` too, which inherited Phase B-6's
+///   "intercept all requests when local is enabled" semantics — fine
+///   for the single-provider era but wrong now that the user can pick
+///   a `byop:` model alongside cloud ones. The user's explicit picker
+///   choice is the dispatch authority.
 pub fn snapshot_for_request(ctx: &AppContext, model: &LLMId) -> Option<LocalProviderConfig> {
     if !FeatureFlag::LocalLlmProvider.is_enabled() {
         return None;
     }
 
+    // Path 1: BYOP-encoded model — multi-provider steady state.
     if let Some((provider, api_key, model_id)) = crate::ai::agent_providers::lookup_byop(ctx, model)
     {
         // The single model entry corresponding to model_id within the
@@ -115,8 +123,13 @@ pub fn snapshot_for_request(ctx: &AppContext, model: &LLMId) -> Option<LocalProv
         return Some(cfg);
     }
 
-    // Legacy path — used only until the migration helper has run.
-    snapshot_from_app(ctx)
+    // Path 2: legacy `local:<model_id>` — pre-migration / transitional.
+    if is_local_llm_id(model) {
+        return snapshot_from_app(ctx);
+    }
+
+    // Path 3: cloud-Warp model — don't intercept.
+    None
 }
 
 /// Build a synthetic `LLMInfo` for the local provider so it appears in the
