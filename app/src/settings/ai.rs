@@ -1955,6 +1955,19 @@ define_settings_group!(AISettings, settings: [
         toml_path: "agents.byop_compaction.model.model_id",
         description: "Optional dedicated model id for compaction LLM calls.",
     }
+
+    // Set to `true` after the one-time migration of legacy
+    // `agents.local_provider.*` config into `agents.warp_agent.providers`
+    // has run. Stops migration from re-running on subsequent launches.
+    legacy_local_provider_migrated: LegacyLocalProviderMigrated {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        private: false,
+        toml_path: "agents.warp_agent.migration.legacy_local_provider_migrated",
+        description: "Set after the one-time legacy local-provider config migration runs.",
+    }
 ]);
 
 impl AISettings {
