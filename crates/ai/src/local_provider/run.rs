@@ -20,11 +20,7 @@ use futures::{
 use reqwest_eventsource::{Event, RequestBuilderExt};
 use warp_multi_agent_api as api;
 
-use crate::local_provider::{
-    config::LocalProviderConfig,
-    request::{compose_chat_completion_request, LocalProviderInput},
-    response::OpenAiSseAdapter,
-};
+use crate::local_provider::{config::LocalProviderConfig, request::LocalProviderInput};
 
 /// Errors that prevent the local provider from producing any response stream.
 /// Mid-stream errors are encoded as `Finished{InternalError}` events instead.
@@ -32,6 +28,8 @@ use crate::local_provider::{
 pub enum LocalRunError {
     #[error("invalid local provider config: {0}")]
     InvalidConfig(#[from] crate::local_provider::config::LocalProviderConfigError),
+    #[error("adapter error: {0}")]
+    Adapter(#[from] crate::local_provider::adapters::AdapterError),
     #[error("HTTP transport error: {0}")]
     Transport(#[from] reqwest::Error),
     #[error("failed to encode request body: {0}")]
@@ -46,17 +44,32 @@ pub enum LocalRunError {
 pub type LocalResponseStream = BoxStream<'static, api::ResponseEvent>;
 
 /// Run a single chat turn against the user's configured local endpoint.
+/// Phase 2: dispatches to the wire-protocol adapter selected by
+/// `cfg.api_type` (today only `OpenAi`; Phase 3 adds the rest).
 pub async fn run_chat_turn(
     input: LocalProviderInput,
     cfg: LocalProviderConfig,
     cancel_rx: oneshot::Receiver<()>,
     http: reqwest::Client,
 ) -> Result<LocalResponseStream, LocalRunError> {
-    cfg.validate()?;
-    let url = cfg.chat_completions_url()?;
-    let body = compose_chat_completion_request(&input, &cfg);
-    let body_json = serde_json::to_string(&body)?;
-    debug_dump_request(&body_json);
+    let provider_adapter = crate::local_provider::adapters::select_adapter(cfg.api_type)?;
+    let request_builder = provider_adapter.build_chat_request(&input, &cfg, &http)?;
+
+    // Capture the body string for the env-gated debug dump. `try_clone()`
+    // returns `None` for non-cloneable bodies (e.g. streamed) — our adapter
+    // sets a String body, so cloning succeeds in practice. We swallow the
+    // None case rather than fail the turn — diagnostics are best-effort.
+    if debug_dump_enabled() {
+        let body_dump = request_builder
+            .try_clone()
+            .and_then(|rb| rb.build().ok())
+            .as_ref()
+            .and_then(|r| r.body())
+            .and_then(|b| b.as_bytes())
+            .map(|b| String::from_utf8_lossy(b).into_owned())
+            .unwrap_or_else(|| "<body unavailable for dump>".to_string());
+        debug_dump_request(&body_dump);
+    }
 
     // Construct the SSE adapter with the conversation's actual ids when the
     // caller plumbed them through (real agent flow). Without this, the
@@ -65,13 +78,7 @@ pub async fn run_chat_turn(
     // `UpdateConversationError::TaskNotFound`, and the user sees no output.
     // Falls back to fresh ids when the caller didn't provide any (test paths
     // that drive the adapter in isolation, where matching isn't required).
-    // The task_id is the load-bearing match — every emitted AddMessagesToTask
-    // and AppendToMessageContent carries it, and the controller looks each up
-    // in `task_store`. The conversation_id only appears in the synthetic Init
-    // event (informational). Use the controller's task_id whenever it's set,
-    // synthesizing a conversation_id when missing (true on the very first
-    // turn, before any server token is assigned).
-    let mut adapter = if let Some(task_id) = input.task_id.as_deref() {
+    let stream_ids = input.task_id.as_deref().map(|task_id| {
         // The task_id is the load-bearing match — every emitted
         // AddMessagesToTask and AppendToMessageContent carries it, and the
         // controller looks each up in `task_store`. The conversation_id only
@@ -82,33 +89,14 @@ pub async fn run_chat_turn(
             .conversation_id
             .clone()
             .unwrap_or_else(|| format!("local:{}", uuid::Uuid::new_v4()));
-        OpenAiSseAdapter::with_ids(
+        crate::local_provider::adapters::StreamIds {
             conversation_id,
-            uuid::Uuid::new_v4().to_string(),
-            uuid::Uuid::new_v4().to_string(),
-            task_id.to_string(),
-        )
-    } else {
-        // Test paths that drive the adapter in isolation without a
-        // controller-supplied task_id. The synthetic UUIDs won't match any
-        // task in a real `task_store`, so this branch is not used in
-        // production.
-        OpenAiSseAdapter::new()
-    };
-    if !input.needs_create_task {
-        adapter.skip_create_task();
-    }
-
-    let mut request_builder = http
-        .post(url)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(reqwest::header::ACCEPT, "text/event-stream")
-        .body(body_json);
-    if let Some(key) = &cfg.api_key {
-        if !key.is_empty() {
-            request_builder = request_builder.bearer_auth(key);
+            request_id: uuid::Uuid::new_v4().to_string(),
+            run_id: uuid::Uuid::new_v4().to_string(),
+            task_id: task_id.to_string(),
         }
-    }
+    });
+    let decoder = provider_adapter.create_stream_decoder(stream_ids, !input.needs_create_task);
 
     // The only error eventsource() can return is CannotCloneRequestError, and
     // it can't actually fire on a one-shot builder we just constructed. We
@@ -124,7 +112,7 @@ pub async fn run_chat_turn(
     // observes the EOF.
     event_source.set_retry_policy(Box::new(reqwest_eventsource::retry::Never));
 
-    let synthesized = synthesize_stream(adapter, event_source, cancel_rx).boxed();
+    let synthesized = synthesize_stream(decoder, event_source, cancel_rx).boxed();
     Ok(synthesized)
 }
 
@@ -152,7 +140,7 @@ type BodyReadFuture =
     Pin<Box<dyn Future<Output = Result<String, reqwest::Error>> + Send + 'static>>;
 
 fn synthesize_stream(
-    mut adapter: OpenAiSseAdapter,
+    mut decoder: Box<dyn crate::local_provider::adapters::StreamDecoder>,
     mut event_source: reqwest_eventsource::EventSource,
     mut cancel_rx: oneshot::Receiver<()>,
 ) -> impl futures::Stream<Item = api::ResponseEvent> + Send {
@@ -163,7 +151,7 @@ fn synthesize_stream(
     // HTTP error response that still has a readable body. The prefix is the
     // user-visible status / content-type string; once the future resolves we
     // splice in the body excerpt and feed the combined message to
-    // `adapter.record_upstream_error` before flushing.
+    // `decoder.record_upstream_error` before flushing.
     let mut body_read: Option<(String, BodyReadFuture)> = None;
     stream::poll_fn(move |cx| {
         use std::task::Poll;
@@ -193,8 +181,8 @@ fn synthesize_stream(
                             format!("{prefix}: {excerpt}")
                         };
                         log::warn!("local provider stream errored before EOF: {msg}");
-                        adapter.record_upstream_error(msg);
-                        for ev in adapter.finish() {
+                        decoder.record_upstream_error(msg);
+                        for ev in decoder.finish() {
                             pending.push_back(ev);
                         }
                         closed = true;
@@ -209,7 +197,7 @@ fn synthesize_stream(
             // never plan to cancel still drop the tx side, and we shouldn't
             // hang on event_source if the upstream cancel channel is gone.
             if Pin::new(&mut cancel_rx).poll(cx).is_ready() {
-                for ev in adapter.finish() {
+                for ev in decoder.finish() {
                     pending.push_back(ev);
                 }
                 closed = true;
@@ -227,9 +215,9 @@ fn synthesize_stream(
                         // the real cause in the UI (e.g. HTTP 401 / 400 with
                         // a server-side JSON error body), instead of the
                         // generic "stream ended without finish_reason".
-                        adapter.record_upstream_error(msg);
+                        decoder.record_upstream_error(msg);
                     }
-                    for ev in adapter.finish() {
+                    for ev in decoder.finish() {
                         pending.push_back(ev);
                     }
                     closed = true;
@@ -242,17 +230,17 @@ fn synthesize_stream(
                 }
                 Poll::Ready(Some(Ok(Event::Message(msg)))) => {
                     debug_dump_response_chunk(&msg.data);
-                    for ev in adapter.feed(&msg.data) {
+                    for ev in decoder.feed(&msg.data) {
                         pending.push_back(ev);
                     }
-                    // If the chunk pushed the adapter into a terminal state
+                    // If the chunk pushed the decoder into a terminal state
                     // (e.g. `[DONE]` or a `finish_reason`), flush its closing
                     // events now and stop pulling from event_source. Some
                     // OpenAI-compatible servers keep the connection open
                     // past `[DONE]` for HTTP/2 multiplexing or keepalive,
                     // and we don't want the response stream hanging on that.
-                    if adapter.is_terminal() {
-                        for ev in adapter.finish() {
+                    if decoder.is_terminal() {
+                        for ev in decoder.finish() {
                             pending.push_back(ev);
                         }
                         closed = true;
@@ -374,7 +362,7 @@ fn debug_dump_response_chunk(chunk_data: &str) {
 // ---------- summarizer (non-streaming) ----------
 
 use crate::local_provider::wire::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatMessage, Role,
+    ChatMessage, Role,
 };
 
 /// Inputs for [`run_summarizer_turn`] — a self-contained summarization call.
@@ -396,6 +384,11 @@ pub struct SummarizerInput {
 pub enum SummarizerError {
     #[error("invalid local provider config: {0}")]
     InvalidConfig(#[from] crate::local_provider::config::LocalProviderConfigError),
+    /// Phase 2: an `AdapterError` from the wire-protocol adapter, stringified
+    /// to avoid wrapping `LocalProviderConfigError` twice (it's already
+    /// reachable via `InvalidConfig`).
+    #[error("adapter error: {0}")]
+    Adapter(String),
     #[error("HTTP transport error: {0}")]
     Transport(#[from] reqwest::Error),
     #[error("failed to encode summarizer request body: {0}")]
@@ -427,31 +420,13 @@ pub async fn run_summarizer_turn(
     cfg: &crate::local_provider::config::LocalProviderConfig,
     http: &reqwest::Client,
 ) -> Result<String, SummarizerError> {
-    cfg.validate()?;
-    let url = cfg.chat_completions_url()?;
+    let provider_adapter = crate::local_provider::adapters::select_adapter(cfg.api_type)
+        .map_err(|e| SummarizerError::Adapter(e.to_string()))?;
+    let request_builder = provider_adapter
+        .build_summarizer_request(&input, cfg, http)
+        .map_err(|e| SummarizerError::Adapter(e.to_string()))?;
 
-    let body = ChatCompletionRequest {
-        model: cfg.model_id.clone(),
-        messages: input.messages,
-        tools: None,
-        tool_choice: None,
-        stream: false,
-        stream_options: None,
-    };
-    let body_json = serde_json::to_string(&body)?;
-
-    let mut req = http
-        .post(url)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .header(reqwest::header::ACCEPT, "application/json")
-        .body(body_json);
-    if let Some(key) = &cfg.api_key {
-        if !key.is_empty() {
-            req = req.bearer_auth(key);
-        }
-    }
-
-    let resp = req.send().await?;
+    let resp = request_builder.send().await?;
     let status = resp.status();
     let text = resp.text().await?;
 
@@ -461,37 +436,7 @@ pub async fn run_summarizer_turn(
             body: text.chars().take(500).collect(),
         });
     }
-
-    let parsed: ChatCompletionResponse = serde_json::from_str(&text).map_err(|e| {
-        SummarizerError::DecodeResponse(format!("{e}: {}", first_chars(&text, 200)))
-    })?;
-
-    if let Some(err) = parsed.error {
-        return Err(SummarizerError::UpstreamErrorEnvelope(err.message));
-    }
-
-    let summary_text = parsed
-        .choices
-        .into_iter()
-        .find_map(|choice| {
-            let m = choice.message?;
-            // Prefer visible content; some servers stuff structured output
-            // into reasoning_content even on non-streaming mode.
-            let candidate = m
-                .content
-                .filter(|s| !s.trim().is_empty())
-                .or(m.reasoning_content)
-                .or(m.reasoning)?;
-            let trimmed = candidate.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        })
-        .ok_or(SummarizerError::NoContent)?;
-
-    Ok(summary_text)
+    provider_adapter.parse_summarizer_response(&text)
 }
 
 pub(crate) fn first_chars(s: &str, n: usize) -> String {

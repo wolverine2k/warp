@@ -155,6 +155,7 @@ async fn main() -> ExitCode {
             eprintln!("run_chat_turn returned an error before any events: {e}");
             return match e {
                 LocalRunError::InvalidConfig(_) => ExitCode::from(2),
+                LocalRunError::Adapter(_) => ExitCode::from(5),
                 LocalRunError::Transport(_) => ExitCode::from(3),
                 LocalRunError::EncodeRequest(_) => ExitCode::from(4),
             };
