@@ -15,6 +15,7 @@
 //!    Warp client controller already speaks.
 
 pub mod agent_provider_secrets;
+pub mod api_type;
 pub mod compaction;
 pub mod config;
 pub mod llm_id;
@@ -28,6 +29,7 @@ pub mod wire;
 pub use agent_provider_secrets::{
     AgentProviderSecrets, AgentProviderSecretsEvent, LEGACY_PROVIDER_PLACEHOLDER_ID,
 };
+pub use api_type::AgentProviderApiType;
 pub use config::{LocalProviderConfig, LocalProviderConfigError};
 pub use response::{AdapterError, OpenAiSseAdapter};
 pub use run::{run_chat_turn, LocalResponseStream, LocalRunError};
