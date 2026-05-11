@@ -18,7 +18,9 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 
 > **Verification gate:** live-test smoke against `api.anthropic.com` with a real `sk-ant-…` key is the remaining manual step per the plan (`plan-phase-3a.md` §Task 8.1). Once a turn streams successfully end-to-end (text + tool call + tool result + final text) the Phase 3a row flips to ✅ and the status note is removed.
 
-**Future phases (3b–d / 4)** — native Ollama / Gemini / DeepSeek adapters and polish features (`/models` fetch, models.dev catalog, multimodal, dedicated compaction model) — remain unscheduled and will get their own design + plan when started.
+**Phase 3b (Ollama-native adapter)** is drafted in [`plan-phase-3b.md`](plan-phase-3b.md). Targets `POST {base_url}/api/chat` with native tool-call streaming and `options.num_ctx` KV-cache control. **First adapter to use a non-SSE streaming format** — adds a small `StreamingFormat` enum + `streaming_format()` trait method (default SSE) and a parallel NDJSON drive loop in `synthesize_stream`. Existing Ollama users on the OpenAI-compat layer (`api_type = OpenAi` against `http://localhost:11434/v1`) keep working unchanged; selecting `Ollama` as the api_type opts into the native path.
+
+**Future phases (3c / 3d / 4)** — native Gemini / DeepSeek adapters and polish features (`/models` fetch, models.dev catalog, multimodal, dedicated compaction model) — remain unscheduled and will get their own design + plan when started.
 
 | Phase | Plan | Status |
 |---|---|---|
@@ -29,6 +31,7 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 | 1b-4 — legacy `local:` cleanup | [`plan-phase-1b-4-cleanup.md`](plan-phase-1b-4-cleanup.md) | 📋 queued (gated on migration adoption) |
 | 2 — `ProviderAdapter` trait + `OpenAiAdapter` + Test connection probe | [`plan-phase-2.md`](plan-phase-2.md) | ✅ shipped |
 | 3a — Anthropic adapter (`AnthropicAdapter` + `AnthropicSseDecoder`) | [`plan-phase-3a.md`](plan-phase-3a.md) | 🧪 code complete — pending live smoke |
+| 3b — Ollama-native adapter (`OllamaAdapter` + NDJSON drive loop + `streaming_format` trait method) | [`plan-phase-3b.md`](plan-phase-3b.md) | 📋 drafted |
 
 The full design — data model, dispatch flow, migration strategy, risks — is in [`design.md`](design.md).
 
@@ -57,9 +60,9 @@ The full design — data model, dispatch flow, migration strategy, risks — is 
 
 Each gets its own design + plan when started:
 
-- **Phase 3b** — native Ollama adapter (`/api/chat`, native tool-call streaming).
-- **Phase 3c** — native Gemini adapter.
-- **Phase 3d** — native DeepSeek adapter (reasoning-content surfacing).
+- **Phase 3b** — native Ollama adapter (`/api/chat`, NDJSON streaming, native tool-call streaming, `options.num_ctx` knob). Plan drafted at [`plan-phase-3b.md`](plan-phase-3b.md).
+- **Phase 3c** — native Gemini adapter (`POST /v1beta/models/{model}:streamGenerateContent?alt=sse`, `x-goog-api-key` auth, content-parts message shape).
+- **Phase 3d** — native DeepSeek adapter (reasoning-content surfacing for `deepseek-reasoner`).
 - **Phase 4a–d** — `/models` fetch button, models.dev catalog sync, multimodal capability resolution (image / pdf / audio), dedicated compaction model.
 
 ## Operational notes
