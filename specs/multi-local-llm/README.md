@@ -18,7 +18,9 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 
 > **Verification gate:** live-test smoke against `api.anthropic.com` with a real `sk-ant-…` key is the remaining manual step per the plan (`plan-phase-3a.md` §Task 8.1). Once a turn streams successfully end-to-end (text + tool call + tool result + final text) the Phase 3a row flips to ✅ and the status note is removed.
 
-**Phase 3b (Ollama-native adapter)** is drafted in [`plan-phase-3b.md`](plan-phase-3b.md). Targets `POST {base_url}/api/chat` with native tool-call streaming and `options.num_ctx` KV-cache control. **First adapter to use a non-SSE streaming format** — adds a small `StreamingFormat` enum + `streaming_format()` trait method (default SSE) and a parallel NDJSON drive loop in `synthesize_stream`. Existing Ollama users on the OpenAI-compat layer (`api_type = OpenAi` against `http://localhost:11434/v1`) keep working unchanged; selecting `Ollama` as the api_type opts into the native path.
+**Phase 3b (Ollama-native adapter)** code is complete on `multi-local-llm` (final commit `ee1eb98a`). Targets `POST {base_url}/api/chat` with native tool-call streaming and `options.num_ctx` KV-cache control. **First adapter to use a non-SSE streaming format** — adds a small `StreamingFormat` enum + `streaming_format()` trait method (default SSE so OpenAi/Anthropic are unchanged) and a parallel `synthesize_ndjson_stream` drive loop in `run.rs` (the existing SSE body became `synthesize_sse_stream`). Existing Ollama users on the OpenAI-compat layer (`api_type = OpenAi` against `http://localhost:11434/v1`) keep working unchanged; selecting `Ollama` as the api_type opts into the native path. **65 new unit tests** (11 wire + 21 translator + 21 decoder + 12 adapter) plus 4 URL-helper tests; `cargo nextest run -p ai` reports 496/496.
+
+> **Verification gate:** live-test smoke against a local `ollama serve` instance (with a tool-using model like `llama3.1` or `qwen2.5-coder`) is the remaining manual step per the plan (`plan-phase-3b.md` §Task 8.1). Once a turn streams successfully end-to-end (text + tool call + tool result + final text) the Phase 3b row flips to ✅ and the status note is removed.
 
 **Future phases (3c / 3d / 4)** — native Gemini / DeepSeek adapters and polish features (`/models` fetch, models.dev catalog, multimodal, dedicated compaction model) — remain unscheduled and will get their own design + plan when started.
 
@@ -31,7 +33,7 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 | 1b-4 — legacy `local:` cleanup | [`plan-phase-1b-4-cleanup.md`](plan-phase-1b-4-cleanup.md) | 📋 queued (gated on migration adoption) |
 | 2 — `ProviderAdapter` trait + `OpenAiAdapter` + Test connection probe | [`plan-phase-2.md`](plan-phase-2.md) | ✅ shipped |
 | 3a — Anthropic adapter (`AnthropicAdapter` + `AnthropicSseDecoder`) | [`plan-phase-3a.md`](plan-phase-3a.md) | 🧪 code complete — pending live smoke |
-| 3b — Ollama-native adapter (`OllamaAdapter` + NDJSON drive loop + `streaming_format` trait method) | [`plan-phase-3b.md`](plan-phase-3b.md) | 📋 drafted |
+| 3b — Ollama-native adapter (`OllamaAdapter` + NDJSON drive loop + `streaming_format` trait method) | [`plan-phase-3b.md`](plan-phase-3b.md) | 🧪 code complete — pending live smoke |
 
 The full design — data model, dispatch flow, migration strategy, risks — is in [`design.md`](design.md).
 
@@ -43,9 +45,10 @@ The full design — data model, dispatch flow, migration strategy, risks — is 
 - Existing single-provider users have their config auto-migrated on first launch; the migrated provider appears as one card with one model and the API key intact.
 - **Phase 2:** per-card **Test connection** button that probes the provider endpoint and surfaces Idle / Probing / Ok / Failed state inline.
 - **Phase 3a (pending live smoke):** **Anthropic** is now a real api_type — selecting it routes the conversation to `{base_url}/v1/messages` with native `x-api-key` auth, streamed `message_start` / `content_block_delta` / `message_stop` events, and tool use as `tool_use` content blocks on the assistant message. The Test connection button probes `{base_url}/v1/models`.
+- **Phase 3b (pending live smoke):** **Ollama** is now a real api_type — selecting it routes the conversation to `{base_url}/api/chat` with native NDJSON streaming (no SSE framing), native tool-call shape (arguments as JSON object), and `options.num_ctx` threaded from the model's configured context window so Ollama sizes its KV cache appropriately. The Test connection button probes `{base_url}/api/tags`.
 
 **Architecture:**
-- Type system in `app/src/settings/ai.rs`: `AgentProvider`, `AgentProviderModel`, `AgentProviderKind` (`OpenAiCompatible` only today), `AgentProviderApiType` (`OpenAi`, `Anthropic` active; `OpenAiResp`, `Gemini`, `Ollama`, `DeepSeek` enum variants reserved for Phase 3b–d).
+- Type system in `app/src/settings/ai.rs`: `AgentProvider`, `AgentProviderModel`, `AgentProviderKind` (`OpenAiCompatible` only today), `AgentProviderApiType` (`OpenAi`, `Anthropic`, `Ollama` active; `OpenAiResp`, `Gemini`, `DeepSeek` enum variants reserved for Phase 3c–d).
 - Persistence: `Vec<AgentProvider>` under `agents.warp_agent.providers` (TOML); `HashMap<provider_id, api_key>` in OS keychain blob `AgentProviderSecrets`.
 - LLMId codec in `crates/ai/src/local_provider/llm_id.rs` (`byop:<uuid>:<model_id>` with first-colon-after-prefix splitting so vendor:model:variant style names round-trip).
 - Dispatch in `app/src/ai/local_provider_config.rs::snapshot_for_request` branches on prefix:
@@ -55,12 +58,12 @@ The full design — data model, dispatch flow, migration strategy, risks — is 
 - Migration in `app/src/ai/agent_providers/migration.rs`: idempotent, runs once on app boot after singleton registration. Synthesizes a single `AgentProvider` from the legacy `agents.local_provider.*` settings, moves the API key from the `__legacy__` placeholder id to a fresh UUID, sets the marker.
 - **Phase 2:** `ProviderAdapter` trait (`crates/ai/src/local_provider/adapters/mod.rs`) abstracts wire-protocol differences; `OpenAiAdapter` is the canonical impl. `StreamDecoder` trait split out so per-turn stream state stays addressable.
 - **Phase 3a:** `AnthropicAdapter` + `AnthropicSseDecoder` (`crates/ai/src/local_provider/adapters/anthropic/{mod,request,response,wire}.rs`). Translator lifts the synthesized system prompt to Anthropic's top-level `system` field, merges adjacent same-role messages, splices missing `tool_result` blocks. Decoder maps the named event family to the same `ResponseEvent` shape `OpenAiSseAdapter` emits. `StreamDecoder` trait gained `feed_event(event_name, data)` to carry the SSE `event:` discriminator through.
+- **Phase 3b:** `OllamaAdapter` + `OllamaDecoder` (`crates/ai/src/local_provider/adapters/ollama/{mod,request,response,wire}.rs`). Translator emits native shape (system as `role:system` message, tool_calls with `arguments` as JSON object, no id/type fields; `options.num_ctx` threaded from config). Decoder consumes one NDJSON line per chunk and treats `done:true` as terminator. `ProviderAdapter` trait gained `streaming_format() -> StreamingFormat::{SSE, NDJSON}` so `run.rs::run_chat_turn` can branch — SSE adapters use `synthesize_sse_stream`, Ollama uses `synthesize_ndjson_stream` (awaits `send()` for HTTP-status pre-flight, then drives `bytes_stream()` through a `\n` line splitter). Shared proto-event builders live in `adapters/proto_helpers.rs`.
 
 ## Future phases (per [`design.md`](design.md) §9)
 
 Each gets its own design + plan when started:
 
-- **Phase 3b** — native Ollama adapter (`/api/chat`, NDJSON streaming, native tool-call streaming, `options.num_ctx` knob). Plan drafted at [`plan-phase-3b.md`](plan-phase-3b.md).
 - **Phase 3c** — native Gemini adapter (`POST /v1beta/models/{model}:streamGenerateContent?alt=sse`, `x-goog-api-key` auth, content-parts message shape).
 - **Phase 3d** — native DeepSeek adapter (reasoning-content surfacing for `deepseek-reasoner`).
 - **Phase 4a–d** — `/models` fetch button, models.dev catalog sync, multimodal capability resolution (image / pdf / audio), dedicated compaction model.
@@ -78,9 +81,11 @@ Each gets its own design + plan when started:
 3. Source:
    - Dispatch path: `crates/ai/src/local_provider/{agent_provider_secrets,llm_id}.rs` and `app/src/ai/agent_providers/{mod,migration}.rs`.
    - UI: `app/src/settings_view/agent_providers_widget.rs`.
-   - Adapter trait + selector: `crates/ai/src/local_provider/adapters/mod.rs`.
+   - Adapter trait + selector + shared proto helpers: `crates/ai/src/local_provider/adapters/{mod,proto_helpers}.rs`.
+   - HTTP runner (SSE + NDJSON drive loops): `crates/ai/src/local_provider/run.rs`.
    - OpenAi adapter: `crates/ai/src/local_provider/adapters/openai.rs`.
    - Anthropic adapter: `crates/ai/src/local_provider/adapters/anthropic/{mod,request,response,wire}.rs`.
+   - Ollama adapter: `crates/ai/src/local_provider/adapters/ollama/{mod,request,response,wire}.rs`.
 
 ## Reference comparison
 
