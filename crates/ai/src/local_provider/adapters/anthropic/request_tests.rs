@@ -623,3 +623,285 @@ fn model_field_is_user_model_id() {
     let req = compose_anthropic_messages_request(&input, &cfg());
     assert_eq!(req.model, "claude-sonnet-4-6");
 }
+
+// ---- AnthropicAdapter (ProviderAdapter trait impl) ----
+//
+// These tests exercise the adapter's HTTP shape: URLs, auth headers,
+// stream:false on summarizer, parse_summarizer_response behavior. We
+// rebuild the reqwest::Request from the builder to inspect it; no actual
+// network traffic.
+
+use super::AnthropicAdapter;
+use crate::local_provider::adapters::ProviderAdapter;
+use crate::local_provider::run::{SummarizerError, SummarizerInput};
+use crate::local_provider::wire::{ChatMessage, Role};
+
+fn http_client() -> reqwest::Client {
+    crate::local_provider::adapters::ensure_rustls_provider();
+    reqwest::Client::new()
+}
+
+#[test]
+fn anthropic_adapter_reports_anthropic_api_type() {
+    assert_eq!(
+        AnthropicAdapter.api_type(),
+        AgentProviderApiType::Anthropic
+    );
+}
+
+#[test]
+fn build_chat_request_targets_messages_endpoint_with_anthropic_headers() {
+    let mut input = empty_input();
+    input.user_query = Some("hello".into());
+    let req = AnthropicAdapter
+        .build_chat_request(&input, &cfg(), &http_client())
+        .expect("ok")
+        .build()
+        .expect("buildable");
+    assert_eq!(req.method().as_str(), "POST");
+    assert_eq!(
+        req.url().as_str(),
+        "https://api.anthropic.com/v1/messages"
+    );
+    assert_eq!(
+        req.headers().get("x-api-key").map(|v| v.to_str().unwrap()),
+        Some("sk-ant-test"),
+    );
+    assert_eq!(
+        req.headers()
+            .get("anthropic-version")
+            .map(|v| v.to_str().unwrap()),
+        Some("2023-06-01"),
+    );
+    // Crucial: no Bearer auth. Anthropic's gateway rejects it with a generic
+    // 401, which would surface as an opaque failure in the probe button.
+    assert!(req.headers().get("authorization").is_none());
+    assert_eq!(
+        req.headers()
+            .get(reqwest::header::ACCEPT)
+            .map(|v| v.to_str().unwrap()),
+        Some("text/event-stream"),
+    );
+}
+
+#[test]
+fn build_chat_request_omits_api_key_header_when_unset() {
+    let mut c = cfg();
+    c.api_key = None;
+    let mut input = empty_input();
+    input.user_query = Some("hi".into());
+    let req = AnthropicAdapter
+        .build_chat_request(&input, &c, &http_client())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(req.headers().get("x-api-key").is_none());
+    // anthropic-version is unconditional.
+    assert!(req.headers().get("anthropic-version").is_some());
+}
+
+#[test]
+fn build_summarizer_request_is_non_streaming_with_no_tools() {
+    let input = SummarizerInput {
+        messages: vec![
+            ChatMessage {
+                role: Role::System,
+                content: Some("You are a summarizer.".into()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            ChatMessage {
+                role: Role::User,
+                content: Some("Summarize this.".into()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+        ],
+    };
+    let req = AnthropicAdapter
+        .build_summarizer_request(&input, &cfg(), &http_client())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(req.method().as_str(), "POST");
+    assert_eq!(
+        req.url().as_str(),
+        "https://api.anthropic.com/v1/messages"
+    );
+    assert_eq!(
+        req.headers()
+            .get(reqwest::header::ACCEPT)
+            .map(|v| v.to_str().unwrap()),
+        Some("application/json"),
+    );
+    // Decode body to confirm stream:false and tools:None.
+    let body = req
+        .body()
+        .and_then(|b| b.as_bytes())
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .expect("body present");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["stream"], serde_json::Value::Bool(false));
+    assert!(v.get("tools").is_none() || v["tools"].is_null());
+    assert!(v.get("tool_choice").is_none() || v["tool_choice"].is_null());
+    // System message lifted to top-level field.
+    assert_eq!(v["system"], "You are a summarizer.");
+    // user message rendered as one entry with one text block.
+    let msgs = v["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0]["role"], "user");
+    assert_eq!(msgs[0]["content"][0]["text"], "Summarize this.");
+}
+
+#[test]
+fn build_probe_request_targets_models_endpoint_with_anthropic_headers() {
+    let req = AnthropicAdapter
+        .build_probe_request(&cfg(), &http_client())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(req.method().as_str(), "GET");
+    assert_eq!(req.url().as_str(), "https://api.anthropic.com/v1/models");
+    assert_eq!(
+        req.headers().get("x-api-key").map(|v| v.to_str().unwrap()),
+        Some("sk-ant-test"),
+    );
+    assert!(req.headers().get("anthropic-version").is_some());
+    assert!(req.headers().get("authorization").is_none());
+}
+
+#[test]
+fn build_probe_request_omits_api_key_when_unset() {
+    let mut c = cfg();
+    c.api_key = None;
+    let req = AnthropicAdapter
+        .build_probe_request(&c, &http_client())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(req.headers().get("x-api-key").is_none());
+    assert!(req.headers().get("anthropic-version").is_some());
+}
+
+#[test]
+fn build_probe_request_idempotent_for_base_with_v1_path() {
+    let mut c = cfg();
+    c.base_url = "https://api.anthropic.com/v1".into();
+    let req = AnthropicAdapter
+        .build_probe_request(&c, &http_client())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(req.url().as_str(), "https://api.anthropic.com/v1/models");
+}
+
+#[test]
+fn parse_summarizer_response_extracts_text_blocks() {
+    let body = r#"{
+        "id":"msg_01",
+        "model":"claude-sonnet-4-6",
+        "content":[{"type":"text","text":"Here is a summary."}],
+        "stop_reason":"end_turn"
+    }"#;
+    let s = AnthropicAdapter.parse_summarizer_response(body).unwrap();
+    assert_eq!(s, "Here is a summary.");
+}
+
+#[test]
+fn parse_summarizer_response_concatenates_multiple_text_blocks() {
+    let body = r#"{
+        "content":[
+            {"type":"text","text":"Part one."},
+            {"type":"text","text":"Part two."}
+        ]
+    }"#;
+    let s = AnthropicAdapter.parse_summarizer_response(body).unwrap();
+    // Joined with newline; trimmed of surrounding whitespace.
+    assert_eq!(s, "Part one.\nPart two.");
+}
+
+#[test]
+fn parse_summarizer_response_falls_back_to_thinking_if_no_text() {
+    let body = r#"{
+        "content":[{"type":"thinking","thinking":"the reasoning"}]
+    }"#;
+    let s = AnthropicAdapter.parse_summarizer_response(body).unwrap();
+    assert_eq!(s, "the reasoning");
+}
+
+#[test]
+fn parse_summarizer_response_no_content_returns_no_content_error() {
+    let body = r#"{"content":[]}"#;
+    let err = AnthropicAdapter.parse_summarizer_response(body).unwrap_err();
+    assert!(matches!(err, SummarizerError::NoContent));
+}
+
+#[test]
+fn parse_summarizer_response_surfaces_error_envelope() {
+    let body = r#"{
+        "type":"error",
+        "error":{"type":"invalid_request_error","message":"max_tokens is required"}
+    }"#;
+    let err = AnthropicAdapter.parse_summarizer_response(body).unwrap_err();
+    match err {
+        SummarizerError::UpstreamErrorEnvelope(msg) => {
+            assert!(msg.contains("invalid_request_error"));
+            assert!(msg.contains("max_tokens"));
+        }
+        other => panic!("expected UpstreamErrorEnvelope, got {other:?}"),
+    }
+}
+
+#[test]
+fn create_stream_decoder_with_explicit_ids_round_trips() {
+    let ids = crate::local_provider::adapters::StreamIds {
+        conversation_id: "c".into(),
+        request_id: "r".into(),
+        run_id: "u".into(),
+        task_id: "t".into(),
+    };
+    let mut decoder = AnthropicAdapter.create_stream_decoder(Some(ids), false);
+    // First feed_event yields the prelude with our explicit ids.
+    let out = decoder.feed_event(
+        Some("message_start"),
+        r#"{"type":"message_start","message":{}}"#,
+    );
+    assert!(!out.is_empty());
+    match &out[0].r#type {
+        Some(api::response_event::Type::Init(i)) => {
+            assert_eq!(i.conversation_id, "c");
+            assert_eq!(i.request_id, "r");
+            assert_eq!(i.run_id, "u");
+        }
+        _ => panic!("expected Init"),
+    }
+}
+
+#[test]
+fn create_stream_decoder_with_skip_create_task_suppresses_create_task_action() {
+    let ids = crate::local_provider::adapters::StreamIds {
+        conversation_id: "c".into(),
+        request_id: "r".into(),
+        run_id: "u".into(),
+        task_id: "t".into(),
+    };
+    let mut decoder = AnthropicAdapter.create_stream_decoder(Some(ids), true);
+    let out = decoder.feed_event(
+        Some("message_start"),
+        r#"{"type":"message_start","message":{}}"#,
+    );
+    // Prelude = Init + BeginTransaction only (no CreateTask).
+    assert_eq!(out.len(), 2);
+    let has_create_task = out.iter().any(|ev| match &ev.r#type {
+        Some(api::response_event::Type::ClientActions(ca)) => ca.actions.iter().any(|a| {
+            matches!(
+                a.action,
+                Some(api::client_action::Action::CreateTask(_))
+            )
+        }),
+        _ => false,
+    });
+    assert!(!has_create_task);
+}
