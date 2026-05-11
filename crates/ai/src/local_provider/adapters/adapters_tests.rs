@@ -30,11 +30,16 @@ fn select_adapter_returns_openai_for_openai_api_type() {
 }
 
 #[test]
+fn select_adapter_returns_anthropic_for_anthropic_api_type() {
+    let a = select_adapter(AgentProviderApiType::Anthropic).expect("ok");
+    assert_eq!(a.api_type(), AgentProviderApiType::Anthropic);
+}
+
+#[test]
 fn select_adapter_errors_for_each_unimplemented_variant() {
     for ty in [
         AgentProviderApiType::OpenAiResp,
         AgentProviderApiType::Gemini,
-        AgentProviderApiType::Anthropic,
         AgentProviderApiType::Ollama,
         AgentProviderApiType::DeepSeek,
     ] {

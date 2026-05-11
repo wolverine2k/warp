@@ -15,6 +15,7 @@ use crate::local_provider::{
 
 pub mod anthropic;
 pub mod openai;
+pub use anthropic::AnthropicAdapter;
 pub use openai::OpenAiAdapter;
 
 #[cfg(test)]
@@ -143,19 +144,21 @@ pub trait ProviderAdapter: Send + Sync {
     ) -> Result<reqwest::RequestBuilder, AdapterError>;
 }
 
-/// Pick an adapter for the given wire-protocol variant. Phase 2 returns
-/// `OpenAiAdapter` for `OpenAi`; the five non-OpenAI variants surface a
-/// structured `UnsupportedApiType` error that's flipped to a real impl in
-/// the corresponding Phase 3 sub-phase. Match is intentionally exhaustive
-/// (no `_ =>` arm) so adding/removing a variant triggers a compile error
-/// at this dispatch site per repo convention.
+/// Pick an adapter for the given wire-protocol variant. Phase 2 added
+/// `OpenAiAdapter`; Phase 3a flips `Anthropic` to a real impl. The four
+/// remaining variants (`OpenAiResp`, `Gemini`, `Ollama`, `DeepSeek`)
+/// surface a structured `UnsupportedApiType` error until their respective
+/// Phase 3 sub-phases land. The match is intentionally exhaustive (no
+/// `_ =>` arm) so adding/removing a variant triggers a compile error at
+/// this dispatch site per repo convention.
 pub fn select_adapter(
     api_type: AgentProviderApiType,
 ) -> Result<Box<dyn ProviderAdapter>, AdapterError> {
     use AgentProviderApiType::*;
     match api_type {
         OpenAi => Ok(Box::new(OpenAiAdapter)),
-        OpenAiResp | Gemini | Anthropic | Ollama | DeepSeek => {
+        Anthropic => Ok(Box::new(AnthropicAdapter)),
+        OpenAiResp | Gemini | Ollama | DeepSeek => {
             Err(AdapterError::UnsupportedApiType(api_type))
         }
     }
