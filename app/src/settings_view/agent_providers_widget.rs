@@ -38,6 +38,47 @@ const FIELD_LABEL_MARGIN_BOTTOM: f32 = 2.0;
 const MODEL_ROW_GAP: f32 = 6.0;
 
 // ---------------------------------------------------------------------------
+// Probe UI state (Phase 2)
+// ---------------------------------------------------------------------------
+
+/// Visual state of the per-provider "Test connection" button. Keyed by
+/// `AgentProvider.id` on `AISettingsPageView.agent_provider_probe_states`.
+/// Reset to `Idle` when the user edits the provider's base URL, API key,
+/// or api_type — a stale `Ok` would lie about the post-edit config.
+#[derive(Debug, Clone, Default)]
+pub(super) enum ProbeUiState {
+    #[default]
+    Idle,
+    Probing,
+    Ok,
+    Failed(String),
+}
+
+/// Maximum number of characters of the failure reason rendered on the button
+/// label. Tooltips would be a Phase 4 polish; for now the label itself is the
+/// user-visible surface so we cap to keep the bottom row layout stable.
+const PROBE_FAILED_LABEL_BUDGET: usize = 60;
+
+impl ProbeUiState {
+    pub(super) fn button_label(&self) -> String {
+        match self {
+            ProbeUiState::Idle => "Test connection".to_string(),
+            ProbeUiState::Probing => "Testing…".to_string(),
+            ProbeUiState::Ok => "✓ Connected".to_string(),
+            ProbeUiState::Failed(msg) => {
+                let trimmed = msg.trim();
+                if trimmed.is_empty() {
+                    "✗ Failed".to_string()
+                } else {
+                    let excerpt: String = trimmed.chars().take(PROBE_FAILED_LABEL_BUDGET).collect();
+                    format!("✗ {excerpt}")
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Per-model-row view handles
 // ---------------------------------------------------------------------------
 
@@ -433,6 +474,7 @@ impl AgentProvidersWidget {
         &self,
         provider: &AgentProvider,
         provider_index: usize,
+        view: &AISettingsPageView,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -606,8 +648,18 @@ impl AgentProvidersWidget {
             AISettingsPageAction::AddAgentProviderModel { provider_index },
             appearance,
         );
+        // Phase 2: per-provider probe state drives the button label.
+        // Reset to Idle when the user edits base_url / api_key / api_type
+        // (see the corresponding action handlers in ai_page.rs).
+        let probe_label = view
+            .agent_provider_probe_states
+            .borrow()
+            .get(&provider.id)
+            .cloned()
+            .unwrap_or_default()
+            .button_label();
         let test_connection_button = Self::render_card_button(
-            "Test connection",
+            probe_label,
             card.test_connection_button_state.clone(),
             AISettingsPageAction::TestAgentProviderConnection { provider_index },
             appearance,
@@ -678,7 +730,7 @@ impl SettingsWidget for AgentProvidersWidget {
 
     fn render(
         &self,
-        _view: &Self::View,
+        view: &Self::View,
         appearance: &Appearance,
         app: &AppContext,
     ) -> Box<dyn Element> {
@@ -756,6 +808,7 @@ impl SettingsWidget for AgentProvidersWidget {
                 column.add_child(self.render_provider_card(
                     provider,
                     provider_index,
+                    view,
                     appearance,
                     app,
                 ));

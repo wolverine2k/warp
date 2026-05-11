@@ -400,6 +400,13 @@ pub struct AISettingsPageView {
     active_subpage: Option<AISubpage>,
     voice_input_toggle_key_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
     local_only_icon_tooltip_states: RefCell<HashMap<String, MouseStateHandle>>,
+    /// Phase 2: per-provider "Test connection" UI state, keyed by
+    /// `AgentProvider.id`. Read by `AgentProvidersWidget` at render time
+    /// to drive the button label. `pub(super)` so the sibling widget
+    /// module can borrow it; entries are reset to Idle (i.e. removed)
+    /// when the user edits the provider's base_url / api_key / api_type.
+    pub(super) agent_provider_probe_states:
+        RefCell<HashMap<String, super::agent_providers_widget::ProbeUiState>>,
     autodetection_denylist_editor: ViewHandle<EditorView>,
     autonomy_dropdown_menu: ViewHandle<Dropdown<AISettingsPageAction>>,
 
@@ -1396,6 +1403,7 @@ impl AISettingsPageView {
             voice_input_toggle_key_dropdown,
             autodetection_denylist_editor,
             local_only_icon_tooltip_states: Default::default(),
+            agent_provider_probe_states: Default::default(),
             command_execution_allowlist_editor,
             command_execution_denylist_editor,
             command_execution_allowlist_mouse_state_handles,
@@ -3207,6 +3215,11 @@ impl TypedActionView for AISettingsPageView {
             } => {
                 let provider_index = *provider_index;
                 let base_url = base_url.clone();
+                let provider_id = AISettings::as_ref(ctx)
+                    .agent_providers
+                    .value()
+                    .get(provider_index)
+                    .map(|p| p.id.clone());
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     let mut providers = settings.agent_providers.value().clone();
                     if let Some(p) = providers.get_mut(provider_index) {
@@ -3214,6 +3227,12 @@ impl TypedActionView for AISettingsPageView {
                         report_if_error!(settings.agent_providers.set_value(providers, ctx));
                     }
                 });
+                // Phase 2: a base-URL edit invalidates any cached probe
+                // result for this provider (a green check would lie about
+                // the new URL until the user re-tests).
+                if let Some(id) = provider_id {
+                    self.agent_provider_probe_states.borrow_mut().remove(&id);
+                }
                 ctx.notify();
             }
 
@@ -3232,6 +3251,11 @@ impl TypedActionView for AISettingsPageView {
                             secrets.set(&provider_id, api_key, ctx);
                         },
                     );
+                    // Phase 2: an api-key edit invalidates any cached probe
+                    // result for this provider.
+                    self.agent_provider_probe_states
+                        .borrow_mut()
+                        .remove(&provider_id);
                 }
                 ctx.notify();
             }
@@ -3242,6 +3266,11 @@ impl TypedActionView for AISettingsPageView {
             } => {
                 let provider_index = *provider_index;
                 let api_type = *api_type;
+                let provider_id = AISettings::as_ref(ctx)
+                    .agent_providers
+                    .value()
+                    .get(provider_index)
+                    .map(|p| p.id.clone());
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     let mut providers = settings.agent_providers.value().clone();
                     if let Some(p) = providers.get_mut(provider_index) {
@@ -3249,6 +3278,12 @@ impl TypedActionView for AISettingsPageView {
                         report_if_error!(settings.agent_providers.set_value(providers, ctx));
                     }
                 });
+                // Phase 2: an api_type swap invalidates any cached probe
+                // result — a green check against OpenAi shouldn't carry
+                // over after switching to (e.g.) Anthropic.
+                if let Some(id) = provider_id {
+                    self.agent_provider_probe_states.borrow_mut().remove(&id);
+                }
                 ctx.notify();
             }
 
@@ -3294,6 +3329,7 @@ impl TypedActionView for AISettingsPageView {
                     context_window: None,
                     api_type: provider.api_type,
                 };
+                let provider_id = provider.id.clone();
                 let provider_label = if provider.name.is_empty() {
                     provider.id.clone()
                 } else {
@@ -3303,26 +3339,38 @@ impl TypedActionView for AISettingsPageView {
                     "TestAgentProviderConnection: probing provider {provider_label} ({})",
                     provider.id
                 );
+
+                // Flip the per-provider probe state to Probing so the widget
+                // re-renders the button as "Testing…" while the future runs.
+                self.agent_provider_probe_states.borrow_mut().insert(
+                    provider_id.clone(),
+                    crate::settings_view::agent_providers_widget::ProbeUiState::Probing,
+                );
+
                 let http = reqwest::Client::new();
                 let _ = ctx.spawn(
                     crate::ai::agent_providers::probe::probe(cfg, http),
-                    move |_this, outcome, _ctx| {
-                        // Phase 2 follow-up: surface this in the widget via
-                        // per-card ProbeUiState (Idle | Probing | Ok | Failed).
-                        // For now the outcome shows up in the app log so users
-                        // can confirm the click landed.
-                        match outcome {
-                            crate::ai::agent_providers::probe::ProbeOutcome::Ok => {
+                    move |this, outcome, ctx| {
+                        use crate::ai::agent_providers::probe::ProbeOutcome;
+                        use crate::settings_view::agent_providers_widget::ProbeUiState;
+                        let new_state = match &outcome {
+                            ProbeOutcome::Ok => {
                                 log::info!(
                                     "TestAgentProviderConnection [{provider_label}]: connected"
                                 );
+                                ProbeUiState::Ok
                             }
-                            crate::ai::agent_providers::probe::ProbeOutcome::Failed(msg) => {
+                            ProbeOutcome::Failed(msg) => {
                                 log::warn!(
                                     "TestAgentProviderConnection [{provider_label}]: failed — {msg}"
                                 );
+                                ProbeUiState::Failed(msg.clone())
                             }
-                        }
+                        };
+                        this.agent_provider_probe_states
+                            .borrow_mut()
+                            .insert(provider_id.clone(), new_state);
+                        ctx.notify();
                     },
                 );
                 ctx.notify();
