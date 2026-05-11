@@ -258,7 +258,10 @@ fn compaction_projection(input: &LocalProviderInput) -> Option<CompactionProject
 
 /// Tools that are both signaled by the server (`supported_tools`) and have a
 /// schema in the v1 curated set. `LocalTool::from_name` rejects anything else.
-fn enabled_local_tools(
+///
+/// `pub(crate)` so the Anthropic translator can reuse the same filtering
+/// rules — adapter-agnostic helper.
+pub(crate) fn enabled_local_tools(
     supported: impl IntoIterator<Item = api::ToolType>,
     cfg: &LocalProviderConfig,
 ) -> Vec<LocalTool> {
@@ -270,6 +273,7 @@ fn enabled_local_tools(
         .filter_map(|t| LocalTool::from_name(tool_type_name(t)))
         .collect()
 }
+
 
 fn system_message(local_tools: &[LocalTool], cfg: &LocalProviderConfig) -> ChatMessage {
     let descriptions: Vec<&str> = local_tools.iter().map(|t| t.description()).collect();
@@ -425,36 +429,52 @@ fn tool_type_name(tt: api::ToolType) -> &'static str {
 }
 
 fn summarize_tool_call(call: &api::message::ToolCall) -> Option<(String, String)> {
+    summarize_tool_call_input(call).map(|(name, input)| (name, input.to_string()))
+}
+
+/// Same as `summarize_tool_call` but returns the input arguments as a typed
+/// `serde_json::Value` instead of a stringified JSON object. The Anthropic
+/// translator (`adapters::anthropic::request`) needs the structured form
+/// because the Messages API's `tool_use.input` field takes a JSON object,
+/// not a string.
+///
+/// Returns `None` for proto tool variants we don't have schemas for —
+/// matches `summarize_tool_call`'s skip-from-history behavior. The local
+/// model wouldn't have emitted unknown variants; if they appear in history
+/// the conversation started against a Warp-hosted model.
+pub(crate) fn summarize_tool_call_input(
+    call: &api::message::ToolCall,
+) -> Option<(String, serde_json::Value)> {
     use api::message::tool_call::Tool;
-    let (name, args) = match call.tool.as_ref()? {
+    match call.tool.as_ref()? {
         Tool::ReadFiles(rf) => {
             let names: Vec<&str> = rf.files.iter().map(|f| f.name.as_str()).collect();
-            (
+            Some((
                 "read_files".to_string(),
-                serde_json::json!({ "paths": names }).to_string(),
-            )
+                serde_json::json!({ "paths": names }),
+            ))
         }
-        Tool::RunShellCommand(rsc) => (
+        Tool::RunShellCommand(rsc) => Some((
             "run_shell_command".to_string(),
-            serde_json::json!({ "command": rsc.command }).to_string(),
-        ),
-        Tool::Grep(g) => (
+            serde_json::json!({ "command": rsc.command }),
+        )),
+        Tool::Grep(g) => Some((
             "grep".to_string(),
-            serde_json::json!({ "queries": g.queries, "path": g.path }).to_string(),
-        ),
-        // Variants we don't have schemas for yet are skipped from history. The
-        // local model wouldn't have emitted them; if they exist in history it's
-        // because the conversation started against a Warp-hosted model.
-        _ => return None,
-    };
-    Some((name, args))
+            serde_json::json!({ "queries": g.queries, "path": g.path }),
+        )),
+        _ => None,
+    }
 }
 
 /// Render a `Message::ToolCallResult` as the `content` string the OpenAI
 /// `tool` role message expects. Each v1 tool variant gets a tailored format:
 /// the model needs to *read* this content to decide its next turn, so the
 /// shape matches what a typical CLI agent would print.
-fn summarize_tool_result(result: &api::message::ToolCallResult) -> String {
+///
+/// `pub(crate)` so the Anthropic translator can use the same rendered
+/// strings inside Anthropic's `tool_result.content` field — the rendered
+/// output is adapter-agnostic.
+pub(crate) fn summarize_tool_result(result: &api::message::ToolCallResult) -> String {
     use api::message::tool_call_result::Result as R;
     let Some(inner) = result.result.as_ref() else {
         return "<empty result>".to_string();

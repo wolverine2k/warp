@@ -15,6 +15,7 @@ use serde_json::Value;
 use thiserror::Error;
 use warp_multi_agent_api as api;
 
+use crate::local_provider::adapters::anthropic::wire::AnthropicToolDef;
 use crate::local_provider::wire::{ToolDefinition, ToolFunction};
 
 /// Variants the v1 tool set exposes. Names match `Message::ToolCall.tool::*` in the proto.
@@ -92,6 +93,23 @@ pub fn tool_definitions(enabled: &[LocalTool]) -> Vec<ToolDefinition> {
                     description: t.description().to_string(),
                     parameters,
                 },
+            })
+        })
+        .collect()
+}
+
+/// Build the Anthropic `tools` array for the request. Same schemas as the
+/// OpenAI variant; the only difference is the wire envelope — Anthropic
+/// expects `{name, description, input_schema}` at top level (no wrapping
+/// `function: { ... }` object, no `type: "function"`).
+pub fn tool_definitions_anthropic(enabled: &[LocalTool]) -> Vec<AnthropicToolDef> {
+    enabled
+        .iter()
+        .filter_map(|t| {
+            schema_for(*t).map(|input_schema| AnthropicToolDef {
+                name: t.name().to_string(),
+                description: t.description().to_string(),
+                input_schema,
             })
         })
         .collect()
