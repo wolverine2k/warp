@@ -13,6 +13,7 @@ use crate::local_provider::{
     run::{SummarizerError, SummarizerInput},
 };
 
+pub mod anthropic;
 pub mod openai;
 pub use openai::OpenAiAdapter;
 
