@@ -155,6 +155,31 @@ impl LocalProviderConfig {
         base.join(target.as_ref())
             .map_err(|e| LocalProviderConfigError::InvalidBaseUrl(e.to_string()))
     }
+
+    /// `{base_url}/api/chat` — Ollama's native chat endpoint (Phase 3b).
+    /// No idempotent `/v1` dance: Ollama's path layout has no prefix to
+    /// worry about. The same URL serves both streaming (stream:true) and
+    /// non-streaming (stream:false; summarizer path) bodies.
+    pub fn ollama_chat_url(&self) -> Result<Url, LocalProviderConfigError> {
+        self.join_ollama_path("api/chat")
+    }
+
+    /// `{base_url}/api/tags` — Ollama's installed-model list endpoint,
+    /// used by the test-connection probe.
+    pub fn ollama_tags_url(&self) -> Result<Url, LocalProviderConfigError> {
+        self.join_ollama_path("api/tags")
+    }
+
+    fn join_ollama_path(&self, leaf: &str) -> Result<Url, LocalProviderConfigError> {
+        let mut base = Url::parse(&self.base_url)
+            .map_err(|e| LocalProviderConfigError::InvalidBaseUrl(e.to_string()))?;
+        if !base.path().ends_with('/') {
+            let new_path = format!("{}/", base.path());
+            base.set_path(&new_path);
+        }
+        base.join(leaf)
+            .map_err(|e| LocalProviderConfigError::InvalidBaseUrl(e.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -339,5 +364,41 @@ mod tests {
             .anthropic_models_url()
             .unwrap();
         assert_eq!(url.as_str(), "https://api.anthropic.com/v1/models");
+    }
+
+    // ---- Ollama endpoint helpers ----
+
+    #[test]
+    fn ollama_chat_url_from_default_localhost() {
+        let url = cfg("http://localhost:11434", "llama3.1")
+            .ollama_chat_url()
+            .unwrap();
+        assert_eq!(url.as_str(), "http://localhost:11434/api/chat");
+    }
+
+    #[test]
+    fn ollama_chat_url_with_trailing_slash() {
+        let url = cfg("http://localhost:11434/", "llama3.1")
+            .ollama_chat_url()
+            .unwrap();
+        assert_eq!(url.as_str(), "http://localhost:11434/api/chat");
+    }
+
+    #[test]
+    fn ollama_tags_url_from_default_localhost() {
+        let url = cfg("http://localhost:11434", "llama3.1")
+            .ollama_tags_url()
+            .unwrap();
+        assert_eq!(url.as_str(), "http://localhost:11434/api/tags");
+    }
+
+    #[test]
+    fn ollama_chat_url_works_with_relay_base_path() {
+        // Self-hosted Ollama relays / reverse proxies that mount the API
+        // under a path prefix.
+        let url = cfg("https://relay.example.com/ollama", "llama3.1")
+            .ollama_chat_url()
+            .unwrap();
+        assert_eq!(url.as_str(), "https://relay.example.com/ollama/api/chat");
     }
 }
