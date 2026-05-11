@@ -180,6 +180,52 @@ impl LocalProviderConfig {
         base.join(leaf)
             .map_err(|e| LocalProviderConfigError::InvalidBaseUrl(e.to_string()))
     }
+
+    /// `{base_url}/v1beta/models/{model_id}:streamGenerateContent?alt=sse` —
+    /// Gemini's native streaming endpoint. The `?alt=sse` query is required
+    /// for SSE framing; without it Gemini returns a JSON array. Handles
+    /// `/v1beta` already present in the base path idempotently.
+    pub fn gemini_stream_generate_url(&self) -> Result<Url, LocalProviderConfigError> {
+        self.gemini_models_endpoint(&format!(
+            "{}:streamGenerateContent?alt=sse",
+            self.model_id
+        ))
+    }
+
+    /// `{base_url}/v1beta/models/{model_id}:generateContent` — Gemini's
+    /// non-streaming endpoint. Used by the summarizer path (Phase 3c Task 5).
+    pub fn gemini_generate_url(&self) -> Result<Url, LocalProviderConfigError> {
+        self.gemini_models_endpoint(&format!("{}:generateContent", self.model_id))
+    }
+
+    /// `{base_url}/v1beta/models` — Gemini's model-list endpoint, used by the
+    /// test-connection probe.
+    pub fn gemini_models_url(&self) -> Result<Url, LocalProviderConfigError> {
+        self.gemini_endpoint("models")
+    }
+
+    fn gemini_models_endpoint(
+        &self,
+        leaf_after_models: &str,
+    ) -> Result<Url, LocalProviderConfigError> {
+        self.gemini_endpoint(&format!("models/{leaf_after_models}"))
+    }
+
+    fn gemini_endpoint(&self, leaf: &str) -> Result<Url, LocalProviderConfigError> {
+        let mut base = Url::parse(&self.base_url)
+            .map_err(|e| LocalProviderConfigError::InvalidBaseUrl(e.to_string()))?;
+        if !base.path().ends_with('/') {
+            let p = format!("{}/", base.path());
+            base.set_path(&p);
+        }
+        let target: std::borrow::Cow<'_, str> = if base.path().ends_with("/v1beta/") {
+            leaf.into()
+        } else {
+            format!("v1beta/{leaf}").into()
+        };
+        base.join(target.as_ref())
+            .map_err(|e| LocalProviderConfigError::InvalidBaseUrl(e.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -400,5 +446,113 @@ mod tests {
             .ollama_chat_url()
             .unwrap();
         assert_eq!(url.as_str(), "https://relay.example.com/ollama/api/chat");
+    }
+
+    // ---- Gemini endpoint helpers ----
+
+    #[test]
+    fn gemini_stream_generate_url_from_default_host() {
+        let url = cfg(
+            "https://generativelanguage.googleapis.com",
+            "gemini-1.5-pro",
+        )
+        .gemini_stream_generate_url()
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:streamGenerateContent?alt=sse"
+        );
+    }
+
+    #[test]
+    fn gemini_stream_generate_url_with_v1beta_path_is_idempotent() {
+        let url = cfg(
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-1.5-pro",
+        )
+        .gemini_stream_generate_url()
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:streamGenerateContent?alt=sse"
+        );
+    }
+
+    #[test]
+    fn gemini_stream_generate_url_with_v1beta_trailing_slash_is_idempotent() {
+        let url = cfg(
+            "https://generativelanguage.googleapis.com/v1beta/",
+            "gemini-1.5-pro",
+        )
+        .gemini_stream_generate_url()
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:streamGenerateContent?alt=sse"
+        );
+    }
+
+    #[test]
+    fn gemini_generate_url_uses_generate_content_suffix() {
+        let url = cfg(
+            "https://generativelanguage.googleapis.com",
+            "gemini-1.5-pro",
+        )
+        .gemini_generate_url()
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent"
+        );
+    }
+
+    #[test]
+    fn gemini_models_url_from_default_host() {
+        let url = cfg(
+            "https://generativelanguage.googleapis.com",
+            "gemini-1.5-pro",
+        )
+        .gemini_models_url()
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://generativelanguage.googleapis.com/v1beta/models"
+        );
+    }
+
+    #[test]
+    fn gemini_models_url_with_v1beta_path_is_idempotent() {
+        let url = cfg(
+            "https://generativelanguage.googleapis.com/v1beta",
+            "gemini-1.5-pro",
+        )
+        .gemini_models_url()
+        .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://generativelanguage.googleapis.com/v1beta/models"
+        );
+    }
+
+    #[test]
+    fn gemini_stream_generate_url_works_with_relay_base_path() {
+        let url = cfg("https://relay.example.com/google", "gemini-1.5-pro")
+            .gemini_stream_generate_url()
+            .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://relay.example.com/google/v1beta/models/gemini-1.5-pro:streamGenerateContent?alt=sse"
+        );
+    }
+
+    #[test]
+    fn gemini_stream_generate_url_preserves_query_string() {
+        let url = cfg(
+            "https://generativelanguage.googleapis.com",
+            "gemini-1.5-pro",
+        )
+        .gemini_stream_generate_url()
+        .unwrap();
+        assert_eq!(url.query(), Some("alt=sse"));
     }
 }
