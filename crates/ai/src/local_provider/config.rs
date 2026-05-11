@@ -118,6 +118,43 @@ impl LocalProviderConfig {
         base.join("models")
             .map_err(|e| LocalProviderConfigError::InvalidBaseUrl(e.to_string()))
     }
+
+    /// `{base_url}/v1/messages` — the Anthropic Messages endpoint. Handles
+    /// `/v1` in the base path idempotently: a user pasting
+    /// `https://api.anthropic.com/v1` doesn't produce
+    /// `https://api.anthropic.com/v1/v1/messages`. The Phase 3a adapter
+    /// uses this for both streaming chat and the non-streaming summarizer
+    /// path; only the body and `Accept` header differ between the two.
+    pub fn messages_url(&self) -> Result<Url, LocalProviderConfigError> {
+        self.anthropic_endpoint("messages")
+    }
+
+    /// `{base_url}/v1/models` — Anthropic's model-list endpoint, used by the
+    /// test-connection probe (Phase 3a). Available since November 2024;
+    /// gateways that don't implement it surface a 4xx to the probe, which
+    /// is fine — chat still works against any `messages_url` that does.
+    pub fn anthropic_models_url(&self) -> Result<Url, LocalProviderConfigError> {
+        self.anthropic_endpoint("models")
+    }
+
+    fn anthropic_endpoint(&self, leaf: &str) -> Result<Url, LocalProviderConfigError> {
+        let mut base = Url::parse(&self.base_url)
+            .map_err(|e| LocalProviderConfigError::InvalidBaseUrl(e.to_string()))?;
+        if !base.path().ends_with('/') {
+            let new_path = format!("{}/", base.path());
+            base.set_path(&new_path);
+        }
+        // If the user already included `/v1` in the base path, append just
+        // the leaf; otherwise prepend `v1/`. Idempotent against both
+        // `https://api.anthropic.com` and `https://api.anthropic.com/v1`.
+        let target: std::borrow::Cow<'_, str> = if base.path().ends_with("/v1/") {
+            leaf.into()
+        } else {
+            format!("v1/{leaf}").into()
+        };
+        base.join(target.as_ref())
+            .map_err(|e| LocalProviderConfigError::InvalidBaseUrl(e.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -238,5 +275,69 @@ mod tests {
             .models_list_url()
             .unwrap();
         assert_eq!(url.as_str(), "http://localhost:11434/models");
+    }
+
+    // ---- Anthropic endpoint helpers ----
+
+    #[test]
+    fn messages_url_appends_v1_messages_to_bare_host() {
+        let url = cfg("https://api.anthropic.com", "claude-sonnet-4-6")
+            .messages_url()
+            .unwrap();
+        assert_eq!(url.as_str(), "https://api.anthropic.com/v1/messages");
+    }
+
+    #[test]
+    fn messages_url_with_v1_path_is_idempotent() {
+        let url = cfg("https://api.anthropic.com/v1", "claude-sonnet-4-6")
+            .messages_url()
+            .unwrap();
+        assert_eq!(url.as_str(), "https://api.anthropic.com/v1/messages");
+    }
+
+    #[test]
+    fn messages_url_with_v1_trailing_slash_is_idempotent() {
+        let url = cfg("https://api.anthropic.com/v1/", "claude-sonnet-4-6")
+            .messages_url()
+            .unwrap();
+        assert_eq!(url.as_str(), "https://api.anthropic.com/v1/messages");
+    }
+
+    #[test]
+    fn messages_url_works_with_relay_base_path() {
+        // Self-hosted Claude relays or enterprise gateways often live under
+        // a path prefix like /anthropic; the helper should still prepend
+        // /v1 if not already present.
+        let url = cfg("https://relay.example.com/anthropic", "claude-sonnet-4-6")
+            .messages_url()
+            .unwrap();
+        assert_eq!(
+            url.as_str(),
+            "https://relay.example.com/anthropic/v1/messages"
+        );
+    }
+
+    #[test]
+    fn anthropic_models_url_appends_v1_models_to_bare_host() {
+        let url = cfg("https://api.anthropic.com", "claude-sonnet-4-6")
+            .anthropic_models_url()
+            .unwrap();
+        assert_eq!(url.as_str(), "https://api.anthropic.com/v1/models");
+    }
+
+    #[test]
+    fn anthropic_models_url_with_v1_path_is_idempotent() {
+        let url = cfg("https://api.anthropic.com/v1", "claude-sonnet-4-6")
+            .anthropic_models_url()
+            .unwrap();
+        assert_eq!(url.as_str(), "https://api.anthropic.com/v1/models");
+    }
+
+    #[test]
+    fn anthropic_models_url_with_v1_trailing_slash_is_idempotent() {
+        let url = cfg("https://api.anthropic.com/v1/", "claude-sonnet-4-6")
+            .anthropic_models_url()
+            .unwrap();
+        assert_eq!(url.as_str(), "https://api.anthropic.com/v1/models");
     }
 }
