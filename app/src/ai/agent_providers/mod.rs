@@ -5,6 +5,7 @@
 //! adapters for non-OpenAI protocols.
 
 pub mod migration;
+pub mod probe;
 
 use std::collections::HashMap;
 

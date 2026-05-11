@@ -2331,6 +2331,14 @@ pub enum AISettingsPageAction {
         api_type: crate::settings::AgentProviderApiType,
     },
 
+    /// Phase 2: probe the provider's endpoint and surface success/failure
+    /// in the settings UI. Spawns an async probe via the selected
+    /// `ProviderAdapter`'s `build_probe_request`. Result is currently logged;
+    /// a follow-up adds per-card `ProbeUiState` visualization.
+    TestAgentProviderConnection {
+        provider_index: usize,
+    },
+
     /// Append a fresh empty model row to the provider's models list.
     AddAgentProviderModel {
         provider_index: usize,
@@ -3241,6 +3249,82 @@ impl TypedActionView for AISettingsPageView {
                         report_if_error!(settings.agent_providers.set_value(providers, ctx));
                     }
                 });
+                ctx.notify();
+            }
+
+            AISettingsPageAction::TestAgentProviderConnection { provider_index } => {
+                let provider_index = *provider_index;
+                let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
+                let Some(provider) = providers.into_iter().nth(provider_index) else {
+                    log::warn!(
+                        "TestAgentProviderConnection: invalid provider_index {provider_index}"
+                    );
+                    return;
+                };
+                // Build a probe-ready LocalProviderConfig. The probe URL is
+                // `{base_url}/models` — model_id is unused by the probe but
+                // `LocalProviderConfig::validate()` requires a non-empty
+                // value, so synthesize "probe" if the provider has no models
+                // configured yet (a likely state when users hit Test
+                // connection right after entering a base URL).
+                let api_key = ::ai::local_provider::AgentProviderSecrets::as_ref(ctx)
+                    .get(&provider.id)
+                    .map(str::to_owned)
+                    .unwrap_or_default();
+                let model_id = provider
+                    .models
+                    .first()
+                    .map(|m| m.id.clone())
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| "probe".to_string());
+                let cfg = ::ai::local_provider::LocalProviderConfig {
+                    display_name: if provider.name.is_empty() {
+                        "Local".to_owned()
+                    } else {
+                        provider.name.clone()
+                    },
+                    base_url: provider.base_url.clone(),
+                    model_id,
+                    api_key: if api_key.is_empty() {
+                        None
+                    } else {
+                        Some(api_key)
+                    },
+                    supports_tools: true,
+                    context_window: None,
+                    api_type: provider.api_type,
+                };
+                let provider_label = if provider.name.is_empty() {
+                    provider.id.clone()
+                } else {
+                    provider.name.clone()
+                };
+                log::info!(
+                    "TestAgentProviderConnection: probing provider {provider_label} ({})",
+                    provider.id
+                );
+                let http = reqwest::Client::new();
+                let _ = ctx.spawn(
+                    crate::ai::agent_providers::probe::probe(cfg, http),
+                    move |_this, outcome, _ctx| {
+                        // Phase 2 follow-up: surface this in the widget via
+                        // per-card ProbeUiState (Idle | Probing | Ok | Failed).
+                        // For now the outcome shows up in the app log so users
+                        // can confirm the click landed.
+                        match outcome {
+                            crate::ai::agent_providers::probe::ProbeOutcome::Ok => {
+                                log::info!(
+                                    "TestAgentProviderConnection [{provider_label}]: connected"
+                                );
+                            }
+                            crate::ai::agent_providers::probe::ProbeOutcome::Failed(msg) => {
+                                log::warn!(
+                                    "TestAgentProviderConnection [{provider_label}]: failed — {msg}"
+                                );
+                            }
+                        }
+                    },
+                );
                 ctx.notify();
             }
 

@@ -25,10 +25,7 @@ fn cfg(base: &str, api_key: Option<&str>) -> LocalProviderConfig {
 #[test]
 fn probe_url_targets_models_list() {
     let req = OpenAiAdapter
-        .build_probe_request(
-            &cfg("http://localhost:11434/v1", Some("k")),
-            &http_client(),
-        )
+        .build_probe_request(&cfg("http://localhost:11434/v1", Some("k")), &http_client())
         .unwrap()
         .build()
         .unwrap();
@@ -52,10 +49,7 @@ fn probe_url_handles_trailing_slash_base_url() {
 #[test]
 fn probe_request_includes_bearer_when_key_set() {
     let req = OpenAiAdapter
-        .build_probe_request(
-            &cfg("http://localhost:11434/v1", Some("k")),
-            &http_client(),
-        )
+        .build_probe_request(&cfg("http://localhost:11434/v1", Some("k")), &http_client())
         .unwrap()
         .build()
         .unwrap();
@@ -70,10 +64,7 @@ fn probe_request_includes_bearer_when_key_set() {
 #[test]
 fn probe_request_omits_bearer_when_key_absent() {
     let req = OpenAiAdapter
-        .build_probe_request(
-            &cfg("http://localhost:11434/v1", None),
-            &http_client(),
-        )
+        .build_probe_request(&cfg("http://localhost:11434/v1", None), &http_client())
         .unwrap()
         .build()
         .unwrap();
@@ -83,10 +74,7 @@ fn probe_request_omits_bearer_when_key_absent() {
 #[test]
 fn probe_request_omits_bearer_when_key_empty_string() {
     let req = OpenAiAdapter
-        .build_probe_request(
-            &cfg("http://localhost:11434/v1", Some("")),
-            &http_client(),
-        )
+        .build_probe_request(&cfg("http://localhost:11434/v1", Some("")), &http_client())
         .unwrap()
         .build()
         .unwrap();

@@ -59,6 +59,7 @@ struct ProviderCardHandles {
     api_key_editor: ViewHandle<EditorView>,
     remove_button_state: MouseStateHandle,
     add_model_button_state: MouseStateHandle,
+    test_connection_button_state: MouseStateHandle,
     api_type_chip_states: HashMap<AgentProviderApiType, MouseStateHandle>,
     model_rows: Vec<ModelRowHandles>,
 }
@@ -192,6 +193,7 @@ impl AgentProvidersWidget {
             api_key_editor,
             remove_button_state: MouseStateHandle::default(),
             add_model_button_state: MouseStateHandle::default(),
+            test_connection_button_state: MouseStateHandle::default(),
             api_type_chip_states,
             model_rows,
         }
@@ -604,6 +606,12 @@ impl AgentProvidersWidget {
             AISettingsPageAction::AddAgentProviderModel { provider_index },
             appearance,
         );
+        let test_connection_button = Self::render_card_button(
+            "Test connection",
+            card.test_connection_button_state.clone(),
+            AISettingsPageAction::TestAgentProviderConnection { provider_index },
+            appearance,
+        );
         let remove_button = Self::render_card_button(
             "Remove",
             card.remove_button_state.clone(),
@@ -611,10 +619,22 @@ impl AgentProvidersWidget {
             appearance,
         );
 
+        // Group Add Model + Test connection on the left, Remove on the right
+        // so the destructive action stays separated from the additive ones.
+        let left_buttons = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(add_model_button)
+            .with_child(
+                Container::new(test_connection_button)
+                    .with_margin_left(8.)
+                    .finish(),
+            )
+            .finish();
+
         let bottom_row = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(add_model_button)
+            .with_child(left_buttons)
             .with_child(remove_button)
             .finish();
 

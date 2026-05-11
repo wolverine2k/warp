@@ -361,9 +361,7 @@ fn debug_dump_response_chunk(chunk_data: &str) {
 
 // ---------- summarizer (non-streaming) ----------
 
-use crate::local_provider::wire::{
-    ChatMessage, Role,
-};
+use crate::local_provider::wire::{ChatMessage, Role};
 
 /// Inputs for [`run_summarizer_turn`] — a self-contained summarization call.
 /// Distinct from [`LocalProviderInput`] because the summarizer doesn't share

@@ -68,9 +68,7 @@ fn openai_adapter_builds_chat_request_with_bearer_auth() {
         Some("Bearer k"),
     );
     assert_eq!(
-        req.headers()
-            .get("accept")
-            .map(|v| v.to_str().unwrap()),
+        req.headers().get("accept").map(|v| v.to_str().unwrap()),
         Some("text/event-stream"),
     );
 }
@@ -126,8 +124,8 @@ fn openai_adapter_parse_summarizer_response_no_content_errors() {
 }
 
 #[test]
-fn openai_adapter_build_summarizer_request_uses_chat_completions_url_with_application_json_accept(
-) {
+fn openai_adapter_build_summarizer_request_uses_chat_completions_url_with_application_json_accept()
+{
     let http = http_client();
     let input = SummarizerInput { messages: vec![] };
     let req = OpenAiAdapter
@@ -141,9 +139,7 @@ fn openai_adapter_build_summarizer_request_uses_chat_completions_url_with_applic
         "http://localhost:11434/v1/chat/completions"
     );
     assert_eq!(
-        req.headers()
-            .get("accept")
-            .map(|v| v.to_str().unwrap()),
+        req.headers().get("accept").map(|v| v.to_str().unwrap()),
         Some("application/json"),
     );
 }
