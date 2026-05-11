@@ -1,14 +1,22 @@
-//! HTTP runner: ties together the request translator, HTTP client, and SSE adapter.
+//! HTTP runner: ties together the request translator, HTTP client, and the
+//! per-adapter stream decoder.
 //!
 //! Per `specs/GH9303/tech.md` §6:
-//! 1. Translate `LocalProviderInput` + `LocalProviderConfig` → OpenAI request body.
-//! 2. POST to `{base_url}/chat/completions` with `Authorization: Bearer <key>` if set.
-//! 3. Pipe the SSE response through `OpenAiSseAdapter`.
-//! 4. Wrap with `take_until(cancel_rx)` so cancellation matches existing behavior.
+//! 1. Select an adapter via `cfg.api_type`.
+//! 2. Build the chat request (URL + headers + body via the adapter).
+//! 3. Drive the response stream through the adapter's `StreamDecoder`. Phase
+//!    3b: branches on `adapter.streaming_format()` — SSE (OpenAi, Anthropic,
+//!    future Gemini/DeepSeek) goes through `synthesize_sse_stream`;
+//!    NDJSON (Ollama-native) goes through `synthesize_ndjson_stream`.
+//! 4. Wrap with `take_until(cancel_rx)` so cancellation matches existing
+//!    behavior.
 //!
-//! Errors that prevent even producing a stream (connect refused, DNS, auth) are
-//! returned as `Result::Err`. Errors that interrupt an already-flowing stream
-//! are encoded as `Finished{InternalError}` events by the adapter.
+//! Errors that prevent even producing a stream (connect refused, DNS, auth)
+//! are returned as `Result::Err` for the SSE path (`eventsource()` doesn't
+//! await `send()`; HTTP errors arrive mid-stream from the `EventSource`).
+//! The NDJSON path awaits `send()` before returning a stream — pre-flight
+//! errors are encoded as `Finished{InternalError}` events on a synthetic
+//! single-emit stream, matching the in-stream error behavior.
 
 use std::pin::Pin;
 
@@ -98,21 +106,35 @@ pub async fn run_chat_turn(
     });
     let decoder = provider_adapter.create_stream_decoder(stream_ids, !input.needs_create_task);
 
-    // The only error eventsource() can return is CannotCloneRequestError, and
-    // it can't actually fire on a one-shot builder we just constructed. We
-    // surface it as a panic with a clear message so future regressions stand out.
-    let mut event_source = request_builder
-        .eventsource()
-        .expect("eventsource() on a fresh, single-use RequestBuilder cannot fail");
-    // Disable reqwest_eventsource's built-in exponential-backoff retries.
-    // We surface transient failures as Finished{InternalError} immediately
-    // so the user can act; the controller's higher-level retry policy
-    // decides whether to re-issue the whole turn. Without this, an unreachable
-    // local endpoint would block for ~31s of retries before our adapter
-    // observes the EOF.
-    event_source.set_retry_policy(Box::new(reqwest_eventsource::retry::Never));
-
-    let synthesized = synthesize_stream(decoder, event_source, cancel_rx).boxed();
+    // Phase 3b: branch on the adapter's streaming format. SSE adapters
+    // build an EventSource and drive it through synthesize_sse_stream;
+    // NDJSON adapters await send() (to surface pre-flight HTTP errors as
+    // events on a synthetic stream) and drive bytes_stream() through
+    // synthesize_ndjson_stream.
+    use crate::local_provider::adapters::StreamingFormat;
+    let synthesized: LocalResponseStream = match provider_adapter.streaming_format() {
+        StreamingFormat::ServerSentEvents => {
+            // The only error eventsource() can return is
+            // CannotCloneRequestError, and it can't actually fire on a
+            // one-shot builder we just constructed. We surface it as a
+            // panic with a clear message so future regressions stand out.
+            let mut event_source = request_builder
+                .eventsource()
+                .expect("eventsource() on a fresh, single-use RequestBuilder cannot fail");
+            // Disable reqwest_eventsource's built-in exponential-backoff
+            // retries. We surface transient failures as
+            // Finished{InternalError} immediately so the user can act; the
+            // controller's higher-level retry policy decides whether to
+            // re-issue the whole turn. Without this, an unreachable local
+            // endpoint would block for ~31s of retries before our adapter
+            // observes the EOF.
+            event_source.set_retry_policy(Box::new(reqwest_eventsource::retry::Never));
+            synthesize_sse_stream(decoder, event_source, cancel_rx).boxed()
+        }
+        StreamingFormat::NewlineDelimitedJson => {
+            synthesize_ndjson_stream(decoder, request_builder, cancel_rx).await
+        }
+    };
     Ok(synthesized)
 }
 
@@ -139,7 +161,7 @@ const ERROR_BODY_EXCERPT_CHARS: usize = 500;
 type BodyReadFuture =
     Pin<Box<dyn Future<Output = Result<String, reqwest::Error>> + Send + 'static>>;
 
-fn synthesize_stream(
+fn synthesize_sse_stream(
     mut decoder: Box<dyn crate::local_provider::adapters::StreamDecoder>,
     mut event_source: reqwest_eventsource::EventSource,
     mut cancel_rx: oneshot::Receiver<()>,
@@ -305,6 +327,161 @@ fn synthesize_stream(
 // panic in unit-test contexts depending on workspace TLS-provider setup.
 // The pieces this function composes (config validation, request translation,
 // SSE adapter) are independently unit-tested in their own modules.
+
+// ---------- NDJSON drive loop (Phase 3b, used by OllamaAdapter) ----------
+//
+// Differences from synthesize_sse_stream:
+//
+// - Awaits `request_builder.send()` before driving the byte stream. SSE
+//   defers HTTP errors to mid-stream events; NDJSON has no such framing,
+//   so we check the response status up front and short-circuit to a
+//   pre-baked Finished{InternalError} stream on 4xx/5xx or transport
+//   failure.
+// - Reads from `response.bytes_stream()` (chunked HTTP transfer) and
+//   accumulates into a Vec<u8> buffer, draining complete lines on each
+//   poll cycle before pulling more bytes. Buffer-across-chunks because
+//   HTTP chunk boundaries don't align with JSON line boundaries.
+// - Cancellation, terminal-state checks, and the `pending` event queue
+//   match the SSE loop's pattern verbatim.
+
+async fn synthesize_ndjson_stream(
+    decoder: Box<dyn crate::local_provider::adapters::StreamDecoder>,
+    request_builder: reqwest::RequestBuilder,
+    cancel_rx: oneshot::Receiver<()>,
+) -> LocalResponseStream {
+    let response = match request_builder.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return synthesize_pre_flight_error(decoder, format!("request failed: {e}"));
+        }
+    };
+    let status = response.status();
+    if !status.is_success() {
+        let prefix = format!(
+            "HTTP {} {}",
+            status.as_u16(),
+            status.canonical_reason().unwrap_or("")
+        );
+        // Read body up to ERROR_BODY_EXCERPT_CHARS for the user-visible
+        // reason. Defensive on .text() errors — if the body can't be
+        // read, surface just the HTTP status.
+        let body = response.text().await.unwrap_or_default();
+        let excerpt: String = body
+            .trim()
+            .chars()
+            .take(ERROR_BODY_EXCERPT_CHARS)
+            .collect();
+        let msg = if excerpt.is_empty() {
+            prefix
+        } else {
+            format!("{prefix}: {excerpt}")
+        };
+        return synthesize_pre_flight_error(decoder, msg);
+    }
+    drive_ndjson(decoder, response.bytes_stream(), cancel_rx).boxed()
+}
+
+/// Build a single-shot stream that records `msg` as the upstream error,
+/// then drains `decoder.finish()` — same shape as the SSE loop's
+/// error-then-finish path. Used by `synthesize_ndjson_stream` for
+/// pre-flight failures (transport error, 4xx/5xx) where there's no
+/// byte stream to drive at all.
+fn synthesize_pre_flight_error(
+    mut decoder: Box<dyn crate::local_provider::adapters::StreamDecoder>,
+    msg: String,
+) -> LocalResponseStream {
+    log::warn!("local provider stream errored before EOF: {msg}");
+    decoder.record_upstream_error(msg);
+    let events = decoder.finish();
+    stream::iter(events).boxed()
+}
+
+fn drive_ndjson<S>(
+    mut decoder: Box<dyn crate::local_provider::adapters::StreamDecoder>,
+    byte_stream: S,
+    mut cancel_rx: oneshot::Receiver<()>,
+) -> impl futures::Stream<Item = api::ResponseEvent> + Send + 'static
+where
+    S: futures::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
+{
+    let mut byte_stream = Box::pin(byte_stream);
+    let mut pending: std::collections::VecDeque<api::ResponseEvent> = Default::default();
+    let mut closed = false;
+    let mut buffer: Vec<u8> = Vec::new();
+    stream::poll_fn(move |cx| {
+        use std::task::Poll;
+        loop {
+            if let Some(ev) = pending.pop_front() {
+                return Poll::Ready(Some(ev));
+            }
+            if closed {
+                return Poll::Ready(None);
+            }
+            // Cancellation: explicit send(()) OR sender drop both unblock.
+            if Pin::new(&mut cancel_rx).poll(cx).is_ready() {
+                for ev in decoder.finish() {
+                    pending.push_back(ev);
+                }
+                closed = true;
+                continue;
+            }
+            // Drain any complete lines from the buffer before pulling
+            // more bytes. Empty lines are silently skipped (defensive —
+            // Ollama doesn't emit them, but a relay might).
+            while let Some(idx) = buffer.iter().position(|b| *b == b'\n') {
+                let line: Vec<u8> = buffer.drain(..=idx).collect();
+                let line_str = String::from_utf8_lossy(&line[..line.len() - 1]);
+                if line_str.trim().is_empty() {
+                    continue;
+                }
+                debug_dump_response_chunk(&line_str);
+                for ev in decoder.feed_event(None, &line_str) {
+                    pending.push_back(ev);
+                }
+                if decoder.is_terminal() {
+                    for ev in decoder.finish() {
+                        pending.push_back(ev);
+                    }
+                    closed = true;
+                    break;
+                }
+            }
+            if !pending.is_empty() || closed {
+                continue;
+            }
+            // Pull more bytes.
+            match byte_stream.as_mut().poll_next(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(None) => {
+                    // EOF. Flush any final unterminated line, then drain.
+                    if !buffer.is_empty() {
+                        let line_str = String::from_utf8_lossy(&buffer);
+                        if !line_str.trim().is_empty() {
+                            debug_dump_response_chunk(&line_str);
+                            for ev in decoder.feed_event(None, &line_str) {
+                                pending.push_back(ev);
+                            }
+                        }
+                        buffer.clear();
+                    }
+                    for ev in decoder.finish() {
+                        pending.push_back(ev);
+                    }
+                    closed = true;
+                }
+                Poll::Ready(Some(Ok(bytes))) => buffer.extend_from_slice(&bytes),
+                Poll::Ready(Some(Err(e))) => {
+                    log::warn!("local provider stream errored before EOF: network error: {e}");
+                    decoder.record_upstream_error(format!("network error: {e}"));
+                    for ev in decoder.finish() {
+                        pending.push_back(ev);
+                    }
+                    closed = true;
+                }
+            }
+        }
+    })
+}
 
 // ---------- diagnostic dump (env-gated, dev-only) ----------
 //
