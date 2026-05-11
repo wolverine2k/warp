@@ -509,8 +509,17 @@ impl OpenAiSseAdapter {
 
 // Phase 2: trait impl forwarding to the existing inherent methods so
 // `OpenAiAdapter::create_stream_decoder` can return `Box<dyn StreamDecoder>`.
+// Phase 3a: trait gained `feed_event(event_name, data)`. OpenAI's SSE format
+// has anonymous chunks (the discriminator lives inside the JSON body, not
+// the `event:` header) so we ignore `event_name` and forward to the
+// existing single-arg `feed`. The trait's default `feed(data)` impl
+// forwards to `feed_event(None, data)` — both call paths land here.
 impl crate::local_provider::adapters::StreamDecoder for OpenAiSseAdapter {
-    fn feed(&mut self, data: &str) -> Vec<api::ResponseEvent> {
+    fn feed_event(
+        &mut self,
+        _event_name: Option<&str>,
+        data: &str,
+    ) -> Vec<api::ResponseEvent> {
         Self::feed(self, data)
     }
     fn finish(&mut self) -> Vec<api::ResponseEvent> {

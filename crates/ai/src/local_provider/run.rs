@@ -230,7 +230,17 @@ fn synthesize_stream(
                 }
                 Poll::Ready(Some(Ok(Event::Message(msg)))) => {
                     debug_dump_response_chunk(&msg.data);
-                    for ev in decoder.feed(&msg.data) {
+                    // SSE default `event:` is `"message"`; Anthropic prefixes
+                    // each chunk with a named event (`message_start`,
+                    // `content_block_delta`, etc.). Pass `None` for the
+                    // default so OpenAi's anonymous-chunk path doesn't see
+                    // a misleading event name.
+                    let event_name = if msg.event.is_empty() || msg.event == "message" {
+                        None
+                    } else {
+                        Some(msg.event.as_str())
+                    };
+                    for ev in decoder.feed_event(event_name, &msg.data) {
                         pending.push_back(ev);
                     }
                     // If the chunk pushed the decoder into a terminal state

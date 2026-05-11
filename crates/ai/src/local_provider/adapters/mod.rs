@@ -61,12 +61,35 @@ pub struct StreamIds {
     pub task_id: String,
 }
 
-/// Stateful per-turn SSE/event decoder. Each call to `feed` may emit zero or
-/// more `ResponseEvent`s downstream; `finish` drains pending state and emits
-/// any closing events; `is_terminal` reports whether the upstream stream is
-/// logically closed (so the runner knows to stop pulling).
+/// Stateful per-turn SSE/event decoder. Each `feed` / `feed_event` call may
+/// emit zero or more `ResponseEvent`s downstream; `finish` drains pending
+/// state and emits any closing events; `is_terminal` reports whether the
+/// upstream stream is logically closed (so the runner knows to stop
+/// pulling).
+///
+/// Anthropic and OpenAI take different paths through this trait. OpenAI's
+/// SSE stream has unnamed `data: <json>` chunks where the discriminator is
+/// embedded inside the JSON body, so callers can use the legacy single-arg
+/// `feed(data)` (default impl forwards to `feed_event(None, data)`).
+/// Anthropic's stream prefixes each event with `event: <name>` and the
+/// JSON body is keyed on the same `type` field — the named variant is
+/// always preferred so the decoder gets the discriminator from either side
+/// of the SSE protocol.
 pub trait StreamDecoder: Send {
-    fn feed(&mut self, data: &str) -> Vec<api::ResponseEvent>;
+    /// Convenience entry point: feed an SSE data line with no event-name
+    /// discriminator. Default forwards to `feed_event(None, data)`, which
+    /// is the right behavior for OpenAI's anonymous-chunk format. Anthropic
+    /// callers should prefer `feed_event` with the SSE `event:` name passed
+    /// through.
+    fn feed(&mut self, data: &str) -> Vec<api::ResponseEvent> {
+        self.feed_event(None, data)
+    }
+    /// Feed an SSE message with the optional `event:` name from the SSE
+    /// frame. `None` means the SSE default event-name (`"message"`) or no
+    /// `event:` line at all — equivalent to OpenAI's anonymous chunk shape.
+    /// Decoders that don't dispatch on event-name (`OpenAiSseAdapter`)
+    /// ignore the argument.
+    fn feed_event(&mut self, event_name: Option<&str>, data: &str) -> Vec<api::ResponseEvent>;
     fn finish(&mut self) -> Vec<api::ResponseEvent>;
     fn is_terminal(&self) -> bool;
     fn record_upstream_error(&mut self, msg: String);
