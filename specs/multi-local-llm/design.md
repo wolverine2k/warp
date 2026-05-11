@@ -319,8 +319,8 @@ These four changes ship together with the migration helper so users never see a 
 |---|---|---|---|
 | **1a. Rename PR** | Mechanical `LocalProvider*` → `AgentProvider*` / `byop:` rename. No behavior change. | ~30 files | Presubmit clean; existing tests pass; manual smoke test confirms identical UX |
 | **1b. Multi-provider data model + migration + UI (OpenAI-compat only)** | User can add N providers, pick provider+model per conversation, legacy config migrates intact. | settings/ai.rs, agent_providers/{mod,secrets,llm_id,migration}.rs, agent_providers_widget.rs, agent/api/impl.rs, conversations_model migration, tests | Presubmit + integration test running 2 mock providers concurrently + manual test against real Ollama+LM Studio + verify legacy migration on a fixture profile |
-| **2. ProviderAdapter trait refactor** | Internal abstraction; no behavior change. "Test connection" button as a free win. | ~5 files in `crates/ai/src/local_provider/` | All existing tests pass; stub adapter exercises dispatch |
-| **3a. Anthropic adapter** | Native Claude support. | new `local_provider/adapters/anthropic.rs` + tests | Live test against Anthropic API |
+| **2. ProviderAdapter trait refactor** ✅ shipped | Internal abstraction; no behavior change. "Test connection" button as a free win. | ~5 files in `crates/ai/src/local_provider/` | All existing tests pass; stub adapter exercises dispatch |
+| **3a. Anthropic adapter** 🧪 code complete | Native Claude support. Hand-rolled against the Messages API (`/v1/messages`, `x-api-key` + `anthropic-version`, content-block message shape, named SSE events). `StreamDecoder` trait gained `feed_event` to carry the SSE event-name through. | new `local_provider/adapters/anthropic/{mod,wire,request,response}.rs` + sibling tests | Live test against `api.anthropic.com` — pending |
 | **3b. Ollama-native adapter** | Native Ollama (`/api/chat`). | new file + tests | Live test against local Ollama |
 | **3c. Gemini adapter** | Native Gemini. | new file + tests | Live test |
 | **3d. DeepSeek adapter** | Reasoning-content surfacing. | new file + tests | Live test |

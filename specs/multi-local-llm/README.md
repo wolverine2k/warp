@@ -12,9 +12,13 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 
 **Phase 1b-4 (legacy cleanup)** is drafted and queued in [`plan-phase-1b-4-cleanup.md`](plan-phase-1b-4-cleanup.md). Execution is gated on telemetry confirming migration adoption ≥ 99% — see the plan's preamble for the gating checklist.
 
-**Phase 2 (ProviderAdapter trait + Test connection button)** is drafted in [`plan-phase-2.md`](plan-phase-2.md). Hoists the OpenAI-compatible wire code behind a `ProviderAdapter` / `StreamDecoder` trait pair so Phase 3 can plug in native non-OpenAI adapters without touching `run.rs`. **No user-visible behavior change** for OpenAI; the existing test suite stays green and exercises the same paths through the trait.
+**Phase 2 (ProviderAdapter trait + Test connection button)** shipped on `multi-local-llm` (final commit `df0ec591`). Hoisted the OpenAI-compatible wire code behind a `ProviderAdapter` / `StreamDecoder` trait pair so Phase 3 can plug in native non-OpenAI adapters without touching `run.rs`. **No user-visible behavior change** for OpenAI; the existing test suite stays green and exercises the same paths through the trait. The per-card "Test connection" probe button is wired and visualizes Idle / Probing / Ok / Failed state.
 
-**Future phases (3 / 4)** — native non-OpenAI adapters and polish features (`/models` fetch, models.dev catalog, multimodal, dedicated compaction model) — remain unscheduled and will get their own design + plan when started.
+**Phase 3a (Anthropic native adapter)** code is complete on `multi-local-llm` (final commit `061456b3`). First native non-OpenAI adapter and validates the Phase 2 trait shape. Hand-rolled against the Messages API (`/v1/messages`, `x-api-key` + `anthropic-version: 2023-06-01` auth, alternating user/assistant roles with content blocks, named SSE events `message_start` / `content_block_*` / `message_stop`). Includes a small `StreamDecoder` trait extension (`feed_event(event_name, data)`) so Anthropic's named events can be dispatched on without affecting OpenAi's anonymous-chunk path. **65 new unit tests** across wire types, request translator, URL helpers, SSE decoder, and adapter — plus the existing 341 tests stay green (`cargo nextest run -p ai` reports 426/426).
+
+> **Verification gate:** live-test smoke against `api.anthropic.com` with a real `sk-ant-…` key is the remaining manual step per the plan (`plan-phase-3a.md` §Task 8.1). Once a turn streams successfully end-to-end (text + tool call + tool result + final text) the Phase 3a row flips to ✅ and the status note is removed.
+
+**Future phases (3b–d / 4)** — native Ollama / Gemini / DeepSeek adapters and polish features (`/models` fetch, models.dev catalog, multimodal, dedicated compaction model) — remain unscheduled and will get their own design + plan when started.
 
 | Phase | Plan | Status |
 |---|---|---|
@@ -23,19 +27,22 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 | 1b-2 — secrets HashMap + migration helper + dispatch routing + picker injection | [`plan-phase-1b-2-dispatch.md`](plan-phase-1b-2-dispatch.md) | ✅ shipped |
 | 1b-3 — settings UI rebuild (`AgentProvidersWidget` list view) | [`plan-phase-1b-3-settings-ui.md`](plan-phase-1b-3-settings-ui.md) | ✅ shipped |
 | 1b-4 — legacy `local:` cleanup | [`plan-phase-1b-4-cleanup.md`](plan-phase-1b-4-cleanup.md) | 📋 queued (gated on migration adoption) |
-| 2 — `ProviderAdapter` trait + `OpenAiAdapter` + Test connection probe | [`plan-phase-2.md`](plan-phase-2.md) | 🚧 in progress |
+| 2 — `ProviderAdapter` trait + `OpenAiAdapter` + Test connection probe | [`plan-phase-2.md`](plan-phase-2.md) | ✅ shipped |
+| 3a — Anthropic adapter (`AnthropicAdapter` + `AnthropicSseDecoder`) | [`plan-phase-3a.md`](plan-phase-3a.md) | 🧪 code complete — pending live smoke |
 
 The full design — data model, dispatch flow, migration strategy, risks — is in [`design.md`](design.md).
 
 ## What landed
 
 **User-visible:**
-- New **Custom AI Providers** panel in Settings → AI. Add/remove provider cards (name, base URL, API key, OpenAI-compatible API type chip, models table). Per-model display name, model id, context window, and tool-calling toggle.
+- New **Custom AI Providers** panel in Settings → AI. Add/remove provider cards (name, base URL, API key, API type chip, models table). Per-model display name, model id, context window, and tool-calling toggle.
 - Picker shows an entry per `(provider, model)` pair labelled `<provider> / <model>`. Selecting it routes the conversation through the user's endpoint.
 - Existing single-provider users have their config auto-migrated on first launch; the migrated provider appears as one card with one model and the API key intact.
+- **Phase 2:** per-card **Test connection** button that probes the provider endpoint and surfaces Idle / Probing / Ok / Failed state inline.
+- **Phase 3a (pending live smoke):** **Anthropic** is now a real api_type — selecting it routes the conversation to `{base_url}/v1/messages` with native `x-api-key` auth, streamed `message_start` / `content_block_delta` / `message_stop` events, and tool use as `tool_use` content blocks on the assistant message. The Test connection button probes `{base_url}/v1/models`.
 
 **Architecture:**
-- Type system in `app/src/settings/ai.rs`: `AgentProvider`, `AgentProviderModel`, `AgentProviderKind` (`OpenAiCompatible` only today), `AgentProviderApiType` (`OpenAi` active; `OpenAiResp`, `Gemini`, `Anthropic`, `Ollama`, `DeepSeek` enum variants reserved for Phase 3).
+- Type system in `app/src/settings/ai.rs`: `AgentProvider`, `AgentProviderModel`, `AgentProviderKind` (`OpenAiCompatible` only today), `AgentProviderApiType` (`OpenAi`, `Anthropic` active; `OpenAiResp`, `Gemini`, `Ollama`, `DeepSeek` enum variants reserved for Phase 3b–d).
 - Persistence: `Vec<AgentProvider>` under `agents.warp_agent.providers` (TOML); `HashMap<provider_id, api_key>` in OS keychain blob `AgentProviderSecrets`.
 - LLMId codec in `crates/ai/src/local_provider/llm_id.rs` (`byop:<uuid>:<model_id>` with first-colon-after-prefix splitting so vendor:model:variant style names round-trip).
 - Dispatch in `app/src/ai/local_provider_config.rs::snapshot_for_request` branches on prefix:
@@ -43,13 +50,16 @@ The full design — data model, dispatch flow, migration strategy, risks — is 
   - `local:` (legacy) → `snapshot_from_app` legacy path (removed in 1b-4).
   - Anything else → cloud-Warp path (untouched).
 - Migration in `app/src/ai/agent_providers/migration.rs`: idempotent, runs once on app boot after singleton registration. Synthesizes a single `AgentProvider` from the legacy `agents.local_provider.*` settings, moves the API key from the `__legacy__` placeholder id to a fresh UUID, sets the marker.
+- **Phase 2:** `ProviderAdapter` trait (`crates/ai/src/local_provider/adapters/mod.rs`) abstracts wire-protocol differences; `OpenAiAdapter` is the canonical impl. `StreamDecoder` trait split out so per-turn stream state stays addressable.
+- **Phase 3a:** `AnthropicAdapter` + `AnthropicSseDecoder` (`crates/ai/src/local_provider/adapters/anthropic/{mod,request,response,wire}.rs`). Translator lifts the synthesized system prompt to Anthropic's top-level `system` field, merges adjacent same-role messages, splices missing `tool_result` blocks. Decoder maps the named event family to the same `ResponseEvent` shape `OpenAiSseAdapter` emits. `StreamDecoder` trait gained `feed_event(event_name, data)` to carry the SSE `event:` discriminator through.
 
 ## Future phases (per [`design.md`](design.md) §9)
 
 Each gets its own design + plan when started:
 
-- **Phase 2** — `ProviderAdapter` trait so per-protocol codecs are pluggable.
-- **Phase 3a–d** — native adapters for Anthropic / Ollama / Gemini / DeepSeek.
+- **Phase 3b** — native Ollama adapter (`/api/chat`, native tool-call streaming).
+- **Phase 3c** — native Gemini adapter.
+- **Phase 3d** — native DeepSeek adapter (reasoning-content surfacing).
 - **Phase 4a–d** — `/models` fetch button, models.dev catalog sync, multimodal capability resolution (image / pdf / audio), dedicated compaction model.
 
 ## Operational notes
@@ -61,8 +71,13 @@ Each gets its own design + plan when started:
 ## Reading order for new contributors
 
 1. [`design.md`](design.md) — architecture and the 4-stage roadmap.
-2. The per-phase plan files in execution order: 1a → 1b-1 → 1b-2 → 1b-3 → 1b-4.
-3. Source: `crates/ai/src/local_provider/{agent_provider_secrets,llm_id}.rs` and `app/src/ai/agent_providers/{mod,migration}.rs` for the dispatch path; `app/src/settings_view/agent_providers_widget.rs` for the UI.
+2. The per-phase plan files in execution order: 1a → 1b-1 → 1b-2 → 1b-3 → 1b-4 → 2 → 3a.
+3. Source:
+   - Dispatch path: `crates/ai/src/local_provider/{agent_provider_secrets,llm_id}.rs` and `app/src/ai/agent_providers/{mod,migration}.rs`.
+   - UI: `app/src/settings_view/agent_providers_widget.rs`.
+   - Adapter trait + selector: `crates/ai/src/local_provider/adapters/mod.rs`.
+   - OpenAi adapter: `crates/ai/src/local_provider/adapters/openai.rs`.
+   - Anthropic adapter: `crates/ai/src/local_provider/adapters/anthropic/{mod,request,response,wire}.rs`.
 
 ## Reference comparison
 
