@@ -36,11 +36,16 @@ fn select_adapter_returns_anthropic_for_anthropic_api_type() {
 }
 
 #[test]
+fn select_adapter_returns_ollama_for_ollama_api_type() {
+    let a = select_adapter(AgentProviderApiType::Ollama).expect("ok");
+    assert_eq!(a.api_type(), AgentProviderApiType::Ollama);
+}
+
+#[test]
 fn select_adapter_errors_for_each_unimplemented_variant() {
     for ty in [
         AgentProviderApiType::OpenAiResp,
         AgentProviderApiType::Gemini,
-        AgentProviderApiType::Ollama,
         AgentProviderApiType::DeepSeek,
     ] {
         // `Box<dyn ProviderAdapter>` doesn't implement Debug — destructure via

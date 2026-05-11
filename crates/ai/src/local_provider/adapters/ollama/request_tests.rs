@@ -511,3 +511,213 @@ fn context_window_threads_into_system_prompt() {
             || req.messages[0].content.contains("200_000")
     );
 }
+
+// ---- OllamaAdapter (ProviderAdapter trait impl) ----
+//
+// Exercises the adapter's HTTP shape: URLs, auth headers, stream:false on
+// summarizer, parse_summarizer_response behavior. Builds the request via
+// reqwest::RequestBuilder and inspects the resulting Request without
+// actually firing it.
+
+use super::OllamaAdapter;
+use crate::local_provider::adapters::{ProviderAdapter, StreamingFormat};
+use crate::local_provider::run::SummarizerInput;
+use crate::local_provider::wire::{ChatMessage, Role};
+
+fn http_client() -> reqwest::Client {
+    crate::local_provider::adapters::ensure_rustls_provider();
+    reqwest::Client::new()
+}
+
+fn cfg_with_key() -> LocalProviderConfig {
+    let mut c = cfg();
+    c.api_key = Some("ollama-token".into());
+    c
+}
+
+#[test]
+fn ollama_adapter_reports_ollama_api_type() {
+    assert_eq!(OllamaAdapter.api_type(), AgentProviderApiType::Ollama);
+}
+
+#[test]
+fn ollama_adapter_streaming_format_is_ndjson() {
+    assert_eq!(
+        OllamaAdapter.streaming_format(),
+        StreamingFormat::NewlineDelimitedJson
+    );
+}
+
+#[test]
+fn build_chat_request_targets_api_chat_with_ndjson_accept() {
+    let mut input = empty_input();
+    input.user_query = Some("hello".into());
+    let req = OllamaAdapter
+        .build_chat_request(&input, &cfg(), &http_client())
+        .expect("ok")
+        .build()
+        .expect("buildable");
+    assert_eq!(req.method().as_str(), "POST");
+    assert_eq!(req.url().as_str(), "http://localhost:11434/api/chat");
+    assert_eq!(
+        req.headers()
+            .get(reqwest::header::ACCEPT)
+            .map(|v| v.to_str().unwrap()),
+        Some("application/x-ndjson"),
+    );
+    // No api_key set in the default cfg() → no Authorization header.
+    assert!(req.headers().get("authorization").is_none());
+}
+
+#[test]
+fn build_chat_request_sends_bearer_when_api_key_set() {
+    let mut input = empty_input();
+    input.user_query = Some("hello".into());
+    let req = OllamaAdapter
+        .build_chat_request(&input, &cfg_with_key(), &http_client())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(
+        req.headers()
+            .get("authorization")
+            .map(|v| v.to_str().unwrap()),
+        Some("Bearer ollama-token"),
+    );
+}
+
+#[test]
+fn build_summarizer_request_is_non_streaming_with_json_accept() {
+    let input = SummarizerInput {
+        messages: vec![
+            ChatMessage {
+                role: Role::System,
+                content: Some("You are a summarizer.".into()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+            ChatMessage {
+                role: Role::User,
+                content: Some("Summarize this.".into()),
+                tool_calls: None,
+                tool_call_id: None,
+                name: None,
+            },
+        ],
+    };
+    let req = OllamaAdapter
+        .build_summarizer_request(&input, &cfg(), &http_client())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(req.method().as_str(), "POST");
+    assert_eq!(req.url().as_str(), "http://localhost:11434/api/chat");
+    assert_eq!(
+        req.headers()
+            .get(reqwest::header::ACCEPT)
+            .map(|v| v.to_str().unwrap()),
+        Some("application/json"),
+    );
+    // Body should declare stream:false and have no tools array.
+    let body = req
+        .body()
+        .and_then(|b| b.as_bytes())
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .expect("body present");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["stream"], serde_json::Value::Bool(false));
+    assert!(v.get("tools").is_none() || v["tools"].is_null());
+    let msgs = v["messages"].as_array().unwrap();
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[0]["role"], "system");
+    assert_eq!(msgs[1]["role"], "user");
+}
+
+#[test]
+fn build_probe_request_targets_api_tags() {
+    let req = OllamaAdapter
+        .build_probe_request(&cfg(), &http_client())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(req.method().as_str(), "GET");
+    assert_eq!(req.url().as_str(), "http://localhost:11434/api/tags");
+}
+
+#[test]
+fn build_probe_request_sends_bearer_when_api_key_set() {
+    let req = OllamaAdapter
+        .build_probe_request(&cfg_with_key(), &http_client())
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(
+        req.headers()
+            .get("authorization")
+            .map(|v| v.to_str().unwrap()),
+        Some("Bearer ollama-token"),
+    );
+}
+
+#[test]
+fn parse_summarizer_response_extracts_message_content() {
+    let body = r#"{
+        "model":"llama3.1",
+        "message":{"role":"assistant","content":"Here is a summary."},
+        "done":true,
+        "done_reason":"stop"
+    }"#;
+    let s = OllamaAdapter.parse_summarizer_response(body).unwrap();
+    assert_eq!(s, "Here is a summary.");
+}
+
+#[test]
+fn parse_summarizer_response_empty_content_returns_no_content_error() {
+    let body = r#"{"message":{"role":"assistant","content":""},"done":true}"#;
+    let err = OllamaAdapter.parse_summarizer_response(body).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::local_provider::run::SummarizerError::NoContent
+    ));
+}
+
+#[test]
+fn parse_summarizer_response_surfaces_top_level_error() {
+    let body = r#"{"error":"model 'foo' not found"}"#;
+    let err = OllamaAdapter.parse_summarizer_response(body).unwrap_err();
+    match err {
+        crate::local_provider::run::SummarizerError::UpstreamErrorEnvelope(msg) => {
+            assert!(msg.contains("model 'foo' not found"));
+        }
+        other => panic!("expected UpstreamErrorEnvelope, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_summarizer_response_malformed_body_returns_decode_error() {
+    let body = r#"{not json"#;
+    let err = OllamaAdapter.parse_summarizer_response(body).unwrap_err();
+    assert!(matches!(
+        err,
+        crate::local_provider::run::SummarizerError::DecodeResponse(_)
+    ));
+}
+
+#[test]
+fn create_stream_decoder_with_skip_create_task_suppresses_create_task() {
+    use crate::local_provider::adapters::StreamIds;
+    let ids = StreamIds {
+        conversation_id: "c".into(),
+        request_id: "r".into(),
+        run_id: "u".into(),
+        task_id: "t".into(),
+    };
+    let mut decoder = OllamaAdapter.create_stream_decoder(Some(ids), true);
+    let out = decoder.feed_event(
+        None,
+        r#"{"message":{"role":"assistant","content":""},"done":false}"#,
+    );
+    // Prelude = Init + BeginTransaction only (no CreateTask).
+    assert_eq!(out.len(), 2);
+}

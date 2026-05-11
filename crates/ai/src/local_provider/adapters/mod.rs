@@ -18,6 +18,7 @@ pub mod ollama;
 pub mod openai;
 pub(crate) mod proto_helpers;
 pub use anthropic::AnthropicAdapter;
+pub use ollama::OllamaAdapter;
 pub use openai::OpenAiAdapter;
 
 #[cfg(test)]
@@ -178,8 +179,7 @@ pub fn select_adapter(
     match api_type {
         OpenAi => Ok(Box::new(OpenAiAdapter)),
         Anthropic => Ok(Box::new(AnthropicAdapter)),
-        OpenAiResp | Gemini | Ollama | DeepSeek => {
-            Err(AdapterError::UnsupportedApiType(api_type))
-        }
+        Ollama => Ok(Box::new(OllamaAdapter)),
+        OpenAiResp | Gemini | DeepSeek => Err(AdapterError::UnsupportedApiType(api_type)),
     }
 }
