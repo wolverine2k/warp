@@ -21,4 +21,9 @@
 //! The full `ProviderAdapter` impl arrives in Task 7 of the phase-3b plan;
 //! today this file just registers submodules so the wire types compile.
 
+pub mod request;
 pub mod wire;
+
+#[cfg(test)]
+#[path = "request_tests.rs"]
+mod request_tests;

@@ -134,7 +134,10 @@ pub fn translate_openai_tool_call(
     })
 }
 
-fn schema_for(tool: LocalTool) -> Option<Value> {
+/// Return the JSON Schema for a tool's `parameters` / `input_schema` field.
+/// `pub(crate)` so adapter-specific tool-definition builders (Ollama,
+/// Anthropic) can reuse the canonical v1 schemas without rewriting them.
+pub(crate) fn schema_for(tool: LocalTool) -> Option<Value> {
     Some(match tool {
         LocalTool::ReadFiles => read_files_schema(),
         LocalTool::ApplyFileDiffs => apply_file_diffs_schema(),
