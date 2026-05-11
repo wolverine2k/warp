@@ -97,11 +97,29 @@ pub trait StreamDecoder: Send {
     fn record_upstream_error(&mut self, msg: String);
 }
 
+/// Wire framing for an adapter's chat stream. Drives `synthesize_stream`'s
+/// HTTP-loop dispatch (Phase 3b): the runner builds a
+/// `reqwest_eventsource::EventSource` for SSE, or pulls from
+/// `reqwest::Response::bytes_stream()` through a line splitter for NDJSON.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamingFormat {
+    ServerSentEvents,
+    NewlineDelimitedJson,
+}
+
 /// Wire-protocol adapter. Stateless; one instance per `AgentProviderApiType`.
-/// Phase 2 ships only `OpenAiAdapter`; Phase 3 adds Anthropic / Gemini /
-/// Ollama-native / DeepSeek implementations.
+/// Phase 2 shipped `OpenAiAdapter`; Phase 3a added Anthropic; Phase 3b adds
+/// Ollama-native. Gemini and DeepSeek remain Phase 3c/d work.
 pub trait ProviderAdapter: Send + Sync {
     fn api_type(&self) -> AgentProviderApiType;
+
+    /// What wire framing does this adapter's chat stream use? Defaults to
+    /// SSE — `OllamaAdapter` overrides to `NewlineDelimitedJson`. Future
+    /// SSE-based adapters (Gemini, DeepSeek) inherit the default and need
+    /// not implement this method.
+    fn streaming_format(&self) -> StreamingFormat {
+        StreamingFormat::ServerSentEvents
+    }
 
     /// Build the per-turn streaming chat request. The returned
     /// `RequestBuilder` carries body + headers + auth; the runner POSTs it.
