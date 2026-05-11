@@ -14,6 +14,7 @@ use crate::local_provider::{
 };
 
 pub mod anthropic;
+pub mod gemini;
 pub mod ollama;
 pub mod openai;
 pub(crate) mod proto_helpers;
