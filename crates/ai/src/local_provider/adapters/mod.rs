@@ -14,6 +14,7 @@ use crate::local_provider::{
 };
 
 pub mod anthropic;
+pub mod ollama;
 pub mod openai;
 pub use anthropic::AnthropicAdapter;
 pub use openai::OpenAiAdapter;
