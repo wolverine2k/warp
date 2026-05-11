@@ -207,9 +207,19 @@ pub enum GeminiInboundPart {
 pub struct GeminiInboundFunctionCall {
     #[serde(default)]
     pub name: String,
-    /// JSON object (Gemini's native shape). Default is an empty object.
-    #[serde(default)]
+    /// JSON object (Gemini's native shape). Defaults to an empty object
+    /// when the field is absent, so downstream consumers can call
+    /// `args.as_object()` without `Option::unwrap_or` ceremony.
+    #[serde(default = "empty_object")]
     pub args: Value,
+}
+
+/// Default for `GeminiInboundFunctionCall::args` — Gemini always sends a
+/// JSON object here semantically, but `#[serde(default)]` on
+/// `serde_json::Value` produces `Value::Null`. We override so the field
+/// has the same shape Gemini would have sent.
+fn empty_object() -> Value {
+    Value::Object(Default::default())
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -501,5 +511,14 @@ mod tests {
         assert_eq!(err.code, 400);
         assert_eq!(err.message, "API key not valid.");
         assert_eq!(err.status, "INVALID_ARGUMENT");
+    }
+
+    #[test]
+    fn function_call_args_defaults_to_empty_object_when_field_absent() {
+        let s = r#"{"name":"read_files"}"#;
+        let parsed: GeminiInboundFunctionCall = serde_json::from_str(s).unwrap();
+        assert_eq!(parsed.name, "read_files");
+        assert!(parsed.args.is_object(), "args should default to an object, not null");
+        assert_eq!(parsed.args.as_object().unwrap().len(), 0);
     }
 }
