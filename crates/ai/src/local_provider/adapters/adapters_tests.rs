@@ -42,10 +42,15 @@ fn select_adapter_returns_ollama_for_ollama_api_type() {
 }
 
 #[test]
+fn select_adapter_returns_gemini_for_gemini_api_type() {
+    let a = select_adapter(AgentProviderApiType::Gemini).expect("ok");
+    assert_eq!(a.api_type(), AgentProviderApiType::Gemini);
+}
+
+#[test]
 fn select_adapter_errors_for_each_unimplemented_variant() {
     for ty in [
         AgentProviderApiType::OpenAiResp,
-        AgentProviderApiType::Gemini,
         AgentProviderApiType::DeepSeek,
     ] {
         // `Box<dyn ProviderAdapter>` doesn't implement Debug — destructure via

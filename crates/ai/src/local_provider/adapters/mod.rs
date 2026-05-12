@@ -1,7 +1,7 @@
 //! Provider adapter trait — abstracts request composition and stream decoding
-//! over wire-protocol variants. Phase 2 implements only `OpenAi`; Phase 3
-//! will add Anthropic / Gemini / Ollama-native / DeepSeek as additional
-//! impls without touching `run.rs`.
+//! over wire-protocol variants. Phase 2 added `OpenAi`; Phase 3a added
+//! `Anthropic`; Phase 3b added `Ollama`; Phase 3c added `Gemini`. `DeepSeek`
+//! remains a Phase 3d impl; `OpenAiResp` is Phase 4 polish.
 
 use thiserror::Error;
 use warp_multi_agent_api as api;
@@ -19,6 +19,7 @@ pub mod ollama;
 pub mod openai;
 pub(crate) mod proto_helpers;
 pub use anthropic::AnthropicAdapter;
+pub use gemini::GeminiAdapter;
 pub use ollama::OllamaAdapter;
 pub use openai::OpenAiAdapter;
 
@@ -118,8 +119,8 @@ pub trait ProviderAdapter: Send + Sync {
 
     /// What wire framing does this adapter's chat stream use? Defaults to
     /// SSE — `OllamaAdapter` overrides to `NewlineDelimitedJson`. Future
-    /// SSE-based adapters (Gemini, DeepSeek) inherit the default and need
-    /// not implement this method.
+    /// SSE-based adapters (DeepSeek) inherit the default and need not
+    /// implement this method.
     fn streaming_format(&self) -> StreamingFormat {
         StreamingFormat::ServerSentEvents
     }
@@ -167,12 +168,12 @@ pub trait ProviderAdapter: Send + Sync {
 }
 
 /// Pick an adapter for the given wire-protocol variant. Phase 2 added
-/// `OpenAiAdapter`; Phase 3a flips `Anthropic` to a real impl. The four
-/// remaining variants (`OpenAiResp`, `Gemini`, `Ollama`, `DeepSeek`)
-/// surface a structured `UnsupportedApiType` error until their respective
-/// Phase 3 sub-phases land. The match is intentionally exhaustive (no
-/// `_ =>` arm) so adding/removing a variant triggers a compile error at
-/// this dispatch site per repo convention.
+/// `OpenAiAdapter`; Phase 3a/3b/3c flipped `Anthropic`, `Ollama`, and
+/// `Gemini` to real impls. The two remaining variants (`OpenAiResp`,
+/// `DeepSeek`) surface a structured `UnsupportedApiType` error until
+/// their respective Phase 3d/4 sub-phases land. The match is intentionally
+/// exhaustive (no `_ =>` arm) so adding/removing a variant triggers a
+/// compile error at this dispatch site per repo convention.
 pub fn select_adapter(
     api_type: AgentProviderApiType,
 ) -> Result<Box<dyn ProviderAdapter>, AdapterError> {
@@ -181,6 +182,7 @@ pub fn select_adapter(
         OpenAi => Ok(Box::new(OpenAiAdapter)),
         Anthropic => Ok(Box::new(AnthropicAdapter)),
         Ollama => Ok(Box::new(OllamaAdapter)),
-        OpenAiResp | Gemini | DeepSeek => Err(AdapterError::UnsupportedApiType(api_type)),
+        Gemini => Ok(Box::new(GeminiAdapter)),
+        OpenAiResp | DeepSeek => Err(AdapterError::UnsupportedApiType(api_type)),
     }
 }
