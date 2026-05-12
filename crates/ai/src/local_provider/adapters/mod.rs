@@ -113,6 +113,30 @@ pub enum StreamingFormat {
     NewlineDelimitedJson,
 }
 
+/// One model discovered by `parse_list_models_response`. Adapters fill
+/// whatever metadata the upstream actually returned; missing fields stay
+/// `None`. Phase 4a populates rows from this struct; Phase 4b's catalog
+/// fills the `None`s by cross-referencing models.dev.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredModel {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub context_window: Option<u32>,
+    pub max_output_tokens: Option<u32>,
+}
+
+/// One page of `parse_list_models_response`. For unpaginated adapters
+/// (`OpenAi`, `Ollama`, `DeepSeek`) `next_cursor` is always `None` and
+/// the fetch-models helper exits the loop after the single page.
+/// For paginated adapters (`Anthropic`, `Gemini`) `next_cursor` carries
+/// the page token the caller passes back into `build_list_models_request`
+/// for the next page.
+#[derive(Debug, Clone)]
+pub struct ListModelsPage {
+    pub models: Vec<DiscoveredModel>,
+    pub next_cursor: Option<String>,
+}
+
 /// Wire-protocol adapter. Stateless; one instance per `AgentProviderApiType`.
 /// Phase 2 shipped `OpenAiAdapter`; Phase 3a added Anthropic; Phase 3b added
 /// Ollama-native; Phase 3c added Gemini; Phase 3d added DeepSeek.
@@ -167,6 +191,31 @@ pub trait ProviderAdapter: Send + Sync {
         cfg: &LocalProviderConfig,
         http: &reqwest::Client,
     ) -> Result<reqwest::RequestBuilder, AdapterError>;
+
+    /// Build the per-provider GET request that returns the upstream model
+    /// catalog. `cursor` carries the page token from the previous page
+    /// (or `None` for the first page). Unpaginated adapters ignore the
+    /// `cursor` argument. The default impl returns `UnsupportedApiType` —
+    /// adapters that support fetch override this; variants that don't
+    /// (e.g. `OpenAiResp`) inherit the default.
+    fn build_list_models_request(
+        &self,
+        _cfg: &LocalProviderConfig,
+        _http: &reqwest::Client,
+        _cursor: Option<&str>,
+    ) -> Result<reqwest::RequestBuilder, AdapterError> {
+        Err(AdapterError::UnsupportedApiType(self.api_type()))
+    }
+
+    /// Parse a successful 2xx body from `build_list_models_request` into
+    /// a `ListModelsPage`. Stateless. The default impl returns
+    /// `UnsupportedApiType` for the same reason as `build_list_models_request`.
+    fn parse_list_models_response(
+        &self,
+        _body: &str,
+    ) -> Result<ListModelsPage, AdapterError> {
+        Err(AdapterError::UnsupportedApiType(self.api_type()))
+    }
 }
 
 /// Pick an adapter for the given wire-protocol variant. Phase 2 added
