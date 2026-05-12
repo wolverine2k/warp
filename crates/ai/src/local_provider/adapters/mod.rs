@@ -112,8 +112,8 @@ pub enum StreamingFormat {
 }
 
 /// Wire-protocol adapter. Stateless; one instance per `AgentProviderApiType`.
-/// Phase 2 shipped `OpenAiAdapter`; Phase 3a added Anthropic; Phase 3b adds
-/// Ollama-native. Gemini and DeepSeek remain Phase 3c/d work.
+/// Phase 2 shipped `OpenAiAdapter`; Phase 3a added Anthropic; Phase 3b added
+/// Ollama-native; Phase 3c added Gemini. DeepSeek remains Phase 3d work.
 pub trait ProviderAdapter: Send + Sync {
     fn api_type(&self) -> AgentProviderApiType;
 
