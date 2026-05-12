@@ -242,15 +242,16 @@ fn reasoning_then_content_emits_distinct_messages() {
     events.extend(feed(&mut d, &make_reasoning_chunk("thinking")));
     events.extend(feed(&mut d, &make_text_chunk("answer")));
 
-    // Collect all AddMessagesToTask events and check for distinct message kinds.
-    let add_messages: Vec<_> = events
+    // Collect all AddMessagesToTask outer Message wrappers (which carry both
+    // the kind discriminant and the UUID id field).
+    let add_messages: Vec<api::Message> = events
         .iter()
         .filter_map(|ev| match &ev.r#type {
             Some(api::response_event::Type::ClientActions(ca)) => {
                 if let Some(api::client_action::Action::AddMessagesToTask(amt)) =
                     &ca.actions[0].action
                 {
-                    Some(amt.messages.first()?.message.as_ref()?.clone())
+                    amt.messages.first().cloned()
                 } else {
                     None
                 }
@@ -263,12 +264,30 @@ fn reasoning_then_content_emits_distinct_messages() {
     assert_eq!(add_messages.len(), 2, "expected two distinct message opens");
     let has_reasoning = add_messages
         .iter()
-        .any(|m| matches!(m, api::message::Message::AgentReasoning(_)));
+        .any(|m| matches!(m.message.as_ref(), Some(api::message::Message::AgentReasoning(_))));
     let has_output = add_messages
         .iter()
-        .any(|m| matches!(m, api::message::Message::AgentOutput(_)));
+        .any(|m| matches!(m.message.as_ref(), Some(api::message::Message::AgentOutput(_))));
     assert!(has_reasoning, "expected an AgentReasoning message");
     assert!(has_output, "expected an AgentOutput message");
+
+    // Lock in the dual-slot architecture: the reasoning and output messages
+    // must have distinct UUIDs. If a future refactor accidentally merged the
+    // two slots into a single message_id field, this test would catch it.
+    let reasoning_id = &add_messages
+        .iter()
+        .find(|m| matches!(m.message.as_ref(), Some(api::message::Message::AgentReasoning(_))))
+        .unwrap()
+        .id;
+    let output_id = &add_messages
+        .iter()
+        .find(|m| matches!(m.message.as_ref(), Some(api::message::Message::AgentOutput(_))))
+        .unwrap()
+        .id;
+    assert_ne!(
+        reasoning_id, output_id,
+        "reasoning and text channels must occupy distinct shared message slots"
+    );
 }
 
 #[test]

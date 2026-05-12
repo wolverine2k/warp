@@ -127,6 +127,14 @@ impl DeepSeekSseDecoder {
         self.sent_create_task = true;
     }
 
+    pub fn task_id(&self) -> &str {
+        &self.task_id
+    }
+
+    pub fn conversation_id(&self) -> &str {
+        &self.conversation_id
+    }
+
     /// Feed one SSE data line. `event_name` is ignored — DeepSeek's SSE
     /// stream uses anonymous `data:` chunks identical to OpenAI's framing.
     pub fn feed_event(
@@ -267,7 +275,9 @@ impl DeepSeekSseDecoder {
     }
 
     pub fn record_upstream_error(&mut self, msg: String) {
-        self.upstream_error.get_or_insert(msg);
+        if self.upstream_error.is_none() {
+            self.upstream_error = Some(msg);
+        }
     }
 
     // ---- private helpers ----
