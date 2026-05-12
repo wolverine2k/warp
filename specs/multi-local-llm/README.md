@@ -22,7 +22,11 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 
 > **Verification gate:** live-test smoke against a local `ollama serve` instance (with a tool-using model like `llama3.1` or `qwen2.5-coder`) is the remaining manual step per the plan (`plan-phase-3b.md` §Task 8.1). Once a turn streams successfully end-to-end (text + tool call + tool result + final text) the Phase 3b row flips to ✅ and the status note is removed.
 
-**Future phases (3c / 3d / 4)** — native Gemini / DeepSeek adapters and polish features (`/models` fetch, models.dev catalog, multimodal, dedicated compaction model) — remain unscheduled and will get their own design + plan when started.
+**Phase 3c (Gemini-native adapter)** code is complete on `multi-local-llm` (final commit `c8b9d57c`). First adapter to use Google's content-parts message shape with `systemInstruction` lifted to the top level, `user`/`model` role vocabulary (not `user`/`assistant`), and `functionCall`/`functionResponse` parts in place of OpenAI's role:`tool` messages. Targets `POST {base_url}/v1beta/models/{model}:streamGenerateContent?alt=sse` with `x-goog-api-key` auth and inherits the SSE `streaming_format` default — no `run.rs` changes. The model id lives in the URL path, not the body; `?alt=sse` is mandatory (without it Gemini returns a JSON array). Decoder uses `finishReason` inside the last chunk as the terminator (no `[DONE]`, no `message_stop`) and synthesizes tool-call UUIDs since Gemini doesn't emit them. **~71 new unit tests** (14 wire + 18 translator + 8 URL helpers + 20 decoder + 9 adapter + 2 dispatch flip + small fix-up) plus the existing tests stay green (`cargo nextest run -p ai` reports 567/567).
+
+> **Verification gate:** live-test smoke against `generativelanguage.googleapis.com` with a real `AIza…` API key is the remaining manual step per the plan (`plan-phase-3c.md` §Task 7.1). Once a turn streams successfully end-to-end (text + tool call + tool result + final text) the Phase 3c row flips to ✅ and the status note is removed.
+
+**Future phases (3d / 4)** — native DeepSeek adapter and polish features (`/models` fetch, models.dev catalog, multimodal, dedicated compaction model) — remain unscheduled and will get their own design + plan when started.
 
 | Phase | Plan | Status |
 |---|---|---|
@@ -34,6 +38,7 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 | 2 — `ProviderAdapter` trait + `OpenAiAdapter` + Test connection probe | [`plan-phase-2.md`](plan-phase-2.md) | ✅ shipped |
 | 3a — Anthropic adapter (`AnthropicAdapter` + `AnthropicSseDecoder`) | [`plan-phase-3a.md`](plan-phase-3a.md) | 🧪 code complete — pending live smoke |
 | 3b — Ollama-native adapter (`OllamaAdapter` + NDJSON drive loop + `streaming_format` trait method) | [`plan-phase-3b.md`](plan-phase-3b.md) | 🧪 code complete — pending live smoke |
+| 3c — Gemini-native adapter (`GeminiAdapter` + `GeminiSseDecoder`) | [`plan-phase-3c.md`](plan-phase-3c.md) | 🧪 code complete — pending live smoke |
 
 The full design — data model, dispatch flow, migration strategy, risks — is in [`design.md`](design.md).
 
@@ -46,9 +51,10 @@ The full design — data model, dispatch flow, migration strategy, risks — is 
 - **Phase 2:** per-card **Test connection** button that probes the provider endpoint and surfaces Idle / Probing / Ok / Failed state inline.
 - **Phase 3a (pending live smoke):** **Anthropic** is now a real api_type — selecting it routes the conversation to `{base_url}/v1/messages` with native `x-api-key` auth, streamed `message_start` / `content_block_delta` / `message_stop` events, and tool use as `tool_use` content blocks on the assistant message. The Test connection button probes `{base_url}/v1/models`.
 - **Phase 3b (pending live smoke):** **Ollama** is now a real api_type — selecting it routes the conversation to `{base_url}/api/chat` with native NDJSON streaming (no SSE framing), native tool-call shape (arguments as JSON object), and `options.num_ctx` threaded from the model's configured context window so Ollama sizes its KV cache appropriately. The Test connection button probes `{base_url}/api/tags`.
+- **Phase 3c (pending live smoke):** **Gemini** is now a real api_type — selecting it routes the conversation to `{base_url}/v1beta/models/{model}:streamGenerateContent?alt=sse` with native `x-goog-api-key` auth, content-parts message shape (`systemInstruction` lifted to top level, `user`/`model` roles, `functionCall`/`functionResponse` parts), and `finishReason` as the SSE terminator. The Test connection button probes `{base_url}/v1beta/models`.
 
 **Architecture:**
-- Type system in `app/src/settings/ai.rs`: `AgentProvider`, `AgentProviderModel`, `AgentProviderKind` (`OpenAiCompatible` only today), `AgentProviderApiType` (`OpenAi`, `Anthropic`, `Ollama` active; `OpenAiResp`, `Gemini`, `DeepSeek` enum variants reserved for Phase 3c–d).
+- Type system in `app/src/settings/ai.rs`: `AgentProvider`, `AgentProviderModel`, `AgentProviderKind` (`OpenAiCompatible` only today), `AgentProviderApiType` (`OpenAi`, `Anthropic`, `Ollama`, `Gemini` active; `OpenAiResp`, `DeepSeek` enum variants reserved for Phase 3d).
 - Persistence: `Vec<AgentProvider>` under `agents.warp_agent.providers` (TOML); `HashMap<provider_id, api_key>` in OS keychain blob `AgentProviderSecrets`.
 - LLMId codec in `crates/ai/src/local_provider/llm_id.rs` (`byop:<uuid>:<model_id>` with first-colon-after-prefix splitting so vendor:model:variant style names round-trip).
 - Dispatch in `app/src/ai/local_provider_config.rs::snapshot_for_request` branches on prefix:
@@ -59,12 +65,12 @@ The full design — data model, dispatch flow, migration strategy, risks — is 
 - **Phase 2:** `ProviderAdapter` trait (`crates/ai/src/local_provider/adapters/mod.rs`) abstracts wire-protocol differences; `OpenAiAdapter` is the canonical impl. `StreamDecoder` trait split out so per-turn stream state stays addressable.
 - **Phase 3a:** `AnthropicAdapter` + `AnthropicSseDecoder` (`crates/ai/src/local_provider/adapters/anthropic/{mod,request,response,wire}.rs`). Translator lifts the synthesized system prompt to Anthropic's top-level `system` field, merges adjacent same-role messages, splices missing `tool_result` blocks. Decoder maps the named event family to the same `ResponseEvent` shape `OpenAiSseAdapter` emits. `StreamDecoder` trait gained `feed_event(event_name, data)` to carry the SSE `event:` discriminator through.
 - **Phase 3b:** `OllamaAdapter` + `OllamaDecoder` (`crates/ai/src/local_provider/adapters/ollama/{mod,request,response,wire}.rs`). Translator emits native shape (system as `role:system` message, tool_calls with `arguments` as JSON object, no id/type fields; `options.num_ctx` threaded from config). Decoder consumes one NDJSON line per chunk and treats `done:true` as terminator. `ProviderAdapter` trait gained `streaming_format() -> StreamingFormat::{SSE, NDJSON}` so `run.rs::run_chat_turn` can branch — SSE adapters use `synthesize_sse_stream`, Ollama uses `synthesize_ndjson_stream` (awaits `send()` for HTTP-status pre-flight, then drives `bytes_stream()` through a `\n` line splitter). Shared proto-event builders live in `adapters/proto_helpers.rs`.
+- **Phase 3c:** `GeminiAdapter` + `GeminiSseDecoder` (`crates/ai/src/local_provider/adapters/gemini/{mod,request,response,wire}.rs`). Translator lifts the synthesized system prompt to top-level `systemInstruction`; rewrites the role vocabulary from `assistant` → `model`; emits proto `ToolCall` → `functionCall` part (with `args` as a JSON object, not stringified) and proto `ToolCallResult` → `functionResponse` part with `response: {content: <rendered text>}` and a name lookup from a running `tool_call_id → name` map. Decoder consumes anonymous SSE `data:` chunks (`feed_event(None, data)` default path), walks `candidates[0].content.parts` per chunk, synthesizes UUID tool-call ids, and treats `candidates[0].finishReason: Some(_)` as the terminator. `usageMetadata` accumulates with per-field `.max()` across chunks.
 
 ## Future phases (per [`design.md`](design.md) §9)
 
 Each gets its own design + plan when started:
 
-- **Phase 3c** — native Gemini adapter (`POST /v1beta/models/{model}:streamGenerateContent?alt=sse`, `x-goog-api-key` auth, content-parts message shape).
 - **Phase 3d** — native DeepSeek adapter (reasoning-content surfacing for `deepseek-reasoner`).
 - **Phase 4a–d** — `/models` fetch button, models.dev catalog sync, multimodal capability resolution (image / pdf / audio), dedicated compaction model.
 
@@ -86,6 +92,7 @@ Each gets its own design + plan when started:
    - OpenAi adapter: `crates/ai/src/local_provider/adapters/openai.rs`.
    - Anthropic adapter: `crates/ai/src/local_provider/adapters/anthropic/{mod,request,response,wire}.rs`.
    - Ollama adapter: `crates/ai/src/local_provider/adapters/ollama/{mod,request,response,wire}.rs`.
+   - Gemini adapter: `crates/ai/src/local_provider/adapters/gemini/{mod,request,response,wire}.rs`.
 
 ## Reference comparison
 
