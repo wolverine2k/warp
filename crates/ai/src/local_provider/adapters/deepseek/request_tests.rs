@@ -525,3 +525,217 @@ fn reasoning_content_never_appears_in_serialized_body() {
         "reasoning_content must never appear in serialized request body, got: {body}"
     );
 }
+
+// ============================================================
+// Adapter-glue tests (DeepSeekAdapter + ProviderAdapter trait)
+// ============================================================
+
+use super::super::ensure_rustls_provider;
+use super::DeepSeekAdapter;
+use crate::local_provider::adapters::ProviderAdapter;
+use crate::local_provider::run::{SummarizerError, SummarizerInput};
+use crate::local_provider::wire::{ChatMessage, Role};
+
+fn deepseek_cfg() -> LocalProviderConfig {
+    LocalProviderConfig {
+        display_name: "DeepSeek".into(),
+        base_url: "https://api.deepseek.com".into(),
+        model_id: "deepseek-reasoner".into(),
+        api_key: Some("sk-TEST".into()),
+        supports_tools: false, // deepseek-reasoner has no tool support
+        context_window: None,
+        api_type: AgentProviderApiType::DeepSeek,
+    }
+}
+
+fn http_client() -> reqwest::Client {
+    ensure_rustls_provider();
+    reqwest::Client::new()
+}
+
+fn chat_msg(role: Role, text: &str) -> ChatMessage {
+    ChatMessage {
+        role,
+        content: Some(text.into()),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    }
+}
+
+// ---- 1. deepseek_adapter_chat_request_url_and_bearer_header ----
+
+#[test]
+fn deepseek_adapter_chat_request_url_and_bearer_header() {
+    let http = http_client();
+    let req = DeepSeekAdapter
+        .build_chat_request(&LocalProviderInput::default(), &deepseek_cfg(), &http)
+        .expect("ok")
+        .build()
+        .expect("buildable");
+    assert_eq!(req.method().as_str(), "POST");
+    assert_eq!(
+        req.url().as_str(),
+        "https://api.deepseek.com/chat/completions",
+    );
+    assert_eq!(
+        req.headers()
+            .get("authorization")
+            .map(|v| v.to_str().unwrap()),
+        Some("Bearer sk-TEST"),
+    );
+    assert_eq!(
+        req.headers().get("accept").map(|v| v.to_str().unwrap()),
+        Some("text/event-stream"),
+    );
+}
+
+// ---- 2. deepseek_adapter_chat_request_omits_bearer_when_key_absent ----
+
+#[test]
+fn deepseek_adapter_chat_request_omits_bearer_when_key_absent() {
+    let http = http_client();
+    let mut c = deepseek_cfg();
+    c.api_key = None;
+    let req = DeepSeekAdapter
+        .build_chat_request(&LocalProviderInput::default(), &c, &http)
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(req.headers().get("authorization").is_none());
+}
+
+// ---- 3. deepseek_adapter_chat_request_omits_bearer_when_key_empty_string ----
+
+#[test]
+fn deepseek_adapter_chat_request_omits_bearer_when_key_empty_string() {
+    let http = http_client();
+    let mut c = deepseek_cfg();
+    c.api_key = Some(String::new());
+    let req = DeepSeekAdapter
+        .build_chat_request(&LocalProviderInput::default(), &c, &http)
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(req.headers().get("authorization").is_none());
+}
+
+// ---- 4. deepseek_adapter_summarizer_request_uses_chat_completions_url_with_application_json_accept ----
+
+#[test]
+fn deepseek_adapter_summarizer_request_uses_chat_completions_url_with_application_json_accept() {
+    let http = http_client();
+    let input = SummarizerInput {
+        messages: vec![
+            chat_msg(Role::System, "You are helpful."),
+            chat_msg(Role::User, "Summarize."),
+        ],
+    };
+    let req = DeepSeekAdapter
+        .build_summarizer_request(&input, &deepseek_cfg(), &http)
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(req.method().as_str(), "POST");
+    assert_eq!(
+        req.url().as_str(),
+        "https://api.deepseek.com/chat/completions",
+    );
+    assert_eq!(
+        req.headers().get("accept").map(|v| v.to_str().unwrap()),
+        Some("application/json"),
+    );
+    // Body must have stream: false.
+    let body_bytes = req.body().and_then(|b| b.as_bytes()).expect("body present");
+    let v: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
+    assert_eq!(v["stream"], serde_json::Value::Bool(false));
+}
+
+// ---- 5. deepseek_adapter_summarizer_body_emits_role_system_message ----
+
+#[test]
+fn deepseek_adapter_summarizer_body_emits_role_system_message() {
+    let http = http_client();
+    let input = SummarizerInput {
+        messages: vec![
+            chat_msg(Role::System, "S"),
+            chat_msg(Role::User, "U"),
+            chat_msg(Role::Assistant, "A"),
+        ],
+    };
+    let req = DeepSeekAdapter
+        .build_summarizer_request(&input, &deepseek_cfg(), &http)
+        .unwrap()
+        .build()
+        .unwrap();
+    let body_bytes = req.body().and_then(|b| b.as_bytes()).expect("body present");
+    let v: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
+    assert_eq!(v["messages"][0]["role"], "system");
+    assert_eq!(v["messages"][1]["role"], "user");
+    assert_eq!(v["messages"][2]["role"], "assistant");
+}
+
+// ---- 6. deepseek_adapter_probe_request_targets_models_endpoint_with_bearer ----
+
+#[test]
+fn deepseek_adapter_probe_request_targets_models_endpoint_with_bearer() {
+    let http = http_client();
+    let req = DeepSeekAdapter
+        .build_probe_request(&deepseek_cfg(), &http)
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(req.method().as_str(), "GET");
+    assert_eq!(req.url().as_str(), "https://api.deepseek.com/models");
+    assert_eq!(
+        req.headers()
+            .get("authorization")
+            .map(|v| v.to_str().unwrap()),
+        Some("Bearer sk-TEST"),
+    );
+}
+
+// ---- 7. deepseek_adapter_parse_summarizer_response_extracts_content_from_first_choice ----
+
+#[test]
+fn deepseek_adapter_parse_summarizer_response_extracts_content_from_first_choice() {
+    let body = r#"{"choices":[{"message":{"role":"assistant","content":"summary text"}}]}"#;
+    let result = DeepSeekAdapter.parse_summarizer_response(body).expect("ok");
+    assert_eq!(result, "summary text");
+}
+
+// ---- 8. deepseek_adapter_parse_summarizer_response_empty_yields_no_content_error ----
+
+#[test]
+fn deepseek_adapter_parse_summarizer_response_empty_yields_no_content_error() {
+    // Empty choices list.
+    let body = r#"{"choices":[]}"#;
+    let err = DeepSeekAdapter
+        .parse_summarizer_response(body)
+        .expect_err("should be no content");
+    assert!(matches!(err, SummarizerError::NoContent));
+
+    // Choice with null content.
+    let body2 = r#"{"choices":[{"message":{"role":"assistant","content":""}}]}"#;
+    let err2 = DeepSeekAdapter
+        .parse_summarizer_response(body2)
+        .expect_err("should be no content");
+    assert!(matches!(err2, SummarizerError::NoContent));
+}
+
+// ---- 9. deepseek_adapter_parse_summarizer_response_top_level_error_yields_upstream_envelope ----
+
+#[test]
+fn deepseek_adapter_parse_summarizer_response_top_level_error_yields_upstream_envelope() {
+    let body = r#"{"error":{"message":"Invalid API key","type":"invalid_request_error","code":"401"}}"#;
+    let err = DeepSeekAdapter
+        .parse_summarizer_response(body)
+        .expect_err("should be upstream error");
+    match err {
+        SummarizerError::UpstreamErrorEnvelope(s) => {
+            assert!(s.contains("invalid_request_error"), "missing type: {s}");
+            assert!(s.contains("Invalid API key"), "missing message: {s}");
+        }
+        other => panic!("expected UpstreamErrorEnvelope, got {other:?}"),
+    }
+}

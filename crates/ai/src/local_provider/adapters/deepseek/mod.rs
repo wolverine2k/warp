@@ -1,3 +1,20 @@
+//! DeepSeek native protocol adapter. Phase 3d.
+//!
+//! Submodule layout mirrors Phase 3a/3b/3c:
+//! - `wire`: serde types for /chat/completions (OpenAI-shaped with
+//!   reasoning_content extensions on inbound types).
+//! - `request`: translator from `LocalProviderInput` to a
+//!   `DeepSeekChatRequest`.
+//! - `response`: SSE stream decoder (`DeepSeekSseDecoder`).
+//!
+//! DeepSeek's wire format is intentionally OpenAI-compatible — the only
+//! semantic divergence is the `reasoning_content` channel on assistant
+//! messages (deepseek-reasoner model only). Phase 3d handles it on the
+//! response side (decoder emits AgentReasoning proto messages) but NOT
+//! on the request side: the API returns HTTP 400 if reasoning_content
+//! appears on inbound messages, so the translator drops AgentReasoning
+//! from outbound history.
+
 pub mod request;
 pub mod response;
 pub mod wire;
@@ -8,3 +25,166 @@ mod request_tests;
 #[cfg(test)]
 #[path = "response_tests.rs"]
 mod response_tests;
+
+use super::{
+    AdapterError, AgentProviderApiType, LocalProviderConfig, LocalProviderInput, ProviderAdapter,
+    StreamDecoder, StreamIds, SummarizerError, SummarizerInput,
+};
+
+use request::compose_deepseek_chat_request;
+use response::DeepSeekSseDecoder;
+use wire::{DeepSeekChatRequest, DeepSeekChatResponse};
+
+pub struct DeepSeekAdapter;
+
+impl ProviderAdapter for DeepSeekAdapter {
+    fn api_type(&self) -> AgentProviderApiType {
+        AgentProviderApiType::DeepSeek
+    }
+
+    // streaming_format() inherits the SSE default — no override needed.
+
+    fn build_chat_request(
+        &self,
+        input: &LocalProviderInput,
+        cfg: &LocalProviderConfig,
+        http: &reqwest::Client,
+    ) -> Result<reqwest::RequestBuilder, AdapterError> {
+        cfg.validate()?;
+        let url = cfg.chat_completions_url()?;
+        let body = compose_deepseek_chat_request(input, cfg);
+        let body_json = serde_json::to_string(&body)?;
+        Ok(apply_deepseek_headers(
+            http.post(url)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .header(reqwest::header::ACCEPT, "text/event-stream")
+                .body(body_json),
+            cfg.api_key.as_deref(),
+        ))
+    }
+
+    fn create_stream_decoder(
+        &self,
+        ids: Option<StreamIds>,
+        skip_create_task: bool,
+    ) -> Box<dyn StreamDecoder> {
+        let mut decoder = match ids {
+            Some(ids) => DeepSeekSseDecoder::with_ids(
+                ids.conversation_id,
+                ids.request_id,
+                ids.run_id,
+                ids.task_id,
+            ),
+            None => DeepSeekSseDecoder::new(),
+        };
+        if skip_create_task {
+            decoder.skip_create_task();
+        }
+        Box::new(decoder)
+    }
+
+    fn build_summarizer_request(
+        &self,
+        input: &SummarizerInput,
+        cfg: &LocalProviderConfig,
+        http: &reqwest::Client,
+    ) -> Result<reqwest::RequestBuilder, AdapterError> {
+        cfg.validate()?;
+        let url = cfg.chat_completions_url()?;
+        let body = build_deepseek_summarizer_body(input, cfg);
+        let body_json = serde_json::to_string(&body)?;
+        Ok(apply_deepseek_headers(
+            http.post(url)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .header(reqwest::header::ACCEPT, "application/json")
+                .body(body_json),
+            cfg.api_key.as_deref(),
+        ))
+    }
+
+    fn parse_summarizer_response(&self, body: &str) -> Result<String, SummarizerError> {
+        let parsed: DeepSeekChatResponse = serde_json::from_str(body).map_err(|e| {
+            SummarizerError::DecodeResponse(format!(
+                "{e}: {}",
+                crate::local_provider::run::first_chars(body, 200)
+            ))
+        })?;
+        if let Some(err) = parsed.error {
+            let kind = if err.kind.is_empty() { "error".to_string() } else { err.kind };
+            return Err(SummarizerError::UpstreamErrorEnvelope(format!(
+                "{}: {}",
+                kind, err.message
+            )));
+        }
+        let text = parsed
+            .choices
+            .into_iter()
+            .next()
+            .and_then(|c| c.message)
+            .and_then(|m| m.content)
+            .unwrap_or_default();
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            Err(SummarizerError::NoContent)
+        } else {
+            Ok(trimmed.to_string())
+        }
+    }
+
+    fn build_probe_request(
+        &self,
+        cfg: &LocalProviderConfig,
+        http: &reqwest::Client,
+    ) -> Result<reqwest::RequestBuilder, AdapterError> {
+        cfg.validate()?;
+        let url = cfg.models_list_url()?;
+        Ok(apply_deepseek_headers(http.get(url), cfg.api_key.as_deref()))
+    }
+}
+
+fn apply_deepseek_headers(
+    rb: reqwest::RequestBuilder,
+    api_key: Option<&str>,
+) -> reqwest::RequestBuilder {
+    match api_key.filter(|k| !k.is_empty()) {
+        Some(k) => rb.bearer_auth(k),
+        None => rb,
+    }
+}
+
+/// Translate the OpenAI-shaped `SummarizerInput.messages` list into a
+/// non-streaming DeepSeek /chat/completions body. Same shape as OpenAI's
+/// summarizer body — system / user / assistant messages, no tools,
+/// stream: false. role:Tool messages from compaction (never emitted in
+/// practice) are silently dropped.
+fn build_deepseek_summarizer_body(
+    input: &SummarizerInput,
+    cfg: &LocalProviderConfig,
+) -> DeepSeekChatRequest {
+    use crate::local_provider::wire::Role;
+    use wire::{DeepSeekChatMessage, DeepSeekRole};
+    let messages: Vec<DeepSeekChatMessage> = input
+        .messages
+        .iter()
+        .filter_map(|msg| {
+            let role = match msg.role {
+                Role::System => DeepSeekRole::System,
+                Role::User => DeepSeekRole::User,
+                Role::Assistant => DeepSeekRole::Assistant,
+                Role::Tool => return None, // compaction never emits Tool
+            };
+            Some(DeepSeekChatMessage {
+                role,
+                content: msg.content.clone(),
+                tool_calls: None,
+                tool_call_id: None,
+            })
+        })
+        .collect();
+    DeepSeekChatRequest {
+        model: cfg.model_id.clone(),
+        stream: false,
+        messages,
+        tools: None,
+    }
+}
