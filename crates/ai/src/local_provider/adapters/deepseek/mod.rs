@@ -102,6 +102,12 @@ impl ProviderAdapter for DeepSeekAdapter {
         ))
     }
 
+    /// Parse a non-streaming `/chat/completions` response into the assistant
+    /// summary text. Reads `choices[0].message.content` only — the
+    /// `reasoning_content` field is intentionally dropped on the summarizer
+    /// path. The streaming SSE decoder surfaces reasoning to the UI via
+    /// `AgentReasoning` proto messages; the summarizer doesn't need it
+    /// because compaction summaries are final-answer text, not chain-of-thought.
     fn parse_summarizer_response(&self, body: &str) -> Result<String, SummarizerError> {
         let parsed: DeepSeekChatResponse = serde_json::from_str(body).map_err(|e| {
             SummarizerError::DecodeResponse(format!(
