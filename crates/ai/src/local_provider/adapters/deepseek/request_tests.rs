@@ -429,6 +429,66 @@ fn model_id_threads_from_cfg() {
     assert_eq!(req.model, "deepseek-reasoner");
 }
 
+// ---- 16.5: orphan tool_call with action_results populated ----
+
+#[test]
+fn orphan_tool_call_uses_action_results_when_present_and_carries_tool_call_id() {
+    // When the proto history has an assistant ToolCall without a matching
+    // ToolCallResult, backfill_orphaned_tool_calls injects a synthetic
+    // role:"tool" message. If `action_results` carries a value for that
+    // tool_call_id, use it as the content (instead of the
+    // "(tool result not available)" placeholder).
+    //
+    // DeepSeek-specific check: the backfilled role:"tool" message MUST
+    // carry tool_call_id on the wire — Ollama strips it; DeepSeek requires
+    // it. This test guards both behaviors.
+    let task = api::Task {
+        id: "t1".into(),
+        messages: vec![
+            tool_call_msg("m1", "call_xyz", read_files_tool(&["x"])),
+            // NOTE: no matching ToolCallResult — orphaned.
+        ],
+        ..Default::default()
+    };
+    let mut action_results = std::collections::HashMap::new();
+    action_results.insert(
+        "call_xyz".to_string(),
+        "(action result content from controller)".to_string(),
+    );
+    let input = LocalProviderInput {
+        user_query: Some("follow-up".into()),
+        tasks: vec![task],
+        action_results,
+        ..Default::default()
+    };
+
+    let req = compose_deepseek_chat_request(&input, &cfg());
+
+    // Walk messages and find the synthetic role:"tool" backfill.
+    let tool_msg = req
+        .messages
+        .iter()
+        .find(|m| m.role == DeepSeekRole::Tool)
+        .expect("backfilled role:tool message should exist");
+    assert_eq!(
+        tool_msg.content.as_deref(),
+        Some("(action result content from controller)"),
+        "action_results content should be used, not the placeholder"
+    );
+    assert_eq!(
+        tool_msg.tool_call_id.as_deref(),
+        Some("call_xyz"),
+        "backfilled tool message must carry tool_call_id on the wire (DeepSeek requirement)"
+    );
+
+    // Serialization check: tool_call_id is present in the JSON body.
+    let body = serde_json::to_string(&req).unwrap();
+    assert!(
+        body.contains("\"tool_call_id\":\"call_xyz\""),
+        "tool_call_id should serialize on the backfilled role:tool message; body = {body}"
+    );
+}
+
 // ---- 16: paranoia test — reasoning_content never in serialized body ----
 
 #[test]

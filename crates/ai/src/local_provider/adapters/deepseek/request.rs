@@ -29,7 +29,7 @@ use crate::local_provider::{
     request::{
         enabled_local_tools, summarize_tool_call_input, summarize_tool_result, LocalProviderInput,
     },
-    tools::LocalTool,
+    tools::{self, LocalTool},
 };
 
 pub fn compose_deepseek_chat_request(
@@ -122,7 +122,7 @@ fn tool_definitions_deepseek(enabled: &[LocalTool]) -> Vec<DeepSeekToolDef> {
     enabled
         .iter()
         .filter_map(|t| {
-            crate::local_provider::tools::schema_for(*t).map(|parameters| DeepSeekToolDef {
+            tools::schema_for(*t).map(|parameters| DeepSeekToolDef {
                 kind: "function",
                 function: DeepSeekToolFunction {
                     name: t.name().to_string(),
