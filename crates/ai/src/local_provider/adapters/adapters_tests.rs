@@ -48,11 +48,14 @@ fn select_adapter_returns_gemini_for_gemini_api_type() {
 }
 
 #[test]
+fn select_adapter_returns_deepseek_for_deepseek_api_type() {
+    let a = select_adapter(AgentProviderApiType::DeepSeek).expect("ok");
+    assert_eq!(a.api_type(), AgentProviderApiType::DeepSeek);
+}
+
+#[test]
 fn select_adapter_errors_for_each_unimplemented_variant() {
-    for ty in [
-        AgentProviderApiType::OpenAiResp,
-        AgentProviderApiType::DeepSeek,
-    ] {
+    for ty in [AgentProviderApiType::OpenAiResp] {
         // `Box<dyn ProviderAdapter>` doesn't implement Debug — destructure via
         // `match` instead of `expect_err`.
         match select_adapter(ty) {
