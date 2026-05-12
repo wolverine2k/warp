@@ -26,7 +26,11 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 
 > **Verification gate:** live-test smoke against `generativelanguage.googleapis.com` with a real `AIza…` API key is the remaining manual step per the plan (`plan-phase-3c.md` §Task 7.1). Once a turn streams successfully end-to-end (text + tool call + tool result + final text) the Phase 3c row flips to ✅ and the status note is removed.
 
-**Future phases (3d / 4)** — native DeepSeek adapter and polish features (`/models` fetch, models.dev catalog, multimodal, dedicated compaction model) — remain unscheduled and will get their own design + plan when started.
+**Phase 3d (DeepSeek-native adapter)** code is complete on `multi-local-llm` (final commit `370a0c91`). **Final native adapter of Phase 3.** DeepSeek's wire format is intentionally OpenAI-compatible (`POST {base_url}/chat/completions` with Bearer auth and `[DONE]`-terminated SSE), so the adapter reuses OpenAI's URL helpers (`chat_completions_url`, `models_list_url`) with NO new `config.rs` changes. The Phase-3d-specific novelty: `deepseek-reasoner` emits a `reasoning_content` channel alongside `content` on streaming assistant messages. The decoder opens a separate shared `AgentReasoning` proto-message slot fed by `delta.reasoning_content` (the Warp UI renders chain-of-thought blocks distinctly from final-answer text), while `delta.content` continues to drive a shared `AgentOutput` message. **`AgentReasoning` is intentionally DROPPED from outbound history** — DeepSeek's API returns HTTP 400 if `reasoning_content` appears in inbound `messages`; the reasoning channel is response-only. **~64 new unit tests** (14 wire + 1 wire fix-up + 16 translator + 1 translator fix-up + 22 decoder + 9 adapter + 1 dispatch-flip) plus the existing tests stay green (`cargo nextest run -p ai` reports 631/631).
+
+> **Verification gate:** live-test smoke against `api.deepseek.com` with a real `sk-…` API key is the remaining manual step per the plan (`plan-phase-3d.md` §Task 6.1). Once a turn streams successfully end-to-end (reasoning text + final answer text + a tool call from a `deepseek-chat` provider) the Phase 3d row flips to ✅ and the status note is removed.
+
+**Future phases (4)** — polish features (`/models` fetch, models.dev catalog, multimodal, dedicated compaction model) — remain unscheduled and will get their own design + plan when started.
 
 | Phase | Plan | Status |
 |---|---|---|
@@ -39,6 +43,7 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 | 3a — Anthropic adapter (`AnthropicAdapter` + `AnthropicSseDecoder`) | [`plan-phase-3a.md`](plan-phase-3a.md) | 🧪 code complete — pending live smoke |
 | 3b — Ollama-native adapter (`OllamaAdapter` + NDJSON drive loop + `streaming_format` trait method) | [`plan-phase-3b.md`](plan-phase-3b.md) | 🧪 code complete — pending live smoke |
 | 3c — Gemini-native adapter (`GeminiAdapter` + `GeminiSseDecoder`) | [`plan-phase-3c.md`](plan-phase-3c.md) | 🧪 code complete — pending live smoke |
+| 3d — DeepSeek-native adapter (`DeepSeekAdapter` + `DeepSeekSseDecoder` with reasoning_content channel) | [`plan-phase-3d.md`](plan-phase-3d.md) | 🧪 code complete — pending live smoke |
 
 The full design — data model, dispatch flow, migration strategy, risks — is in [`design.md`](design.md).
 
@@ -52,9 +57,10 @@ The full design — data model, dispatch flow, migration strategy, risks — is 
 - **Phase 3a (pending live smoke):** **Anthropic** is now a real api_type — selecting it routes the conversation to `{base_url}/v1/messages` with native `x-api-key` auth, streamed `message_start` / `content_block_delta` / `message_stop` events, and tool use as `tool_use` content blocks on the assistant message. The Test connection button probes `{base_url}/v1/models`.
 - **Phase 3b (pending live smoke):** **Ollama** is now a real api_type — selecting it routes the conversation to `{base_url}/api/chat` with native NDJSON streaming (no SSE framing), native tool-call shape (arguments as JSON object), and `options.num_ctx` threaded from the model's configured context window so Ollama sizes its KV cache appropriately. The Test connection button probes `{base_url}/api/tags`.
 - **Phase 3c (pending live smoke):** **Gemini** is now a real api_type — selecting it routes the conversation to `{base_url}/v1beta/models/{model}:streamGenerateContent?alt=sse` with native `x-goog-api-key` auth, content-parts message shape (`systemInstruction` lifted to top level, `user`/`model` roles, `functionCall`/`functionResponse` parts), and `finishReason` as the SSE terminator. The Test connection button probes `{base_url}/v1beta/models`.
+- **Phase 3d (pending live smoke):** **DeepSeek** is now a real api_type — selecting it routes the conversation to `{base_url}/chat/completions` with `Authorization: Bearer` auth (OpenAI-compatible wire shape). For `deepseek-reasoner`, the streaming response surfaces the model's chain-of-thought reasoning as distinct `AgentReasoning` blocks in the conversation transcript, separate from the final-answer text. The Test connection button probes `{base_url}/models`.
 
 **Architecture:**
-- Type system in `app/src/settings/ai.rs`: `AgentProvider`, `AgentProviderModel`, `AgentProviderKind` (`OpenAiCompatible` only today), `AgentProviderApiType` (`OpenAi`, `Anthropic`, `Ollama`, `Gemini` active; `OpenAiResp`, `DeepSeek` enum variants reserved for Phase 3d).
+- Type system in `app/src/settings/ai.rs`: `AgentProvider`, `AgentProviderModel`, `AgentProviderKind` (`OpenAiCompatible` only today), `AgentProviderApiType` (`OpenAi`, `Anthropic`, `Ollama`, `Gemini`, `DeepSeek` active; `OpenAiResp` enum variant reserved for Phase 4).
 - Persistence: `Vec<AgentProvider>` under `agents.warp_agent.providers` (TOML); `HashMap<provider_id, api_key>` in OS keychain blob `AgentProviderSecrets`.
 - LLMId codec in `crates/ai/src/local_provider/llm_id.rs` (`byop:<uuid>:<model_id>` with first-colon-after-prefix splitting so vendor:model:variant style names round-trip).
 - Dispatch in `app/src/ai/local_provider_config.rs::snapshot_for_request` branches on prefix:
@@ -66,12 +72,12 @@ The full design — data model, dispatch flow, migration strategy, risks — is 
 - **Phase 3a:** `AnthropicAdapter` + `AnthropicSseDecoder` (`crates/ai/src/local_provider/adapters/anthropic/{mod,request,response,wire}.rs`). Translator lifts the synthesized system prompt to Anthropic's top-level `system` field, merges adjacent same-role messages, splices missing `tool_result` blocks. Decoder maps the named event family to the same `ResponseEvent` shape `OpenAiSseAdapter` emits. `StreamDecoder` trait gained `feed_event(event_name, data)` to carry the SSE `event:` discriminator through.
 - **Phase 3b:** `OllamaAdapter` + `OllamaDecoder` (`crates/ai/src/local_provider/adapters/ollama/{mod,request,response,wire}.rs`). Translator emits native shape (system as `role:system` message, tool_calls with `arguments` as JSON object, no id/type fields; `options.num_ctx` threaded from config). Decoder consumes one NDJSON line per chunk and treats `done:true` as terminator. `ProviderAdapter` trait gained `streaming_format() -> StreamingFormat::{SSE, NDJSON}` so `run.rs::run_chat_turn` can branch — SSE adapters use `synthesize_sse_stream`, Ollama uses `synthesize_ndjson_stream` (awaits `send()` for HTTP-status pre-flight, then drives `bytes_stream()` through a `\n` line splitter). Shared proto-event builders live in `adapters/proto_helpers.rs`.
 - **Phase 3c:** `GeminiAdapter` + `GeminiSseDecoder` (`crates/ai/src/local_provider/adapters/gemini/{mod,request,response,wire}.rs`). Translator lifts the synthesized system prompt to top-level `systemInstruction`; rewrites the role vocabulary from `assistant` → `model`; emits proto `ToolCall` → `functionCall` part (with `args` as a JSON object, not stringified) and proto `ToolCallResult` → `functionResponse` part with `response: {content: <rendered text>}` and a name lookup from a running `tool_call_id → name` map. Decoder consumes anonymous SSE `data:` chunks (`feed_event(None, data)` default path), walks `candidates[0].content.parts` per chunk, synthesizes UUID tool-call ids, and treats `candidates[0].finishReason: Some(_)` as the terminator. `usageMetadata` accumulates with per-field `.max()` across chunks.
+- **Phase 3d:** `DeepSeekAdapter` + `DeepSeekSseDecoder` (`crates/ai/src/local_provider/adapters/deepseek/{mod,request,response,wire}.rs`). DeepSeek's wire format is OpenAI-compatible; the adapter reuses OpenAI's `chat_completions_url` and `models_list_url` helpers with NO new `config.rs` changes. The translator mirrors OpenAI's: system as `role:"system"` at `messages[0]`, assistant `tool_calls` with stringified-JSON arguments (matches OpenAI's convention, opposite of Ollama's and Gemini's object form), `role:"tool"` messages with `tool_call_id`. **`AgentReasoning` proto messages are dropped from outbound history** — DeepSeek's API rejects `reasoning_content` on inbound messages with HTTP 400. The decoder maintains TWO distinct shared message slots (`reasoning_message_id` for AgentReasoning, `text_message_id` for AgentOutput) so the reasoning channel and the final-answer channel render as separate proto messages in the UI. Tool-call fragment accumulator mirrors OpenAi's by-index pattern; `[DONE]` is the terminator (same as OpenAI). `usage.completion_tokens_details.reasoning_tokens` is deserialized but folded into the single `output_tokens` counter (Phase 4 polish can split them).
 
 ## Future phases (per [`design.md`](design.md) §9)
 
 Each gets its own design + plan when started:
 
-- **Phase 3d** — native DeepSeek adapter (reasoning-content surfacing for `deepseek-reasoner`).
 - **Phase 4a–d** — `/models` fetch button, models.dev catalog sync, multimodal capability resolution (image / pdf / audio), dedicated compaction model.
 
 ## Operational notes
@@ -93,6 +99,7 @@ Each gets its own design + plan when started:
    - Anthropic adapter: `crates/ai/src/local_provider/adapters/anthropic/{mod,request,response,wire}.rs`.
    - Ollama adapter: `crates/ai/src/local_provider/adapters/ollama/{mod,request,response,wire}.rs`.
    - Gemini adapter: `crates/ai/src/local_provider/adapters/gemini/{mod,request,response,wire}.rs`.
+   - DeepSeek adapter: `crates/ai/src/local_provider/adapters/deepseek/{mod,request,response,wire}.rs`.
 
 ## Reference comparison
 
