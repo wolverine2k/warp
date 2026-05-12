@@ -3,6 +3,8 @@
 //! composition + parsing, and stream-decoder construction out of `run.rs`
 //! verbatim. Net new logic: the probe builder (`GET {base_url}/models`).
 
+use serde::Deserialize;
+
 use crate::local_provider::{
     request::compose_chat_completion_request,
     response::OpenAiSseAdapter,
@@ -11,9 +13,27 @@ use crate::local_provider::{
 };
 
 use super::{
-    AdapterError, AgentProviderApiType, LocalProviderConfig, LocalProviderInput, ProviderAdapter,
-    StreamDecoder, StreamIds, SummarizerError, SummarizerInput,
+    AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
+    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError, SummarizerInput,
 };
+
+// ---------------------------------------------------------------------------
+// Wire types for GET /v1/models
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct OpenAiModelsListResponse {
+    #[serde(default)]
+    data: Vec<OpenAiListedModel>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct OpenAiListedModel {
+    /// Required. OpenAI always emits this; treat missing as a parse error.
+    id: String,
+    // `object` / `created` / `owned_by` deliberately ignored — Phase 4a
+    // doesn't surface them.
+}
 
 pub struct OpenAiAdapter;
 
@@ -137,4 +157,50 @@ impl ProviderAdapter for OpenAiAdapter {
         }
         Ok(req)
     }
+
+    fn build_list_models_request(
+        &self,
+        cfg: &LocalProviderConfig,
+        http: &reqwest::Client,
+        _cursor: Option<&str>, // OpenAi is unpaginated; ignore
+    ) -> Result<reqwest::RequestBuilder, AdapterError> {
+        let url = cfg.models_list_url()?;
+        let mut req = http.get(url);
+        req = apply_openai_headers(req, cfg); // Authorization: Bearer
+        Ok(req)
+    }
+
+    fn parse_list_models_response(
+        &self,
+        body: &str,
+    ) -> Result<ListModelsPage, AdapterError> {
+        let parsed: OpenAiModelsListResponse = serde_json::from_str(body)?;
+        let models = parsed
+            .data
+            .into_iter()
+            .map(|m| DiscoveredModel {
+                id: m.id,
+                display_name: None,
+                context_window: None,
+                max_output_tokens: None,
+            })
+            .collect();
+        Ok(ListModelsPage { models, next_cursor: None })
+    }
 }
+
+fn apply_openai_headers(
+    mut req: reqwest::RequestBuilder,
+    cfg: &LocalProviderConfig,
+) -> reqwest::RequestBuilder {
+    if let Some(key) = &cfg.api_key {
+        if !key.is_empty() {
+            req = req.bearer_auth(key);
+        }
+    }
+    req
+}
+
+#[cfg(test)]
+#[path = "openai_list_models_tests.rs"]
+mod list_models_tests;
