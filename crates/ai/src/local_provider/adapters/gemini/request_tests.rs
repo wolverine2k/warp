@@ -589,3 +589,228 @@ fn model_role_serializes_as_lowercase_string() {
     assert_ne!(v["contents"][model_entry]["role"], "Model");
     assert_ne!(v["contents"][model_entry]["role"], "MODEL");
 }
+
+// ============================================================
+// Adapter-glue tests (GeminiAdapter + ProviderAdapter trait)
+// ============================================================
+
+use super::super::ensure_rustls_provider;
+use super::GeminiAdapter;
+use crate::local_provider::adapters::ProviderAdapter;
+use crate::local_provider::run::{SummarizerError, SummarizerInput};
+use crate::local_provider::wire::{ChatMessage, Role};
+
+fn http_client() -> reqwest::Client {
+    ensure_rustls_provider();
+    reqwest::Client::new()
+}
+
+fn gemini_cfg() -> LocalProviderConfig {
+    LocalProviderConfig {
+        display_name: "Gemini".into(),
+        base_url: "https://generativelanguage.googleapis.com".into(),
+        model_id: "gemini-1.5-pro".into(),
+        api_key: Some("AIzaTEST".into()),
+        supports_tools: true,
+        context_window: None,
+        api_type: AgentProviderApiType::Gemini,
+    }
+}
+
+fn chat_msg(role: Role, text: &str) -> ChatMessage {
+    ChatMessage {
+        role,
+        content: Some(text.into()),
+        tool_calls: None,
+        tool_call_id: None,
+        name: None,
+    }
+}
+
+// ---- 19. gemini_adapter_chat_request_url_and_x_goog_api_key_header ----
+
+#[test]
+fn gemini_adapter_chat_request_url_and_x_goog_api_key_header() {
+    let http = http_client();
+    let req = GeminiAdapter
+        .build_chat_request(&LocalProviderInput::default(), &gemini_cfg(), &http)
+        .expect("ok")
+        .build()
+        .expect("buildable");
+    assert_eq!(req.method().as_str(), "POST");
+    assert_eq!(
+        req.url().as_str(),
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:streamGenerateContent?alt=sse"
+    );
+    assert_eq!(
+        req.headers()
+            .get("x-goog-api-key")
+            .map(|v| v.to_str().unwrap()),
+        Some("AIzaTEST"),
+    );
+    assert_eq!(
+        req.headers().get("accept").map(|v| v.to_str().unwrap()),
+        Some("text/event-stream"),
+    );
+}
+
+// ---- 20. gemini_adapter_chat_request_omits_x_goog_api_key_when_key_absent ----
+
+#[test]
+fn gemini_adapter_chat_request_omits_x_goog_api_key_when_key_absent() {
+    let http = http_client();
+    let mut c = gemini_cfg();
+    c.api_key = None;
+    let req = GeminiAdapter
+        .build_chat_request(&LocalProviderInput::default(), &c, &http)
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(req.headers().get("x-goog-api-key").is_none());
+}
+
+// ---- 21. gemini_adapter_chat_request_omits_x_goog_api_key_when_key_empty_string ----
+
+#[test]
+fn gemini_adapter_chat_request_omits_x_goog_api_key_when_key_empty_string() {
+    let http = http_client();
+    let mut c = gemini_cfg();
+    c.api_key = Some(String::new());
+    let req = GeminiAdapter
+        .build_chat_request(&LocalProviderInput::default(), &c, &http)
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(req.headers().get("x-goog-api-key").is_none());
+}
+
+// ---- 22. gemini_adapter_summarizer_request_uses_generate_content_url_with_application_json_accept ----
+
+#[test]
+fn gemini_adapter_summarizer_request_uses_generate_content_url_with_application_json_accept() {
+    let http = http_client();
+    let input = SummarizerInput {
+        messages: vec![
+            chat_msg(Role::System, "You are helpful."),
+            chat_msg(Role::User, "Summarize."),
+        ],
+    };
+    let req = GeminiAdapter
+        .build_summarizer_request(&input, &gemini_cfg(), &http)
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(req.method().as_str(), "POST");
+    assert!(
+        req.url().as_str().ends_with(":generateContent"),
+        "URL should end with :generateContent, got {}",
+        req.url().as_str()
+    );
+    assert_eq!(
+        req.headers().get("accept").map(|v| v.to_str().unwrap()),
+        Some("application/json"),
+    );
+    // Check body has systemInstruction lifted from the system message.
+    let body_bytes = req.body().and_then(|b| b.as_bytes()).expect("body present");
+    let body_str = std::str::from_utf8(body_bytes).unwrap();
+    let v: serde_json::Value = serde_json::from_str(body_str).unwrap();
+    assert!(v.get("systemInstruction").is_some(), "systemInstruction must be lifted");
+    // contents should map user role.
+    assert_eq!(v["contents"][0]["role"], "user");
+}
+
+// ---- 23. gemini_adapter_summarizer_body_lifts_system_to_top_level ----
+
+#[test]
+fn gemini_adapter_summarizer_body_lifts_system_to_top_level() {
+    let http = http_client();
+    let input = SummarizerInput {
+        messages: vec![
+            chat_msg(Role::System, "S"),
+            chat_msg(Role::User, "U"),
+            chat_msg(Role::Assistant, "A"),
+        ],
+    };
+    let req = GeminiAdapter
+        .build_summarizer_request(&input, &gemini_cfg(), &http)
+        .unwrap()
+        .build()
+        .unwrap();
+    let body_bytes = req.body().and_then(|b| b.as_bytes()).expect("body present");
+    let v: serde_json::Value = serde_json::from_str(std::str::from_utf8(body_bytes).unwrap()).unwrap();
+
+    assert_eq!(v["systemInstruction"]["parts"][0]["text"], "S");
+    assert_eq!(v["contents"][0]["role"], "user");
+    assert_eq!(v["contents"][0]["parts"][0]["text"], "U");
+    assert_eq!(v["contents"][1]["role"], "model");
+    assert_eq!(v["contents"][1]["parts"][0]["text"], "A");
+}
+
+// ---- 24. gemini_adapter_probe_request_targets_models_endpoint_with_x_goog_api_key ----
+
+#[test]
+fn gemini_adapter_probe_request_targets_models_endpoint_with_x_goog_api_key() {
+    let http = http_client();
+    let req = GeminiAdapter
+        .build_probe_request(&gemini_cfg(), &http)
+        .unwrap()
+        .build()
+        .unwrap();
+    assert_eq!(req.method().as_str(), "GET");
+    assert!(
+        req.url().path().ends_with("/v1beta/models"),
+        "probe URL path should end with /v1beta/models, got {}",
+        req.url().path()
+    );
+    assert_eq!(
+        req.headers()
+            .get("x-goog-api-key")
+            .map(|v| v.to_str().unwrap()),
+        Some("AIzaTEST"),
+    );
+}
+
+// ---- 25. gemini_adapter_parse_summarizer_response_extracts_text_from_first_candidate ----
+
+#[test]
+fn gemini_adapter_parse_summarizer_response_extracts_text_from_first_candidate() {
+    let body = r#"{"candidates":[{"content":{"role":"model","parts":[{"text":"summary text"}]}}]}"#;
+    let result = GeminiAdapter.parse_summarizer_response(body).expect("ok");
+    assert_eq!(result, "summary text");
+}
+
+// ---- 26. gemini_adapter_parse_summarizer_response_empty_yields_no_content_error ----
+
+#[test]
+fn gemini_adapter_parse_summarizer_response_empty_yields_no_content_error() {
+    // Empty candidates list.
+    let body = r#"{"candidates":[]}"#;
+    let err = GeminiAdapter
+        .parse_summarizer_response(body)
+        .expect_err("should be no content");
+    assert!(matches!(err, SummarizerError::NoContent));
+
+    // Candidate with empty parts.
+    let body2 = r#"{"candidates":[{"content":{"role":"model","parts":[]}}]}"#;
+    let err2 = GeminiAdapter
+        .parse_summarizer_response(body2)
+        .expect_err("should be no content");
+    assert!(matches!(err2, SummarizerError::NoContent));
+}
+
+// ---- 27. gemini_adapter_parse_summarizer_response_top_level_error_yields_upstream_envelope ----
+
+#[test]
+fn gemini_adapter_parse_summarizer_response_top_level_error_yields_upstream_envelope() {
+    let body = r#"{"error":{"code":401,"message":"Invalid API key","status":"UNAUTHENTICATED"}}"#;
+    let err = GeminiAdapter
+        .parse_summarizer_response(body)
+        .expect_err("should be upstream error");
+    match err {
+        SummarizerError::UpstreamErrorEnvelope(s) => {
+            assert!(s.contains("UNAUTHENTICATED"), "missing status: {s}");
+            assert!(s.contains("Invalid API key"), "missing message: {s}");
+        }
+        other => panic!("expected UpstreamErrorEnvelope, got {other:?}"),
+    }
+}
