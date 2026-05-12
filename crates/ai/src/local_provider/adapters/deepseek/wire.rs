@@ -538,4 +538,46 @@ mod tests {
         assert!(delta.reasoning_content.is_none());
         assert!(delta.tool_calls.is_none());
     }
+
+    #[test]
+    fn deserializes_non_streaming_response_with_reasoning_content() {
+        // Mirrors a real deepseek-reasoner /chat/completions response (stream:false).
+        // Confirms the non-streaming type set (DeepSeekChatResponse / ResponseChoice /
+        // ResponseMessage) deserializes correctly — including the reasoning_content
+        // field on the message — so Task 4's parse_summarizer_response path has
+        // serde coverage before it lands.
+        let s = r#"{
+            "id":"chatcmpl-7",
+            "model":"deepseek-reasoner",
+            "choices":[{
+                "index":0,
+                "message":{
+                    "role":"assistant",
+                    "content":"The answer is 4.",
+                    "reasoning_content":"2+2=4"
+                },
+                "finish_reason":"stop"
+            }],
+            "usage":{
+                "prompt_tokens":10,
+                "completion_tokens":20,
+                "total_tokens":30
+            }
+        }"#;
+        let resp: DeepSeekChatResponse = serde_json::from_str(s).unwrap();
+        assert_eq!(resp.id.as_deref(), Some("chatcmpl-7"));
+        assert_eq!(resp.model.as_deref(), Some("deepseek-reasoner"));
+        assert_eq!(resp.choices.len(), 1);
+        let choice = &resp.choices[0];
+        assert_eq!(choice.index, Some(0));
+        assert_eq!(choice.finish_reason.as_deref(), Some("stop"));
+        let msg = choice.message.as_ref().expect("message present");
+        assert_eq!(msg.role.as_deref(), Some("assistant"));
+        assert_eq!(msg.content.as_deref(), Some("The answer is 4."));
+        assert_eq!(msg.reasoning_content.as_deref(), Some("2+2=4"));
+        let usage = resp.usage.expect("usage present");
+        assert_eq!(usage.prompt_tokens, 10);
+        assert_eq!(usage.completion_tokens, 20);
+        assert_eq!(usage.total_tokens, 30);
+    }
 }
