@@ -139,7 +139,7 @@ use crate::{TelemetryEvent, UserWorkspaces};
 use markdown_parser::{FormattedText, FormattedTextFragment, FormattedTextLine};
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Not;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -407,6 +407,18 @@ pub struct AISettingsPageView {
     /// when the user edits the provider's base_url / api_key / api_type.
     pub(super) agent_provider_probe_states:
         RefCell<HashMap<String, super::agent_providers_widget::ProbeUiState>>,
+    /// Phase 4a: open "Fetched models" modal state, or `None` when no
+    /// modal is rendered. Set by the `FetchAgentProviderModels` spawn
+    /// callback on a successful resolve; cleared on Commit / Cancel.
+    pub(super) fetched_models_modal:
+        Option<super::fetched_models_modal::FetchedModelsModalState>,
+    /// Phase 4a: provider indices for which a `fetch_models` call is
+    /// currently in flight. The widget renders the button as
+    /// "Fetching…" while a provider index is present.
+    pub(super) fetch_models_in_flight: HashSet<usize>,
+    /// Phase 4a: most recent fetch failure per provider index, rendered
+    /// inline near the button. Cleared on the next successful fetch.
+    pub(super) last_fetch_failure: HashMap<usize, String>,
     autodetection_denylist_editor: ViewHandle<EditorView>,
     autonomy_dropdown_menu: ViewHandle<Dropdown<AISettingsPageAction>>,
 
@@ -1404,6 +1416,9 @@ impl AISettingsPageView {
             autodetection_denylist_editor,
             local_only_icon_tooltip_states: Default::default(),
             agent_provider_probe_states: Default::default(),
+            fetched_models_modal: None,
+            fetch_models_in_flight: Default::default(),
+            last_fetch_failure: Default::default(),
             command_execution_allowlist_editor,
             command_execution_denylist_editor,
             command_execution_allowlist_mouse_state_handles,
@@ -2384,6 +2399,36 @@ pub enum AISettingsPageAction {
         provider_index: usize,
         model_index: usize,
     },
+
+    /// Phase 4a. User clicked the "Fetch models" button on a provider
+    /// card. Kicks off an async `fetch_models()` call; the resolve logic
+    /// runs inline in the spawn callback and either opens the modal or
+    /// records a failure on the card.
+    FetchAgentProviderModels {
+        provider_index: usize,
+    },
+
+    /// Phase 4a. User toggled a single row in the open "Fetched models"
+    /// modal. Disabled rows (already on the provider) ignore the toggle.
+    ToggleFetchedModelInModal {
+        model_id: String,
+        checked: bool,
+    },
+
+    /// Phase 4a. User clicked "Select all" / "Select none" in the modal.
+    /// Never touches rows already on the provider.
+    SetAllFetchedModelsChecked {
+        checked: bool,
+    },
+
+    /// Phase 4a. User clicked "Add N models" — appends checked rows to
+    /// the provider's `models` list and closes the modal.
+    CommitFetchedAgentProviderModels {
+        provider_index: usize,
+    },
+
+    /// Phase 4a. User clicked Cancel / Esc / Close — discards the modal.
+    CancelFetchedAgentProviderModelsModal,
 }
 
 impl From<&AISettingsPageAction> for LoginGatedFeature {
@@ -3373,6 +3418,166 @@ impl TypedActionView for AISettingsPageView {
                         ctx.notify();
                     },
                 );
+                ctx.notify();
+            }
+
+            AISettingsPageAction::FetchAgentProviderModels { provider_index } => {
+                let provider_index = *provider_index;
+                let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
+                let Some(provider) = providers.into_iter().nth(provider_index) else {
+                    log::warn!(
+                        "FetchAgentProviderModels: invalid provider_index {provider_index}"
+                    );
+                    return;
+                };
+                // Build a LocalProviderConfig mirroring the probe handler. The
+                // helper doesn't need `model_id`, but `LocalProviderConfig`
+                // carries it for consistency with the chat path.
+                let api_key = ::ai::local_provider::AgentProviderSecrets::as_ref(ctx)
+                    .get(&provider.id)
+                    .map(str::to_owned)
+                    .unwrap_or_default();
+                let model_id = provider
+                    .models
+                    .first()
+                    .map(|m| m.id.clone())
+                    .filter(|s| !s.trim().is_empty())
+                    .unwrap_or_else(|| "fetch-models".to_string());
+                let cfg = ::ai::local_provider::LocalProviderConfig {
+                    display_name: if provider.name.is_empty() {
+                        "Local".to_owned()
+                    } else {
+                        provider.name.clone()
+                    },
+                    base_url: provider.base_url.clone(),
+                    model_id,
+                    api_key: if api_key.is_empty() {
+                        None
+                    } else {
+                        Some(api_key)
+                    },
+                    supports_tools: true,
+                    context_window: None,
+                    api_type: provider.api_type,
+                };
+                let provider_id = provider.id.clone();
+                let provider_label = if provider.name.is_empty() {
+                    provider.id.clone()
+                } else {
+                    provider.name.clone()
+                };
+                log::info!(
+                    "FetchAgentProviderModels: fetching for provider {provider_label} ({})",
+                    provider.id
+                );
+
+                self.last_fetch_failure.remove(&provider_index);
+                self.fetch_models_in_flight.insert(provider_index);
+
+                let http = reqwest::Client::new();
+                let _ = ctx.spawn(
+                    crate::ai::agent_providers::fetch_models::fetch_models(cfg, http),
+                    move |this, outcome, ctx| {
+                        use crate::ai::agent_providers::fetch_models::FetchModelsOutcome;
+                        this.fetch_models_in_flight.remove(&provider_index);
+                        // Stale-resolve guard: drop the resolve if the provider
+                        // was removed or replaced (different id) mid-flight.
+                        let providers =
+                            AISettings::as_ref(ctx).agent_providers.value().clone();
+                        let Some(provider) = providers.get(provider_index) else {
+                            log::debug!(
+                                "FetchAgentProviderModels: provider_index {provider_index} \
+                                 no longer exists, dropping resolve"
+                            );
+                            ctx.notify();
+                            return;
+                        };
+                        if provider.id != provider_id {
+                            log::debug!(
+                                "FetchAgentProviderModels: provider_id changed \
+                                 (was {provider_id}, now {}), dropping resolve",
+                                provider.id
+                            );
+                            ctx.notify();
+                            return;
+                        }
+                        match outcome {
+                            FetchModelsOutcome::Failed(reason) => {
+                                log::warn!(
+                                    "FetchAgentProviderModels [{provider_label}]: \
+                                     failed — {reason}"
+                                );
+                                this.last_fetch_failure
+                                    .insert(provider_index, reason);
+                                this.fetched_models_modal = None;
+                            }
+                            FetchModelsOutcome::Ok(fetched) => {
+                                log::info!(
+                                    "FetchAgentProviderModels [{provider_label}]: \
+                                     {} model(s) returned",
+                                    fetched.len()
+                                );
+                                let already_added: std::collections::HashSet<String> =
+                                    provider.models.iter().map(|m| m.id.clone()).collect();
+                                this.fetched_models_modal = Some(
+                                    super::fetched_models_modal::FetchedModelsModalState::new_from_fetched(
+                                        provider_index,
+                                        provider_id.clone(),
+                                        fetched,
+                                        already_added,
+                                    ),
+                                );
+                                this.last_fetch_failure.remove(&provider_index);
+                            }
+                        }
+                        ctx.notify();
+                    },
+                );
+                ctx.notify();
+            }
+
+            AISettingsPageAction::ToggleFetchedModelInModal { model_id, checked } => {
+                if let Some(modal) = self.fetched_models_modal.as_mut() {
+                    modal.toggle(model_id, *checked);
+                    ctx.notify();
+                }
+            }
+
+            AISettingsPageAction::SetAllFetchedModelsChecked { checked } => {
+                if let Some(modal) = self.fetched_models_modal.as_mut() {
+                    modal.set_all_checked(*checked);
+                    ctx.notify();
+                }
+            }
+
+            AISettingsPageAction::CommitFetchedAgentProviderModels { provider_index } => {
+                let provider_index = *provider_index;
+                let Some(modal) = self.fetched_models_modal.take() else {
+                    return;
+                };
+                // Sanity: ignore stale commits for a different provider.
+                if modal.provider_index != provider_index {
+                    return;
+                }
+                let rows = modal.committed_rows();
+                if rows.is_empty() {
+                    ctx.notify();
+                    return;
+                }
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        p.models.extend(rows);
+                        report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                    }
+                });
+                // Rebuild the page so the new model rows get fresh EditorView handles.
+                self.page = Self::build_page(self.active_subpage, ctx);
+                ctx.notify();
+            }
+
+            AISettingsPageAction::CancelFetchedAgentProviderModelsModal => {
+                self.fetched_models_modal = None;
                 ctx.notify();
             }
 

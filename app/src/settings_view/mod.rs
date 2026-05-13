@@ -78,6 +78,7 @@ mod admin_actions;
 mod agent_assisted_environment_modal;
 mod agent_providers_widget;
 mod ai_page;
+mod fetched_models_modal;
 mod appearance_page;
 mod billing_and_usage;
 mod billing_and_usage_page;
