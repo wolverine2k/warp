@@ -102,7 +102,7 @@ pub(super) struct OllamaTagsResponse {
     pub models: Vec<OllamaListedTag>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub(super) struct OllamaListedTag {
     pub name: String,
     #[serde(default)]

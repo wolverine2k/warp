@@ -71,6 +71,14 @@ fn parses_empty_models_array() {
 }
 
 #[test]
+fn details_with_empty_strings_yields_no_display_name() {
+    let body = r#"{"models": [{"name": "x:v1",
+                                "details": {"family": "", "parameter_size": ""}}]}"#;
+    let page = adapter().parse_list_models_response(body).unwrap();
+    assert_eq!(page.models[0].display_name, None);
+}
+
+#[test]
 fn errors_on_malformed_json() {
     let body = r#"{"models": ["#;
     let err = adapter().parse_list_models_response(body).unwrap_err();
