@@ -265,7 +265,7 @@ pub(super) struct GeminiModelsListResponse {
 
 /// One entry in the `models` array returned by `GET /v1beta/models`.
 /// The `name` field includes a `"models/"` prefix that the parser strips.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 pub(super) struct GeminiListedModel {
     /// Full name including `"models/"` prefix; the parser strips it.
     pub name: String,
