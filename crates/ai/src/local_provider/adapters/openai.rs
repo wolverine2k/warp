@@ -107,11 +107,7 @@ impl ProviderAdapter for OpenAiAdapter {
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .header(reqwest::header::ACCEPT, "application/json")
             .body(body_json);
-        if let Some(key) = &cfg.api_key {
-            if !key.is_empty() {
-                req = req.bearer_auth(key);
-            }
-        }
+        req = apply_openai_headers(req, cfg);
         Ok(req)
     }
 
@@ -150,11 +146,7 @@ impl ProviderAdapter for OpenAiAdapter {
         cfg.validate()?;
         let url = cfg.models_list_url()?;
         let mut req = http.get(url);
-        if let Some(key) = &cfg.api_key {
-            if !key.is_empty() {
-                req = req.bearer_auth(key);
-            }
-        }
+        req = apply_openai_headers(req, cfg);
         Ok(req)
     }
 
