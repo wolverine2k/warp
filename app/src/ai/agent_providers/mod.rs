@@ -4,6 +4,7 @@
 //! settings widget. Phase 4 brings the models.dev catalog and native
 //! adapters for non-OpenAI protocols.
 
+pub mod fetch_models;
 pub mod migration;
 pub mod probe;
 
