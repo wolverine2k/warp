@@ -189,6 +189,20 @@ pub struct DeepSeekErrorEnvelope {
     pub code: Option<String>,
 }
 
+// ---------- Models list response (GET /models) ----------
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(super) struct DeepSeekModelsListResponse {
+    #[serde(default)]
+    pub data: Vec<DeepSeekListedModel>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(super) struct DeepSeekListedModel {
+    pub id: String,
+    // `object`, `owned_by` ignored — DeepSeek doesn't return metadata we need.
+}
+
 // ---------- Non-streaming response (summarizer path) ----------
 
 #[derive(Debug, Clone, Deserialize, Default)]
