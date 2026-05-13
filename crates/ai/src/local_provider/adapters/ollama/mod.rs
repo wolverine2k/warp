@@ -156,8 +156,7 @@ impl ProviderAdapter for OllamaAdapter {
     ) -> Result<reqwest::RequestBuilder, AdapterError> {
         cfg.validate()?;
         let url = cfg.ollama_tags_url()?;
-        // Ollama is unauthenticated by default — no auth header.
-        Ok(http.get(url))
+        Ok(apply_ollama_headers(http.get(url), cfg.api_key.as_deref()))
     }
 
     fn parse_list_models_response(
