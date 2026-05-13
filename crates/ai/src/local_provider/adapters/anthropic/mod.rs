@@ -36,8 +36,8 @@ use super::{
 use request::{compose_anthropic_messages_request, resolve_max_tokens};
 use response::AnthropicSseDecoder;
 use wire::{
-    AnthropicContentBlock, AnthropicListedModel, AnthropicMessage, AnthropicMessageResponse,
-    AnthropicMessagesRequest, AnthropicModelsListResponse, AnthropicRole, ResponseContentBlock,
+    AnthropicContentBlock, AnthropicMessage, AnthropicMessageResponse, AnthropicMessagesRequest,
+    AnthropicModelsListResponse, AnthropicRole, ResponseContentBlock,
 };
 
 /// Anthropic-version pin sent on every request. The 2023-06-01 value is the
@@ -166,8 +166,8 @@ impl ProviderAdapter for AnthropicAdapter {
     ) -> Result<reqwest::RequestBuilder, AdapterError> {
         cfg.validate()?;
         // Anthropic's list-models endpoint is GET /v1/models — same path the
-        // probe uses. Always append `?limit=100` to reduce round-trips (the
-        // Anthropic default is 20). When paginating, also append `?after_id`.
+        // probe uses. Always append `limit=100` to reduce round-trips (the
+        // Anthropic default is 20). When paginating, also append `after_id`.
         let mut url = cfg.anthropic_models_url()?;
         {
             let mut q = url.query_pairs_mut();
@@ -190,7 +190,7 @@ impl ProviderAdapter for AnthropicAdapter {
         let models = parsed
             .data
             .into_iter()
-            .map(|m: AnthropicListedModel| DiscoveredModel {
+            .map(|m| DiscoveredModel {
                 id: m.id,
                 display_name: m.display_name,
                 context_window: None,
