@@ -29,7 +29,9 @@ use crate::editor::{
 use crate::settings::{AISettings, AgentProvider, AgentProviderApiType, AgentProviderModel};
 
 use super::ai_page::{AISettingsPageAction, AISettingsPageView};
+use super::fetched_models_modal::FetchedModelsModalState;
 use super::settings_page::{build_sub_header, render_separator, SettingsWidget, HEADER_PADDING};
+use crate::ai::agent_providers::fetch_models::MAX_ENTRIES as FETCH_MODELS_MAX_ENTRIES;
 
 const CARD_BUTTON_FONT_SIZE: f32 = 12.0;
 const CARD_BUTTON_PADDING: f32 = 6.0;
@@ -101,6 +103,9 @@ struct ProviderCardHandles {
     remove_button_state: MouseStateHandle,
     add_model_button_state: MouseStateHandle,
     test_connection_button_state: MouseStateHandle,
+    /// Phase 4a. Mouse state for the "Fetch models" button rendered next
+    /// to "Test connection" in the card footer.
+    fetch_models_button_state: MouseStateHandle,
     api_type_chip_states: HashMap<AgentProviderApiType, MouseStateHandle>,
     model_rows: Vec<ModelRowHandles>,
 }
@@ -113,6 +118,39 @@ struct ProviderCardHandles {
 pub(super) struct AgentProvidersWidget {
     add_button_state: MouseStateHandle,
     cards: Vec<ProviderCardHandles>,
+    /// Phase 4a. Mouse-state handles for the "Fetched models" modal.
+    /// Pre-allocated at widget construction so the render path never
+    /// builds `MouseStateHandle::default()` inline (per `CLAUDE.md`'s
+    /// repeated-init warning). Lives on the widget rather than on
+    /// `FetchedModelsModalState` so the modal-state module stays pure
+    /// and unit-testable; the widget rebuilds independently of modal
+    /// open/close cycles.
+    fetch_modal: FetchModalHandles,
+}
+
+/// Mouse-state handles for the "Fetched models" modal. `row_states` is
+/// sized to `MAX_ENTRIES` so the modal can address up to 200 rows by
+/// positional index — the same cap that bounds `fetch_models()`.
+struct FetchModalHandles {
+    select_all_state: MouseStateHandle,
+    select_none_state: MouseStateHandle,
+    cancel_state: MouseStateHandle,
+    commit_state: MouseStateHandle,
+    row_states: Vec<MouseStateHandle>,
+}
+
+impl FetchModalHandles {
+    fn new() -> Self {
+        Self {
+            select_all_state: MouseStateHandle::default(),
+            select_none_state: MouseStateHandle::default(),
+            cancel_state: MouseStateHandle::default(),
+            commit_state: MouseStateHandle::default(),
+            row_states: (0..FETCH_MODELS_MAX_ENTRIES)
+                .map(|_| MouseStateHandle::default())
+                .collect(),
+        }
+    }
 }
 
 impl AgentProvidersWidget {
@@ -129,6 +167,7 @@ impl AgentProvidersWidget {
         Self {
             add_button_state: MouseStateHandle::default(),
             cards,
+            fetch_modal: FetchModalHandles::new(),
         }
     }
 
@@ -235,6 +274,7 @@ impl AgentProvidersWidget {
             remove_button_state: MouseStateHandle::default(),
             add_model_button_state: MouseStateHandle::default(),
             test_connection_button_state: MouseStateHandle::default(),
+            fetch_models_button_state: MouseStateHandle::default(),
             api_type_chip_states,
             model_rows,
         }
@@ -409,6 +449,199 @@ impl AgentProvidersWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(label_text)
             .with_child(chip_row.finish())
+            .finish()
+    }
+
+    /// Phase 4a. Renders the "Fetched models" modal as a card-style
+    /// panel above the provider cards. Returns `None` when no modal is
+    /// open. The panel hosts the row list, an optional empty/truncation
+    /// caption, and the Select all / Select none / Cancel / Commit
+    /// footer.
+    fn render_fetched_models_modal(
+        &self,
+        modal: &FetchedModelsModalState,
+        providers: &[AgentProvider],
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        // Header label includes the provider name when we can still find
+        // it. If the provider was removed mid-flight we render a generic
+        // header — the modal will be torn down on the next user action.
+        let provider_label = providers
+            .get(modal.provider_index)
+            .map(|p| {
+                if p.name.is_empty() {
+                    "(unnamed provider)".to_string()
+                } else {
+                    p.name.clone()
+                }
+            })
+            .unwrap_or_else(|| "(removed provider)".into());
+        let header_text = format!("Fetched models — {provider_label}");
+        let header_node = Container::new(
+            Text::new(
+                header_text,
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(appearance.theme().active_ui_text_color().into())
+            .finish(),
+        )
+        .with_margin_bottom(8.)
+        .finish();
+
+        let mut column = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(header_node);
+
+        // Caption: empty / truncation / count summary. Plain text, dim.
+        let caption_text = if modal.fetched.is_empty() {
+            Some("Upstream returned 0 models.".to_string())
+        } else if modal.fetched.len() >= FETCH_MODELS_MAX_ENTRIES {
+            Some(format!(
+                "Showing first {} models — narrow your provider's catalog or wait for Phase 4b.",
+                FETCH_MODELS_MAX_ENTRIES
+            ))
+        } else {
+            Some(format!(
+                "{} model(s) returned. {} already on this provider.",
+                modal.fetched.len(),
+                modal.already_added.len()
+            ))
+        };
+        if let Some(text) = caption_text {
+            column = column.with_child(
+                Container::new(
+                    Text::new(text, appearance.ui_font_family(), appearance.ui_font_size())
+                        .with_color(appearance.theme().disabled_ui_text_color().into())
+                        .soft_wrap(true)
+                        .finish(),
+                )
+                .with_margin_bottom(8.)
+                .finish(),
+            );
+        }
+
+        // Row list. Each row is a Secondary-themed button labeled
+        // "[☐/☑] {id}  {display}  {metadata}". Already-added rows
+        // render as a flat Container (no on_click) labeled "✓ {id}".
+        for (row_index, model) in modal.fetched.iter().enumerate() {
+            let is_already = modal.already_added.contains(&model.id);
+            let is_checked = modal.checked.contains(&model.id);
+            let display_part = match model.display_name.as_deref() {
+                Some(name) if name != model.id => format!("  ({name})"),
+                _ => String::new(),
+            };
+            let metadata_part = match (model.context_window, model.max_output_tokens) {
+                (Some(c), Some(o)) => format!("  · {c} ctx · {o} out"),
+                (Some(c), None) => format!("  · {c} ctx"),
+                (None, Some(o)) => format!("  · {o} out"),
+                (None, None) => String::new(),
+            };
+            let row_label = if is_already {
+                format!("✓ {}{display_part}{metadata_part}", model.id)
+            } else if is_checked {
+                format!("☑ {}{display_part}{metadata_part}", model.id)
+            } else {
+                format!("☐ {}{display_part}{metadata_part}", model.id)
+            };
+
+            let row_element: Box<dyn Element> = if is_already {
+                Container::new(
+                    Text::new(row_label, appearance.ui_font_family(), CARD_BUTTON_FONT_SIZE)
+                        .with_color(appearance.theme().disabled_ui_text_color().into())
+                        .finish(),
+                )
+                .with_uniform_padding(CARD_BUTTON_PADDING)
+                .finish()
+            } else {
+                // Bound the per-row mouse-state index by the pre-allocated
+                // pool. Modal.fetched is capped to MAX_ENTRIES by the
+                // helper so we never overrun, but guard defensively.
+                let mouse_state = self
+                    .fetch_modal
+                    .row_states
+                    .get(row_index)
+                    .cloned()
+                    .unwrap_or_default();
+                let model_id = model.id.clone();
+                Self::render_card_button(
+                    row_label,
+                    mouse_state,
+                    AISettingsPageAction::ToggleFetchedModelInModal {
+                        model_id,
+                        checked: !is_checked,
+                    },
+                    appearance,
+                )
+            };
+
+            column = column.with_child(
+                Container::new(row_element)
+                    .with_margin_bottom(2.)
+                    .finish(),
+            );
+        }
+
+        // Footer: [Select all] [Select none] / [Cancel] [Add N models].
+        let select_all_button = Self::render_card_button(
+            "Select all",
+            self.fetch_modal.select_all_state.clone(),
+            AISettingsPageAction::SetAllFetchedModelsChecked { checked: true },
+            appearance,
+        );
+        let select_none_button = Self::render_card_button(
+            "Select none",
+            self.fetch_modal.select_none_state.clone(),
+            AISettingsPageAction::SetAllFetchedModelsChecked { checked: false },
+            appearance,
+        );
+        let cancel_button = Self::render_card_button(
+            "Cancel",
+            self.fetch_modal.cancel_state.clone(),
+            AISettingsPageAction::CancelFetchedAgentProviderModelsModal,
+            appearance,
+        );
+        let commit_label = format!("Add {} models", modal.checked.len());
+        let commit_button = Self::render_card_button(
+            commit_label,
+            self.fetch_modal.commit_state.clone(),
+            AISettingsPageAction::CommitFetchedAgentProviderModels {
+                provider_index: modal.provider_index,
+            },
+            appearance,
+        );
+
+        let left_footer = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(select_all_button)
+            .with_child(
+                Container::new(select_none_button)
+                    .with_margin_left(8.)
+                    .finish(),
+            )
+            .finish();
+        let right_footer = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(cancel_button)
+            .with_child(
+                Container::new(commit_button)
+                    .with_margin_left(8.)
+                    .finish(),
+            )
+            .finish();
+        let footer = Flex::row()
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(left_footer)
+            .with_child(right_footer)
+            .finish();
+        column = column.with_child(Container::new(footer).with_margin_top(10.).finish());
+
+        Container::new(column.finish())
+            .with_background(appearance.theme().surface_1())
+            .with_uniform_padding(12.)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .with_margin_bottom(12.)
             .finish()
     }
 
@@ -664,6 +897,32 @@ impl AgentProvidersWidget {
             AISettingsPageAction::TestAgentProviderConnection { provider_index },
             appearance,
         );
+        // Phase 4a. Tri-state label: Fetching… while in-flight, "Failed" if
+        // the last attempt errored (re-click retries), else "Fetch models".
+        // A truncated failure reason rides along to make the cause readable
+        // without a tooltip.
+        let fetch_models_label = if view.fetch_models_in_flight.contains(&provider_index) {
+            "Fetching…".to_string()
+        } else if let Some(reason) = view.last_fetch_failure.get(&provider_index) {
+            let excerpt: String = reason
+                .trim()
+                .chars()
+                .take(PROBE_FAILED_LABEL_BUDGET)
+                .collect();
+            if excerpt.is_empty() {
+                "✗ Failed".to_string()
+            } else {
+                format!("✗ {excerpt}")
+            }
+        } else {
+            "Fetch models".to_string()
+        };
+        let fetch_models_button = Self::render_card_button(
+            fetch_models_label,
+            card.fetch_models_button_state.clone(),
+            AISettingsPageAction::FetchAgentProviderModels { provider_index },
+            appearance,
+        );
         let remove_button = Self::render_card_button(
             "Remove",
             card.remove_button_state.clone(),
@@ -671,13 +930,19 @@ impl AgentProvidersWidget {
             appearance,
         );
 
-        // Group Add Model + Test connection on the left, Remove on the right
-        // so the destructive action stays separated from the additive ones.
+        // Group additive actions on the left (Add Model, Test connection,
+        // Fetch models), with Remove on the right so the destructive action
+        // stays separated.
         let left_buttons = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(add_model_button)
             .with_child(
                 Container::new(test_connection_button)
+                    .with_margin_left(8.)
+                    .finish(),
+            )
+            .with_child(
+                Container::new(fetch_models_button)
                     .with_margin_left(8.)
                     .finish(),
             )
@@ -788,6 +1053,15 @@ impl SettingsWidget for AgentProvidersWidget {
             .with_child(render_separator(appearance))
             .with_child(header)
             .with_child(description);
+
+        // Phase 4a. Render the "Fetched models" modal at the top of the
+        // widget column when open. Provider cards stay rendered below
+        // for context — there's no Stack/Overlay primitive in this
+        // setting-page layer, so positional precedence is "above cards"
+        // rather than a true z-axis float.
+        if let Some(modal) = view.fetched_models_modal.as_ref() {
+            column.add_child(self.render_fetched_models_modal(modal, &providers, appearance));
+        }
 
         if providers.is_empty() {
             let empty = Container::new(
