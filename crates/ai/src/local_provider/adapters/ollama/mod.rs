@@ -29,10 +29,14 @@ mod request_tests;
 #[cfg(test)]
 #[path = "response_tests.rs"]
 mod response_tests;
+#[cfg(test)]
+#[path = "list_models_response_tests.rs"]
+mod list_models_tests;
 
 use super::{
-    AdapterError, AgentProviderApiType, LocalProviderConfig, LocalProviderInput, ProviderAdapter,
-    StreamDecoder, StreamIds, StreamingFormat, SummarizerError, SummarizerInput,
+    AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
+    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, StreamingFormat, SummarizerError,
+    SummarizerInput,
 };
 
 use request::compose_ollama_chat_request;
@@ -143,6 +147,36 @@ impl ProviderAdapter for OllamaAdapter {
         let url = cfg.ollama_tags_url()?;
         Ok(apply_ollama_headers(http.get(url), cfg.api_key.as_deref()))
     }
+
+    fn build_list_models_request(
+        &self,
+        cfg: &LocalProviderConfig,
+        http: &reqwest::Client,
+        _cursor: Option<&str>,
+    ) -> Result<reqwest::RequestBuilder, AdapterError> {
+        cfg.validate()?;
+        let url = cfg.ollama_tags_url()?;
+        // Ollama is unauthenticated by default — no auth header.
+        Ok(http.get(url))
+    }
+
+    fn parse_list_models_response(
+        &self,
+        body: &str,
+    ) -> Result<ListModelsPage, AdapterError> {
+        let parsed: wire::OllamaTagsResponse = serde_json::from_str(body)?;
+        let models = parsed
+            .models
+            .into_iter()
+            .map(|m| DiscoveredModel {
+                display_name: synthesize_display_name(&m),
+                id: m.name,
+                context_window: None,
+                max_output_tokens: None,
+            })
+            .collect();
+        Ok(ListModelsPage { models, next_cursor: None })
+    }
 }
 
 fn apply_ollama_headers(
@@ -193,5 +227,29 @@ fn build_ollama_summarizer_body(
         messages,
         tools: None,
         options,
+    }
+}
+
+/// Synthesize a `display_name` for an Ollama row from its `details`. Returns
+/// e.g. `"Llama (8B)"` when both `family` and `parameter_size` are present,
+/// or `Some("Llama")` / `Some("8B")` if only one is present, or `None` when
+/// `details` is absent or both fields are empty.
+fn synthesize_display_name(m: &wire::OllamaListedTag) -> Option<String> {
+    let details = m.details.as_ref()?;
+    let family = details.family.as_deref().filter(|s| !s.is_empty());
+    let size = details.parameter_size.as_deref().filter(|s| !s.is_empty());
+    match (family, size) {
+        (Some(f), Some(s)) => Some(format!("{} ({s})", capitalize_first(f))),
+        (Some(f), None) => Some(capitalize_first(f)),
+        (None, Some(s)) => Some(s.to_string()),
+        (None, None) => None,
+    }
+}
+
+fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
 }

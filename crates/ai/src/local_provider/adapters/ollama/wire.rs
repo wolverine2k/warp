@@ -94,6 +94,31 @@ pub struct OllamaOptions {
     pub num_ctx: Option<u32>,
 }
 
+// ---------- /api/tags list-models response ----------
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(super) struct OllamaTagsResponse {
+    #[serde(default)]
+    pub models: Vec<OllamaListedTag>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(super) struct OllamaListedTag {
+    pub name: String,
+    #[serde(default)]
+    pub details: Option<OllamaTagDetails>,
+    // `modified_at`, `size`, `digest` ignored.
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(super) struct OllamaTagDetails {
+    #[serde(default)]
+    pub family: Option<String>,
+    #[serde(default)]
+    pub parameter_size: Option<String>,
+    // `format`, `families`, `quantization_level` ignored.
+}
+
 // ---------- Streaming response (inbound) ----------
 
 /// One NDJSON line from a streaming `/api/chat` response. The final chunk
