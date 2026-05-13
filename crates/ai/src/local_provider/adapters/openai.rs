@@ -152,6 +152,7 @@ impl ProviderAdapter for OpenAiAdapter {
         http: &reqwest::Client,
         _cursor: Option<&str>, // OpenAi is unpaginated; ignore
     ) -> Result<reqwest::RequestBuilder, AdapterError> {
+        cfg.validate()?;
         let url = cfg.models_list_url()?;
         let mut req = http.get(url);
         req = apply_openai_headers(req, cfg); // Authorization: Bearer
