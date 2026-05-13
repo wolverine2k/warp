@@ -225,6 +225,31 @@ pub struct AnthropicErrorEnvelope {
     pub message: String,
 }
 
+// ---------- List-models response (inbound, GET /v1/models) ----------
+
+/// Wire type for Anthropic's `GET /v1/models` paginated response.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(super) struct AnthropicModelsListResponse {
+    #[serde(default)]
+    pub data: Vec<AnthropicListedModel>,
+    #[serde(default)]
+    pub has_more: bool,
+    #[serde(default)]
+    pub last_id: Option<String>,
+}
+
+/// One entry in `AnthropicModelsListResponse::data`.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(super) struct AnthropicListedModel {
+    /// Required — missing `id` is a parse error.
+    pub id: String,
+    /// Human-readable name. Present on all production models; absent on some
+    /// alpha/internal entries.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    // `type` and `created_at` deliberately ignored — Phase 4a doesn't surface them.
+}
+
 // ---------- Non-streaming response (used by the summarizer path) ----------
 
 /// One-shot non-streaming Messages response. Used by `run_summarizer_turn`;

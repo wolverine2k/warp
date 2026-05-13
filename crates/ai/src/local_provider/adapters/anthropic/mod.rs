@@ -24,17 +24,20 @@ mod request_tests;
 #[cfg(test)]
 #[path = "response_tests.rs"]
 mod response_tests;
+#[cfg(test)]
+#[path = "list_models_response_tests.rs"]
+mod list_models_tests;
 
 use super::{
-    AdapterError, AgentProviderApiType, LocalProviderConfig, LocalProviderInput, ProviderAdapter,
-    StreamDecoder, StreamIds, SummarizerError, SummarizerInput,
+    AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
+    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError, SummarizerInput,
 };
 
 use request::{compose_anthropic_messages_request, resolve_max_tokens};
 use response::AnthropicSseDecoder;
 use wire::{
-    AnthropicContentBlock, AnthropicMessage, AnthropicMessageResponse, AnthropicMessagesRequest,
-    AnthropicRole, ResponseContentBlock,
+    AnthropicContentBlock, AnthropicListedModel, AnthropicMessage, AnthropicMessageResponse,
+    AnthropicMessagesRequest, AnthropicModelsListResponse, AnthropicRole, ResponseContentBlock,
 };
 
 /// Anthropic-version pin sent on every request. The 2023-06-01 value is the
@@ -153,6 +156,48 @@ impl ProviderAdapter for AnthropicAdapter {
         cfg.validate()?;
         let url = cfg.anthropic_models_url()?;
         Ok(apply_anthropic_headers(http.get(url), cfg.api_key.as_deref()))
+    }
+
+    fn build_list_models_request(
+        &self,
+        cfg: &LocalProviderConfig,
+        http: &reqwest::Client,
+        cursor: Option<&str>,
+    ) -> Result<reqwest::RequestBuilder, AdapterError> {
+        cfg.validate()?;
+        // Anthropic's list-models endpoint is GET /v1/models — same path the
+        // probe uses. Always append `?limit=100` to reduce round-trips (the
+        // Anthropic default is 20). When paginating, also append `?after_id`.
+        let mut url = cfg.anthropic_models_url()?;
+        {
+            let mut q = url.query_pairs_mut();
+            q.append_pair("limit", "100");
+            if let Some(c) = cursor {
+                q.append_pair("after_id", c);
+            }
+        }
+        Ok(apply_anthropic_headers(http.get(url), cfg.api_key.as_deref()))
+    }
+
+    fn parse_list_models_response(
+        &self,
+        body: &str,
+    ) -> Result<ListModelsPage, AdapterError> {
+        let parsed: AnthropicModelsListResponse = serde_json::from_str(body)?;
+        // `next_cursor` is `Some(last_id)` IFF `has_more: true`. Anthropic
+        // emits `last_id` on the final page too — we must ignore it there.
+        let next_cursor = if parsed.has_more { parsed.last_id } else { None };
+        let models = parsed
+            .data
+            .into_iter()
+            .map(|m: AnthropicListedModel| DiscoveredModel {
+                id: m.id,
+                display_name: m.display_name,
+                context_window: None,
+                max_output_tokens: None,
+            })
+            .collect();
+        Ok(ListModelsPage { models, next_cursor })
     }
 }
 
