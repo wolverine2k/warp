@@ -29,10 +29,13 @@ mod request_tests;
 #[cfg(test)]
 #[path = "response_tests.rs"]
 mod response_tests;
+#[cfg(test)]
+#[path = "list_models_response_tests.rs"]
+mod list_models_tests;
 
 use super::{
-    AdapterError, AgentProviderApiType, LocalProviderConfig, LocalProviderInput, ProviderAdapter,
-    StreamDecoder, StreamIds, SummarizerError, SummarizerInput,
+    AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
+    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError, SummarizerInput,
 };
 
 use request::compose_gemini_request;
@@ -158,6 +161,59 @@ impl ProviderAdapter for GeminiAdapter {
         cfg.validate()?;
         let url = cfg.gemini_models_url()?;
         Ok(apply_gemini_headers(http.get(url), cfg.api_key.as_deref()))
+    }
+
+    fn build_list_models_request(
+        &self,
+        cfg: &LocalProviderConfig,
+        http: &reqwest::Client,
+        cursor: Option<&str>,
+    ) -> Result<reqwest::RequestBuilder, AdapterError> {
+        // Gemini list-models endpoint is GET /v1beta/models. Always pass
+        // ?pageSize=100 to bound per-page round-trips (Gemini default is 50).
+        // Cursor is `pageToken` per Gemini's pagination docs.
+        cfg.validate()?;
+        let mut url = cfg.gemini_models_url()?;
+        {
+            let mut q = url.query_pairs_mut();
+            q.append_pair("pageSize", "100");
+            if let Some(c) = cursor {
+                q.append_pair("pageToken", c);
+            }
+        }
+        Ok(apply_gemini_headers(http.get(url), cfg.api_key.as_deref()))
+    }
+
+    fn parse_list_models_response(
+        &self,
+        body: &str,
+    ) -> Result<ListModelsPage, AdapterError> {
+        let parsed: wire::GeminiModelsListResponse = serde_json::from_str(body)?;
+        let models: Vec<DiscoveredModel> = parsed
+            .models
+            .into_iter()
+            // Filter: only models that support `generateContent` pass.
+            // Removes embedding-only and TTS-only entries.
+            .filter(|m| {
+                m.supported_generation_methods
+                    .iter()
+                    .any(|s| s == "generateContent")
+            })
+            .map(|m| {
+                // Strip the "models/" prefix; keep raw name if absent (defensive).
+                let id = m.name.strip_prefix("models/").unwrap_or(&m.name).to_string();
+                DiscoveredModel {
+                    id,
+                    display_name: m.display_name,
+                    context_window: m.input_token_limit.map(|n| n.min(u32::MAX as u64) as u32),
+                    max_output_tokens: m.output_token_limit.map(|n| n.min(u32::MAX as u64) as u32),
+                }
+            })
+            .collect();
+        Ok(ListModelsPage {
+            models,
+            next_cursor: parsed.next_page_token,
+        })
     }
 }
 

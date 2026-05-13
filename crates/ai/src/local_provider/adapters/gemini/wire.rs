@@ -252,6 +252,36 @@ pub struct GeminiErrorEnvelope {
     pub status: String,
 }
 
+// ---------- List-models response (inbound) ----------
+
+/// Top-level envelope for `GET /v1beta/models`.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(super) struct GeminiModelsListResponse {
+    #[serde(default)]
+    pub models: Vec<GeminiListedModel>,
+    #[serde(default, rename = "nextPageToken")]
+    pub next_page_token: Option<String>,
+}
+
+/// One entry in the `models` array returned by `GET /v1beta/models`.
+/// The `name` field includes a `"models/"` prefix that the parser strips.
+#[derive(Debug, Clone, Deserialize, Default)]
+pub(super) struct GeminiListedModel {
+    /// Full name including `"models/"` prefix; the parser strips it.
+    pub name: String,
+    #[serde(default, rename = "displayName")]
+    pub display_name: Option<String>,
+    #[serde(default, rename = "inputTokenLimit")]
+    pub input_token_limit: Option<u64>,
+    #[serde(default, rename = "outputTokenLimit")]
+    pub output_token_limit: Option<u64>,
+    /// Methods like `"generateContent"`, `"embedContent"`, etc. Defaults to
+    /// empty vec so entries with the field absent are filtered out.
+    #[serde(default, rename = "supportedGenerationMethods")]
+    pub supported_generation_methods: Vec<String>,
+    // `version`, `description` are ignored.
+}
+
 // ---------- Non-streaming response (summarizer path) ----------
 
 /// One-shot non-streaming `:generateContent` response — used by the
