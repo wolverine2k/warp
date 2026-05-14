@@ -13,7 +13,7 @@ use super::wire::WireRoot;
 /// raw wire shape — only the fields Warp's `AgentProviderModel` cares
 /// about, plus the catalog provider id and the `open_weights` flag used
 /// by the Ollama filter rule.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CatalogModel {
     /// Catalog provider id, e.g. "anthropic", "openai". Used by the
     /// api_type filter map to decide which chips to suggest.
