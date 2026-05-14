@@ -66,6 +66,7 @@ unicode-width.workspace = true
 url.workspace = true
 reqwest.workspace = true
 reqwest-eventsource.workspace = true
+tempfile.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
@@ -82,6 +83,7 @@ notify-debouncer-full.workspace = true
 [dev-dependencies]
 filetime = "0.2.25"
 mockito.workspace = true
+serial_test = "3"
 tempfile.workspace = true
 virtual-fs.workspace = true
 warp_core = { workspace = true, features = ["test-util"] }

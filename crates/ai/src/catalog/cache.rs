@@ -90,10 +90,15 @@ impl CatalogCache {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
-            .unwrap_or(0);
+            .unwrap_or(u64::MAX);
         match self.fetched_at {
             None => true,
-            Some(t) => now.saturating_sub(t) > TTL_SECONDS,
+            Some(t) => {
+                if now < t {
+                    return true; // clock went backwards; force refresh
+                }
+                now - t > TTL_SECONDS
+            }
         }
     }
 
@@ -150,10 +155,17 @@ fn cache_path() -> Option<PathBuf> {
 
 /// Write `body` to `path` via a temp-file + rename so a crashed save
 /// can't leave a half-written cache that fails to parse on the next boot.
+/// Uses `tempfile::NamedTempFile` so concurrent writers each get a unique
+/// temp path and don't clobber one another.
 fn atomic_write(path: &Path, body: &str) -> std::io::Result<()> {
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, body)?;
-    std::fs::rename(&tmp, path)
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("no parent dir"))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    use std::io::Write;
+    tmp.write_all(body.as_bytes())?;
+    tmp.persist(path).map_err(|e| e.error)?;
+    Ok(())
 }
 
 #[cfg(test)]

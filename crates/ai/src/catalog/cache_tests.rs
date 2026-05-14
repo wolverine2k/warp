@@ -26,6 +26,7 @@ fn isolated_cache() -> TempDir {
     dir
 }
 
+#[serial_test::serial]
 #[test]
 fn snapshot_default_signals_needs_refresh() {
     let _dir = isolated_cache();
@@ -37,6 +38,7 @@ fn snapshot_default_signals_needs_refresh() {
     assert!(!cache.all().is_empty());
 }
 
+#[serial_test::serial]
 #[test]
 fn replace_with_fresh_marks_not_snapshot_and_not_stale() {
     let _dir = isolated_cache();
@@ -48,6 +50,7 @@ fn replace_with_fresh_marks_not_snapshot_and_not_stale() {
     assert_eq!(cache.lookup("openai", "m1").unwrap().id, "m1");
 }
 
+#[serial_test::serial]
 #[test]
 fn lookup_returns_none_for_unknown_provider_or_id() {
     let _dir = isolated_cache();
