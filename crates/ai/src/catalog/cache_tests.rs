@@ -59,3 +59,16 @@ fn lookup_returns_none_for_unknown_provider_or_id() {
     assert!(cache.lookup("openai", "missing").is_none());
     assert!(cache.lookup("missing", "m1").is_none());
 }
+
+#[serial_test::serial]
+#[test]
+fn baked_in_snapshot_covers_all_active_api_types() {
+    let _dir = isolated_cache();
+    let cache = CatalogCache::load_or_default();
+    let models = cache.all();
+    assert!(models.iter().any(|m| m.catalog_provider == "openai"));
+    assert!(models.iter().any(|m| m.catalog_provider == "anthropic"));
+    assert!(models.iter().any(|m| m.catalog_provider == "google"));
+    assert!(models.iter().any(|m| m.catalog_provider == "deepseek"));
+    assert!(models.iter().any(|m| m.open_weights));
+}

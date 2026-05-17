@@ -1,0 +1,66 @@
+{
+  "openai": {
+    "id": "openai",
+    "name": "OpenAI",
+    "models": {
+      "gpt-4o":      {"id":"gpt-4o","name":"GPT-4o","tool_call":true,"modalities":{"input":["text","image","audio"],"output":["text"]},"limit":{"context":128000,"output":16384}},
+      "gpt-4o-mini": {"id":"gpt-4o-mini","name":"GPT-4o Mini","tool_call":true,"modalities":{"input":["text","image"],"output":["text"]},"limit":{"context":128000,"output":16384}},
+      "gpt-4-turbo": {"id":"gpt-4-turbo","name":"GPT-4 Turbo","tool_call":true,"modalities":{"input":["text","image"],"output":["text"]},"limit":{"context":128000,"output":4096}},
+      "o1":          {"id":"o1","name":"o1","tool_call":true,"reasoning":true,"modalities":{"input":["text","image"],"output":["text"]},"limit":{"context":200000,"output":100000}},
+      "o1-mini":     {"id":"o1-mini","name":"o1 Mini","tool_call":true,"reasoning":true,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":128000,"output":65536}}
+    }
+  },
+  "anthropic": {
+    "id": "anthropic",
+    "name": "Anthropic",
+    "models": {
+      "claude-opus-4-7":       {"id":"claude-opus-4-7","name":"Claude Opus 4.7","tool_call":true,"reasoning":true,"modalities":{"input":["text","image","pdf"],"output":["text"]},"limit":{"context":1000000,"output":128000}},
+      "claude-sonnet-4-6":     {"id":"claude-sonnet-4-6","name":"Claude Sonnet 4.6","tool_call":true,"reasoning":true,"modalities":{"input":["text","image","pdf"],"output":["text"]},"limit":{"context":1000000,"output":128000}},
+      "claude-haiku-4-5":      {"id":"claude-haiku-4-5","name":"Claude Haiku 4.5","tool_call":true,"modalities":{"input":["text","image","pdf"],"output":["text"]},"limit":{"context":200000,"output":8192}},
+      "claude-3-5-sonnet-20241022": {"id":"claude-3-5-sonnet-20241022","name":"Claude 3.5 Sonnet (2024-10-22)","tool_call":true,"modalities":{"input":["text","image","pdf"],"output":["text"]},"limit":{"context":200000,"output":8192}},
+      "claude-3-5-haiku-20241022": {"id":"claude-3-5-haiku-20241022","name":"Claude 3.5 Haiku (2024-10-22)","tool_call":true,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":200000,"output":8192}}
+    }
+  },
+  "google": {
+    "id": "google",
+    "name": "Google",
+    "models": {
+      "gemini-2-pro":      {"id":"gemini-2-pro","name":"Gemini 2 Pro","tool_call":true,"modalities":{"input":["text","image","pdf","audio"],"output":["text"]},"limit":{"context":2000000,"output":8192}},
+      "gemini-2-flash":    {"id":"gemini-2-flash","name":"Gemini 2 Flash","tool_call":true,"modalities":{"input":["text","image","pdf","audio"],"output":["text"]},"limit":{"context":1000000,"output":8192}},
+      "gemini-1.5-pro":    {"id":"gemini-1.5-pro","name":"Gemini 1.5 Pro","tool_call":true,"modalities":{"input":["text","image","pdf","audio"],"output":["text"]},"limit":{"context":2000000,"output":8192}},
+      "gemini-1.5-flash":  {"id":"gemini-1.5-flash","name":"Gemini 1.5 Flash","tool_call":true,"modalities":{"input":["text","image","pdf","audio"],"output":["text"]},"limit":{"context":1000000,"output":8192}}
+    }
+  },
+  "deepseek": {
+    "id": "deepseek",
+    "name": "DeepSeek",
+    "models": {
+      "deepseek-chat":      {"id":"deepseek-chat","name":"DeepSeek Chat","tool_call":true,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":65536,"output":8192}},
+      "deepseek-reasoner":  {"id":"deepseek-reasoner","name":"DeepSeek Reasoner","tool_call":true,"reasoning":true,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":65536,"output":8192}}
+    }
+  },
+  "meta": {
+    "id": "meta",
+    "name": "Meta (Ollama)",
+    "models": {
+      "llama-3.3-70b":  {"id":"llama-3.3-70b","name":"Llama 3.3 70B","tool_call":true,"open_weights":true,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":128000,"output":4096}},
+      "llama-3.1-70b":  {"id":"llama-3.1-70b","name":"Llama 3.1 70B","tool_call":true,"open_weights":true,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":128000,"output":4096}},
+      "llama-3.1-8b":   {"id":"llama-3.1-8b","name":"Llama 3.1 8B","tool_call":true,"open_weights":true,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":128000,"output":4096}}
+    }
+  },
+  "alibaba": {
+    "id": "alibaba",
+    "name": "Alibaba (Ollama)",
+    "models": {
+      "qwen2.5-coder-32b": {"id":"qwen2.5-coder-32b","name":"Qwen 2.5 Coder 32B","tool_call":true,"open_weights":true,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":131072,"output":4096}},
+      "qwen2.5-coder-7b":  {"id":"qwen2.5-coder-7b","name":"Qwen 2.5 Coder 7B","tool_call":true,"open_weights":true,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":131072,"output":4096}}
+    }
+  },
+  "mistral": {
+    "id": "mistral",
+    "name": "Mistral (Ollama)",
+    "models": {
+      "mistral-small":  {"id":"mistral-small","name":"Mistral Small","tool_call":true,"open_weights":true,"modalities":{"input":["text"],"output":["text"]},"limit":{"context":32768,"output":8192}}
+    }
+  }
+}
