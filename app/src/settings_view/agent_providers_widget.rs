@@ -90,6 +90,10 @@ struct ModelRowHandles {
     context_editor: ViewHandle<EditorView>,
     tool_call_chip_state: MouseStateHandle,
     remove_button_state: MouseStateHandle,
+    /// Phase 4b. MouseStateHandles for up to 5 inline quick-add chips
+    /// rendered when the row is empty. Allocated at row-build time so
+    /// render never builds MouseStateHandle::default() inline.
+    quick_add_chip_states: [MouseStateHandle; 5],
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +167,12 @@ impl AgentProvidersWidget {
                 Self::build_provider_card(provider, provider_index, ctx)
             })
             .collect();
+
+        // Phase 4b. Trigger catalog load once at widget-build time so chips
+        // are warm by the time the user clicks "+ Add Model". LoadCatalog is
+        // idempotent against a warm cache so re-builds (e.g. after Add/Remove
+        // provider) don't refetch.
+        ctx.dispatch_typed_action_deferred(AISettingsPageAction::LoadCatalog);
 
         Self {
             add_button_state: MouseStateHandle::default(),
@@ -372,6 +382,13 @@ impl AgentProvidersWidget {
             context_editor,
             tool_call_chip_state: MouseStateHandle::default(),
             remove_button_state: MouseStateHandle::default(),
+            quick_add_chip_states: [
+                MouseStateHandle::default(),
+                MouseStateHandle::default(),
+                MouseStateHandle::default(),
+                MouseStateHandle::default(),
+                MouseStateHandle::default(),
+            ],
         }
     }
 
@@ -647,15 +664,17 @@ impl AgentProvidersWidget {
 
     fn render_model_row(
         provider_index: usize,
+        provider_api_type: AgentProviderApiType,
         model_index: usize,
         model: &AgentProviderModel,
         row: &ModelRowHandles,
+        view: &AISettingsPageView,
         appearance: &Appearance,
     ) -> Box<dyn Element> {
-        let cell = |flex: f32, view: &ViewHandle<EditorView>| -> Box<dyn Element> {
+        let cell = |flex: f32, v: &ViewHandle<EditorView>| -> Box<dyn Element> {
             Expanded::new(
                 flex,
-                Container::new(ChildView::new(view).finish())
+                Container::new(ChildView::new(v).finish())
                     .with_margin_right(MODEL_ROW_GAP)
                     .finish(),
             )
@@ -689,7 +708,7 @@ impl AgentProvidersWidget {
             appearance,
         );
 
-        Flex::row()
+        let row_element: Box<dyn Element> = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(cell(2., &row.name_editor))
             .with_child(cell(2., &row.id_editor))
@@ -700,6 +719,49 @@ impl AgentProvidersWidget {
                     .finish(),
             )
             .with_child(remove_button)
+            .finish();
+
+        if !model.id.trim().is_empty() || !model.name.trim().is_empty() {
+            // Filled row — no chips.
+            return row_element;
+        }
+
+        // Empty row — render up to 5 chip suggestions below.
+        let Some(cache) = view.catalog_cache.as_ref() else {
+            return row_element; // catalog not loaded yet
+        };
+        let candidates =
+            ai::catalog::filter_models_for_api_type(provider_api_type, cache.all());
+        let suggestions: Vec<&ai::catalog::CatalogModel> =
+            candidates.into_iter().take(5).collect();
+        if suggestions.is_empty() {
+            return row_element;
+        }
+
+        let mut chip_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_alignment(MainAxisAlignment::Start);
+        for (i, c) in suggestions.iter().enumerate() {
+            let chip = Self::render_card_button(
+                format!("+ {}", c.name),
+                row.quick_add_chip_states[i].clone(),
+                AISettingsPageAction::QuickAddCatalogModel {
+                    provider_index,
+                    catalog_model_id: c.id.clone(),
+                },
+                appearance,
+            );
+            chip_row = chip_row.with_child(Container::new(chip).with_margin_right(6.).finish());
+        }
+
+        Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(row_element)
+            .with_child(
+                Container::new(chip_row.finish())
+                    .with_margin_top(4.)
+                    .finish(),
+            )
             .finish()
     }
 
@@ -840,9 +902,11 @@ impl AgentProvidersWidget {
                 models_column.add_child(
                     Container::new(Self::render_model_row(
                         provider_index,
+                        provider.api_type,
                         model_index,
                         model,
                         model_row_handles,
+                        view,
                         appearance,
                     ))
                     .with_margin_bottom(MODEL_ROW_GAP)
