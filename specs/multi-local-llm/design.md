@@ -327,7 +327,7 @@ These four changes ship together with the migration helper so users never see a 
 | **3d. DeepSeek adapter** 🧪 code complete | Native DeepSeek (`POST /chat/completions`, OpenAI-compatible wire shape with Bearer auth and `[DONE]` SSE terminator; reuses OpenAI's `chat_completions_url` / `models_list_url` helpers). Phase-3d novelty: `deepseek-reasoner` emits `delta.reasoning_content` alongside `delta.content` — the decoder surfaces it as a distinct `AgentReasoning` proto message. AgentReasoning is dropped from outbound history (API returns HTTP 400 if reasoning_content appears on inbound messages). | new `local_provider/adapters/deepseek/{mod,wire,request,response}.rs` + sibling tests | Live test against `api.deepseek.com` — pending |
 | **4a. /models fetch button** 🧪 code complete | Per-provider one-click model discovery. Adds `build_list_models_request` + `parse_list_models_response` to `ProviderAdapter` (with `UnsupportedApiType` default impls so `OpenAiResp` inherits a graceful "not supported"); a wire-agnostic `fetch_models()` helper with pagination + dedupe + 15s timeout; five new `AISettingsPageAction` variants + three view fields on `AISettingsPageView`; a card-style modal panel rendered above the providers list. See `plan-phase-4a.md`. | new `app/src/ai/agent_providers/fetch_models.rs`, new `app/src/settings_view/fetched_models_modal.rs`, per-adapter `list_models` parsers, edits to `agent_providers_widget.rs` + `ai_page.rs` | Live test against each of the 5 upstreams — pending |
 | **4b. models.dev catalog + quick-add chips** 🧪 code complete | Catalog-driven onboarding (see §13). Inline chips beside the empty "+ Add Model" row plus a "Browse catalog" modal sourced from a cached `https://models.dev/api.json` (7-day TTL, baked-in snapshot fallback). Cross-references 4a's `DiscoveredModel` to pre-fill `context_window`, `max_output_tokens`, and 4c capability flags. | new `crates/ai/src/catalog/{mod,fetch,parse,cache}.rs`, new `app/src/settings_view/catalog_modal.rs`, edits to `agent_providers_widget.rs` + `ai_page.rs` | Live test of fetch + offline fallback + chip auto-fill |
-| **4c. Per-model multimodal capabilities** | Wire the existing `image / pdf / audio: Option<bool>` flags (see §14) into the send path. New `crates/ai/src/capabilities.rs` resolves `Option<bool>` → `bool` per modality via Explicit user → 4b catalog → per-api_type heuristic → conservative-false. Send button blocks with inline error when the resolved capability is `false`. Adds three-state toggle chips per model row. | new `crates/ai/src/capabilities.rs`, edits to the existing pre-send gate and `agent_providers_widget.rs::render_model_row` | Live test per modality per adapter |
+| **4c. Multimodal attachments end-to-end** | Adds attachment support (image / pdf / audio) to BYOP agent mode end-to-end (see §14). **Three sub-phases** because the work spans three distinct subsystems: **4c-1** capabilities resolver + Off/Auto/On toggle chips per model row in settings (no enforcement yet); **4c-2** `AgentAttachment` data model + per-adapter wire shapes (OpenAi content-array, Anthropic image blocks, Gemini inline_data parts, Ollama `images: Vec<base64>`, DeepSeek OpenAi-shape); **4c-3** input-bar file picker + send-time enforcement (resolver gates Send button) + conversation history rendering of attachments. | new `crates/ai/src/capabilities.rs`, new `crates/ai/src/attachments.rs`, per-adapter request-builder edits, new attachment input UI in the agent input bar, edits to `agent_providers_widget.rs::render_model_row` | Live test per modality per adapter |
 | **4d. Dedicated compaction model** | Optional global `agents.compaction.model: Option<LLMId>` setting (see §15). When `Some`, every compaction call dispatches to the named model regardless of conversation primary; falls back to primary on resolve failure. Reuses existing `snapshot_for_request` so cloud agent + BYOP compaction (or vice versa) works without new dispatch primitives. New "Summarization model" dropdown in Settings → AI. | edits to the compaction pipeline + `ai_page.rs` + new `SetCompactionModel` action variant | Live test with cloud agent + BYOP compaction |
 
 The existing `FeatureFlag::LocalLlmProvider` continues to gate the entire feature through all phases.
@@ -408,42 +408,96 @@ Unit tests on `parse_catalog` against a fixture of the live response shape; unit
 
 ---
 
-## 14. Phase 4c — Per-model multimodal capabilities
+## 14. Phase 4c — Multimodal attachments end-to-end
 
-**Goal:** Wire the existing `AgentProviderModel.image / pdf / audio` flags (added in Phase 1b-1) into the attachment send path so a turn carrying an attachment only targets a model that advertises support. Closes the gap where today a user can attach a PDF to a `deepseek-chat` conversation and the upstream returns HTTP 400 with no warning.
+**Goal:** Add attachment support to BYOP agent mode end-to-end — input-bar file picker, per-adapter wire translation, settings-side per-model capability metadata, and a send-time gate that blocks attachments against incapable models. The `AgentProviderModel.image / pdf / audio: Option<bool>` flags (added in Phase 1b-1) are forward-looking metadata today; 4c is the phase that gives them teeth.
 
-### 14.1 Data model — already in place
+**Important scope note (vs. the original §14 design):** Warp's agent input is text-only today. `LocalProviderInput` carries no image/pdf/audio fields, no input-bar UI accepts attachments, and no per-adapter wire code emits content arrays for non-text parts. Phase 4c builds all three from scratch. Because that spans three distinct subsystems (capabilities + wire + UI), 4c is split into three sub-phases that ship independently — mirroring Phase 1b's 1b-1 / 1b-2 / 1b-3 pattern.
 
-`AgentProviderModel` already carries `image: Option<bool>`, `pdf: Option<bool>`, `audio: Option<bool>` with three-state semantics: `Some(true)` = forced on, `Some(false)` = forced off, `None` = "Auto, inferred at runtime." Phase 4c implements the inference and the enforcement; the persistence schema doesn't change.
+### 14.0 Sub-phase split
 
-### 14.2 Auto inference
+| Sub-phase | Owns | Ships value? |
+|---|---|---|
+| **4c-1 — Capabilities resolver + settings chips** | `crates/ai/src/capabilities.rs` (resolver + heuristic table); new `AISettingsPageAction::ToggleAgentProviderModelImage / Pdf / Audio` variants that cycle the `Option<bool>` field Off/Auto/On; render three chips per model row beside the existing `tool_call` chip; unit tests on the resolver. **No send-path enforcement yet** — there's nothing to send. | Modest: settings UI lets users curate capability metadata; the chips visualize the Auto-resolved state via the catalog/heuristic chain. Mostly groundwork for 4c-2 and 4c-3. |
+| **4c-2 — Data model + per-adapter wire** | `AgentAttachment { mime: String, bytes: Vec<u8> }` (or a path-based variant for large files); thread an `Option<Vec<AgentAttachment>>` onto `LocalProviderInput`; per-adapter request-builder updates that translate attachments into the upstream's wire shape: OpenAi `content` array with `image_url` parts (base64 data-URI), Anthropic `content` blocks with `image` source (`type: "base64"`), Gemini `parts` with `inline_data` (base64 + mime), Ollama `images: Vec<base64_string>` on the user message, DeepSeek same as OpenAi. Per-adapter unit tests for each translator + one integration test that builds a fake `AgentAttachment` and confirms the resulting request body matches a fixture. | Adapters can carry attachments end-to-end on the wire even without UI to populate them — useful for programmatic / scripted attachment paths and validates the wire translation. |
+| **4c-3 — Input-bar UI + send-time enforcement + history rendering** | File picker / drag-drop in the agent input bar; attachment chips above the input with remove action; capability resolver wired into the Send button's enabled-state predicate (Send disabled + inline error when any attached file's modality isn't `true` for the active model); conversation history renders image thumbnails / pdf icons inline; conversation persistence (or explicit non-persistence — see §14.7) decision committed. | User-facing payoff: users can attach images/pdfs/audio to agent turns, see them in history, and get a clear error when they pick an incapable model. |
 
-A new `crates/ai/src/capabilities.rs` resolves `Option<bool>` → `bool` per modality, in precedence order:
+Each sub-phase is its own `plan-phase-4c-<n>.md` with its own verification gate and ✅ flip.
+
+### 14.1 Data model
+
+**4c-1 doesn't change the persistence schema.** The existing three-state `image / pdf / audio: Option<bool>` on `AgentProviderModel` is what the settings chips toggle.
+
+**4c-2 introduces the runtime attachment type** in `crates/ai/src/attachments.rs`:
+
+```rust
+pub struct AgentAttachment {
+    pub mime: String,       // e.g. "image/png", "application/pdf", "audio/wav"
+    pub bytes: Vec<u8>,     // raw bytes; base64-encoded by adapters that need it
+    pub display_name: Option<String>,  // for UI history rendering (e.g. "screenshot.png")
+}
+```
+
+`LocalProviderInput` (today in `crates/ai/src/local_provider/request.rs`) gains an optional field:
+
+```rust
+pub attachments: Vec<AgentAttachment>,   // empty Vec = no attachments
+```
+
+**4c-3 decides persistence.** Phase A option: attachments are turn-scoped — they go up to the upstream and into the visible conversation history within the session, but are NOT serialized into the DB conversation rows. Phase B option: persist via blob storage. The 4c-3 plan reaches a decision based on UX testing.
+
+### 14.2 Capability resolver (4c-1)
+
+A new `crates/ai/src/capabilities.rs` exposes `resolve_modality(api_type, model_id, model_setting, catalog) -> bool` for each of image/pdf/audio. Precedence order:
 
 1. **Explicit user setting** — `Some(true)` / `Some(false)` short-circuits.
-2. **Catalog lookup (4b)** — if `(api_type, model_id)` has a catalog entry, use its flag.
+2. **Catalog lookup (4b)** — if `(api_type, model_id)` has a `CatalogModel` entry, use its modality flag.
 3. **Per-api_type heuristic table** — encoded constants: OpenAI's `gpt-4o*` / `gpt-4-turbo*` get image; Claude 3+ gets image+pdf; Gemini gets all three; Ollama matches against a known-multimodal allow-list (`llava-*`, `bakllava-*`, `qwen-vl-*`, …); DeepSeek none.
-4. **Conservative fallback** — unresolved defaults to `false` so the user gets a clear "not supported" error rather than a silent 4xx from the upstream.
+4. **Conservative fallback** — unresolved defaults to `false`.
 
-The resolver lives in `crates/ai/` (not `app/`) so dispatch can call it on the runtime path and so the heuristic table is one location to update when new families ship.
+The resolver lives in `crates/ai/` so 4c-3's pre-send gate (in `app/`) and any future dispatch-side checks can call it on the same precedence chain.
 
-### 14.3 UX — capability toggles in the model row
+### 14.3 Settings UI — capability toggle chips (4c-1)
 
-Each row in `render_model_row` gains three small toggle chips next to the existing `tool_call` toggle: 🖼️ image · 📄 pdf · 🎙️ audio. Each cycles Off / Auto / On on click. The chip label shows the resolved state in dim text when "Auto" — e.g., `"🖼️ Auto (on)"` if the heuristic resolved to `true`. This makes the implicit Auto state inspectable without forcing every user to set every flag.
+Each row in `render_model_row` gains three small toggle chips next to the existing `tool_call` chip: 🖼️ image · 📄 pdf · 🎙️ audio. Each cycles **Off** (`Some(false)`) → **Auto** (`None`) → **On** (`Some(true)`) → Off on click. The chip label shows the resolved state in dim text when "Auto" — e.g., `"🖼️ Auto (on)"` if the heuristic resolved to `true`. This makes the implicit Auto state inspectable without forcing every user to set every flag.
 
-### 14.4 Enforcement — block + inline error
+### 14.4 Per-adapter wire shapes (4c-2)
 
-When the user attaches a file and the selected model's resolved capability for that modality is `false`, the Send button is disabled and an inline error renders next to the input — *"This model doesn't support {modality} attachments. Remove the attachment or pick a different model."* The check runs in the existing pre-send code path (same surface as today's tool-call gating in agent mode); 4c adds a per-modality branch. Dispatch downstream of the gate is unchanged — adapters that already handle multimodal continue to, and adapters that don't never see the attachment because the gate blocks it.
+Each adapter's `build_chat_request` translator gains attachment handling. The five shapes:
 
-### 14.5 Risks
+- **OpenAi / DeepSeek** (`adapters/openai.rs`, `adapters/deepseek/request.rs`): `content` becomes an array when attachments are present — `[{type:"text",text:"…"}, {type:"image_url",image_url:{url:"data:image/png;base64,…"}}]`. Plain string when no attachments (back-compat).
+- **Anthropic** (`adapters/anthropic/request.rs`): `content` blocks — `{type:"image",source:{type:"base64",media_type:"image/png",data:"…"}}` for image; `{type:"document",source:{type:"base64",media_type:"application/pdf",data:"…"}}` for pdf. Audio is not natively supported (omit; emit a runtime warning).
+- **Gemini** (`adapters/gemini/request.rs`): `parts` array — `{inline_data:{mime_type:"image/png",data:"<base64>"}}`.
+- **Ollama** (`adapters/ollama/request.rs`): user message gains an `images: ["<base64>", "<base64>"]` field (image-only — Ollama doesn't natively carry pdf/audio; those modalities are rejected at the gate in 4c-3).
+
+Each translator gets per-modality unit tests against fixtures of the upstream's documented request shape.
+
+### 14.5 Input-bar UI (4c-3)
+
+A new attachment-input row above the agent input editor: file-picker button (📎) plus drag-drop target on the editor surface. Attached files render as removable chips above the input — `[📷 screenshot.png (×)]`. The UI surface is in the existing agent-input-bar view (location confirmed by the 4c-3 plan).
+
+### 14.6 Send-path enforcement (4c-3)
+
+When the user attempts to send a turn carrying attachments, the Send button's enabled-state predicate calls `capabilities::resolve_*` for each attached file's modality against the active model. If any returns `false`, the Send button is disabled and an inline error renders next to the input — *"This model doesn't support {modality} attachments. Remove the attachment or pick a different model."* The check is reactive on model-picker change too — switching to an incapable model with attachments already attached re-evaluates and disables Send.
+
+### 14.7 Conversation history rendering (4c-3)
+
+Image attachments render as inline thumbnails in the conversation transcript; pdf attachments render as a 📄 icon + filename; audio as 🎙️ + filename. Tap-to-expand for images. The 4c-3 plan decides whether the rendered content is loaded from session memory only (4c-2's `AgentAttachment`) or persisted via blob storage for reloads.
+
+### 14.8 Risks
 
 1. **Heuristic-table drift.** New multimodal model families ship faster than constants update. Mitigation: catalog (4b) takes precedence, so as long as models.dev tracks the new family the heuristic doesn't need to.
-2. **False negatives on custom relays.** A user pointing `api_type: OpenAi` at a multimodal-capable relay with a non-OpenAI model id gets the conservative fallback (`false`) and can't attach until they manually flip the toggle. Documented in the chip's "Auto" tooltip.
-3. **Per-modality dispatch correctness.** Each adapter's `build_chat_request` already handles content parts differently — 4c relies on per-adapter shape staying correct. Manual smoke per modality per adapter is part of the gate.
+2. **False negatives on custom relays.** A user pointing `api_type: OpenAi` at a multimodal-capable relay with a non-OpenAI model id gets the conservative fallback (`false`) until they manually flip the toggle. Documented in the chip's "Auto" tooltip.
+3. **Per-adapter content-array compatibility for text-only turns.** OpenAi's wire shape allows either string or array `content`; switching to array form for attachment turns must not regress text-only turns. Each adapter's translator keeps the string form when `attachments.is_empty()`.
+4. **Audio support is sparse.** Most providers (Anthropic, DeepSeek, Ollama) don't support audio natively. 4c-3's gate hides the audio file-picker option entirely for those providers rather than blocking with an error.
+5. **Persistence storage growth.** If 4c-3 chooses to persist attached files in the conversation DB, blob storage can balloon. The 4c-3 plan must include a retention policy.
+6. **Adapter content-array migration breaks `local_provider_integration.rs` fixtures.** Those tests compare exact request-body strings against fixtures. 4c-2 must update the fixtures or gate the content-array translation behind `!attachments.is_empty()`.
 
-### 14.6 Verification gate
+### 14.9 Verification per sub-phase
 
-Unit tests on `capabilities::resolve` covering all three precedence levels per modality; unit tests on the heuristic table; manual smoke: attach image+pdf+audio to a known-capable model and confirm dispatch; attach to a known-incapable model and confirm the Send block fires.
+- **4c-1:** unit tests on `capabilities::resolve_*` covering all four precedence levels per modality; unit tests on the heuristic table; manual settings-UI smoke (each chip cycles Off/Auto/On and persists).
+- **4c-2:** per-adapter request-translator unit tests against fixtures; one integration test per active api_type that builds a turn with an `AgentAttachment` and confirms the resulting request body matches the documented upstream shape.
+- **4c-3:** unit tests on the Send-enabled predicate covering capable / incapable / mixed-modalities cases; manual smoke: attach image+pdf+audio to a known-capable model per adapter and confirm dispatch + transcript rendering; attach to a known-incapable model and confirm the Send block fires.
 
 ---
 
