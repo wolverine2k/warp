@@ -94,6 +94,11 @@ struct ModelRowHandles {
     /// rendered when the row is empty. Allocated at row-build time so
     /// render never builds MouseStateHandle::default() inline.
     quick_add_chip_states: [MouseStateHandle; 5],
+    /// Phase 4c-1. Mouse-state handles for the image / pdf / audio
+    /// capability chips. Allocated at row-build time so render never
+    /// builds MouseStateHandle::default() inline.
+    /// Index 0 = image, 1 = pdf, 2 = audio.
+    capability_chip_states: [MouseStateHandle; 3],
 }
 
 // ---------------------------------------------------------------------------
@@ -440,10 +445,41 @@ impl AgentProvidersWidget {
                 MouseStateHandle::default(),
                 MouseStateHandle::default(),
             ],
+            capability_chip_states: [
+                MouseStateHandle::default(),
+                MouseStateHandle::default(),
+                MouseStateHandle::default(),
+            ],
         }
     }
 
     // ---- Render helpers ------------------------------------------------------
+
+    /// Phase 4c-1. Renders a three-state capability chip (Off / Auto / On).
+    /// The label combines a modality glyph with the current user state and
+    /// (when current is `None`) the resolver-inferred value in dim
+    /// "Auto (on)" / "Auto (off)" form.
+    fn render_capability_chip(
+        glyph: &str,
+        mouse_state: MouseStateHandle,
+        current: Option<bool>,
+        resolved: bool,
+        action: AISettingsPageAction,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let label = match current {
+            Some(true) => format!("{glyph} On"),
+            Some(false) => format!("{glyph} Off"),
+            None => {
+                if resolved {
+                    format!("{glyph} Auto (on)")
+                } else {
+                    format!("{glyph} Auto (off)")
+                }
+            }
+        };
+        Self::render_card_button(label, mouse_state, action, appearance)
+    }
 
     fn render_card_button(
         label: impl Into<String>,
@@ -960,6 +996,66 @@ impl AgentProvidersWidget {
             appearance,
         );
 
+        // Phase 4c-1. Capability chips (image / pdf / audio).
+        let catalog_slice: &[ai::catalog::CatalogModel] = view
+            .catalog_cache
+            .as_ref()
+            .map(|c| c.all())
+            .unwrap_or(&[]);
+
+        let resolved_image = ai::capabilities::resolve_image(
+            provider_api_type,
+            &model.id,
+            model.image,
+            catalog_slice,
+        );
+        let resolved_pdf = ai::capabilities::resolve_pdf(
+            provider_api_type,
+            &model.id,
+            model.pdf,
+            catalog_slice,
+        );
+        let resolved_audio = ai::capabilities::resolve_audio(
+            provider_api_type,
+            &model.id,
+            model.audio,
+            catalog_slice,
+        );
+
+        let image_chip = Self::render_capability_chip(
+            "\u{1f5bc}\u{fe0f}",
+            row.capability_chip_states[0].clone(),
+            model.image,
+            resolved_image,
+            AISettingsPageAction::ToggleAgentProviderModelImage {
+                provider_index,
+                model_index,
+            },
+            appearance,
+        );
+        let pdf_chip = Self::render_capability_chip(
+            "\u{1f4c4}",
+            row.capability_chip_states[1].clone(),
+            model.pdf,
+            resolved_pdf,
+            AISettingsPageAction::ToggleAgentProviderModelPdf {
+                provider_index,
+                model_index,
+            },
+            appearance,
+        );
+        let audio_chip = Self::render_capability_chip(
+            "\u{1f399}\u{fe0f}",
+            row.capability_chip_states[2].clone(),
+            model.audio,
+            resolved_audio,
+            AISettingsPageAction::ToggleAgentProviderModelAudio {
+                provider_index,
+                model_index,
+            },
+            appearance,
+        );
+
         // Remove button
         let remove_button = Self::render_card_button(
             "\u{00d7}",
@@ -981,7 +1077,14 @@ impl AgentProvidersWidget {
                     .with_margin_right(MODEL_ROW_GAP)
                     .finish(),
             )
-            .with_child(remove_button)
+            .with_child(Container::new(image_chip).with_margin_left(6.).finish())
+            .with_child(Container::new(pdf_chip).with_margin_left(6.).finish())
+            .with_child(Container::new(audio_chip).with_margin_left(6.).finish())
+            .with_child(
+                Container::new(remove_button)
+                    .with_margin_left(6.)
+                    .finish(),
+            )
             .finish();
 
         if !model.id.trim().is_empty() || !model.name.trim().is_empty() {
