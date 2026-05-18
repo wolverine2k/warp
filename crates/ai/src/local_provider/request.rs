@@ -68,6 +68,13 @@ pub struct LocalProviderInput {
     /// (not just the current turn), so multi-turn agent loops don't lose
     /// historical tool output to the placeholder backfill.
     pub action_results: std::collections::HashMap<String, String>,
+    /// Phase 4c-2. Attachments carried alongside the user query. Empty
+    /// `Vec` is the default — every existing call site builds one without
+    /// touching this field. Each adapter's request translator reads
+    /// `attachments` and emits the upstream's per-modality wire shape;
+    /// when empty, the translator emits the same text-only request body
+    /// as before Phase 4c-2 (back-compat).
+    pub attachments: Vec<crate::attachments::AgentAttachment>,
     /// Phase B-6: synthetic user-query injections, paired with anchor
     /// task-message ids. For local-provider conversations the warp.dev
     /// server isn't around to echo `Message::UserQuery` back into

@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod api_keys;
+pub mod attachments;
 pub mod aws_credentials;
 pub mod capabilities;
 pub mod llm_id;
