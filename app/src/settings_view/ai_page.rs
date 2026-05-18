@@ -419,6 +419,17 @@ pub struct AISettingsPageView {
     /// Phase 4a: most recent fetch failure per provider index, rendered
     /// inline near the button. Cleared on the next successful fetch.
     pub(super) last_fetch_failure: HashMap<usize, String>,
+    /// Phase 4b. Lazy-loaded model catalog. `None` until the first
+    /// LoadCatalog action lands; populated from disk + the baked-in
+    /// snapshot on the first read, refreshed in the background if stale.
+    pub(super) catalog_cache: Option<ai::catalog::CatalogCache>,
+    /// Phase 4b. Currently-open Browse-catalog modal; mirrors Phase 4a's
+    /// fetched_models_modal pattern.
+    pub(super) catalog_modal:
+        Option<super::catalog_modal::CatalogModalState>,
+    /// Phase 4b. Latest catalog-load failure (HTTP error, parse error,
+    /// etc.). Rendered as a dim caption on the Browse catalog button.
+    pub(super) catalog_load_failure: Option<String>,
     autodetection_denylist_editor: ViewHandle<EditorView>,
     autonomy_dropdown_menu: ViewHandle<Dropdown<AISettingsPageAction>>,
 
@@ -1419,6 +1430,9 @@ impl AISettingsPageView {
             fetched_models_modal: None,
             fetch_models_in_flight: Default::default(),
             last_fetch_failure: Default::default(),
+            catalog_cache: None,
+            catalog_modal: None,
+            catalog_load_failure: None,
             command_execution_allowlist_editor,
             command_execution_denylist_editor,
             command_execution_allowlist_mouse_state_handles,
@@ -2429,6 +2443,56 @@ pub enum AISettingsPageAction {
 
     /// Phase 4a. User clicked Cancel / Esc / Close — discards the modal.
     CancelFetchedAgentProviderModelsModal,
+
+    /// Phase 4b. Lazy-load the catalog on demand. Dispatched by the
+    /// widget the first time any catalog-consuming render path needs
+    /// it (inline chip render or Browse catalog button click). The
+    /// handler kicks off a background `fetch_catalog()` if the cache
+    /// is stale and updates `view.catalog_cache` when it lands.
+    LoadCatalog,
+
+    /// Phase 4b. Force a fresh fetch even if the cache is still warm.
+    /// Dispatched by the "Refresh catalog" button in the modal.
+    RefreshCatalog,
+
+    /// Phase 4b. User clicked an inline quick-add chip in an empty
+    /// "+ Add Model" row. Auto-fills the row's AgentProviderModel
+    /// fields from the catalog entry.
+    QuickAddCatalogModel {
+        provider_index: usize,
+        catalog_model_id: String,
+    },
+
+    /// Phase 4b. User clicked "Browse catalog" on a provider card.
+    /// Opens the modal scoped to that provider.
+    OpenCatalogModal {
+        provider_index: usize,
+    },
+
+    /// Phase 4b. Esc / Cancel / Close — discards the modal.
+    CloseCatalogModal,
+
+    /// Phase 4b. User toggled a single row in the open catalog modal.
+    ToggleCatalogModelInModal {
+        model_id: String,
+        checked: bool,
+    },
+
+    /// Phase 4b. User clicked "This provider" / "All providers" filter.
+    SetCatalogModalFilter {
+        filter: crate::settings_view::catalog_modal::CatalogFilter,
+    },
+
+    /// Phase 4b. User typed in the search input.
+    SetCatalogModalSearch {
+        text: String,
+    },
+
+    /// Phase 4b. User clicked "Add N models" — commits the checked
+    /// catalog rows to the provider's models list.
+    CommitCatalogModelsFromModal {
+        provider_index: usize,
+    },
 }
 
 impl From<&AISettingsPageAction> for LoginGatedFeature {
@@ -3578,6 +3642,196 @@ impl TypedActionView for AISettingsPageView {
 
             AISettingsPageAction::CancelFetchedAgentProviderModelsModal => {
                 self.fetched_models_modal = None;
+                ctx.notify();
+            }
+
+            AISettingsPageAction::LoadCatalog => {
+                // Idempotent: if we already have a non-stale cache, no-op.
+                if let Some(cache) = self.catalog_cache.as_ref() {
+                    if !cache.needs_refresh() {
+                        return;
+                    }
+                } else {
+                    // First-time load: read from disk (or fall back to snapshot).
+                    self.catalog_cache = Some(ai::catalog::CatalogCache::load_or_default());
+                    // load_or_default may already be fresh; check before fetching.
+                    if !self
+                        .catalog_cache
+                        .as_ref()
+                        .map(|c| c.needs_refresh())
+                        .unwrap_or(true)
+                    {
+                        ctx.notify();
+                        return;
+                    }
+                }
+                self.catalog_load_failure = None;
+                ctx.notify();
+
+                let http = reqwest::Client::new();
+                let _ = ctx.spawn(
+                    async move { ai::catalog::fetch_catalog(&http).await },
+                    move |this, outcome, ctx| {
+                        match outcome {
+                            Ok(models) => {
+                                if let Some(cache) = this.catalog_cache.as_mut() {
+                                    cache.replace_with_fresh(models);
+                                }
+                                this.catalog_load_failure = None;
+                            }
+                            Err(e) => {
+                                let msg: String = format!("{e}").chars().take(120).collect();
+                                log::warn!("LoadCatalog: failed — {msg}");
+                                this.catalog_load_failure = Some(msg);
+                            }
+                        }
+                        ctx.notify();
+                    },
+                );
+            }
+
+            AISettingsPageAction::RefreshCatalog => {
+                // Force a fetch regardless of cache age. Reuse the LoadCatalog
+                // body by clearing the timestamp first.
+                if let Some(cache) = self.catalog_cache.as_mut() {
+                    // Mark stale by replacing with a fresh-empty state that
+                    // needs_refresh() will surface as true; the next handler
+                    // body runs the fetch.
+                    *cache = ai::catalog::CatalogCache::load_or_default();
+                }
+                self.handle_action(&AISettingsPageAction::LoadCatalog, ctx);
+            }
+
+            AISettingsPageAction::QuickAddCatalogModel {
+                provider_index,
+                catalog_model_id,
+            } => {
+                let provider_index = *provider_index;
+                let catalog_model_id = catalog_model_id.clone();
+                let Some(cache) = self.catalog_cache.as_ref() else {
+                    log::debug!("QuickAddCatalogModel: catalog not loaded yet, dropping");
+                    return;
+                };
+                // Find the chip's CatalogModel. Catalog provider lookup is by
+                // (api_type → provider_id), then by model id within that subset.
+                let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
+                let Some(provider) = providers.get(provider_index) else {
+                    return;
+                };
+                let candidate_set =
+                    ai::catalog::filter_models_for_api_type(provider.api_type, cache.all());
+                let Some(catalog_model) =
+                    candidate_set.iter().find(|m| m.id == catalog_model_id)
+                else {
+                    log::debug!(
+                        "QuickAddCatalogModel: model {catalog_model_id} not found for api_type \
+                         {:?}, dropping",
+                        provider.api_type
+                    );
+                    return;
+                };
+                let new_row = AgentProviderModel {
+                    name: catalog_model.name.clone(),
+                    id: catalog_model.id.clone(),
+                    context_window: catalog_model.context_window.unwrap_or(0),
+                    max_output_tokens: catalog_model.max_output_tokens.unwrap_or(0),
+                    reasoning: catalog_model.reasoning,
+                    tool_call: catalog_model.tool_call,
+                    image: if catalog_model.image { Some(true) } else { None },
+                    pdf: if catalog_model.pdf { Some(true) } else { None },
+                    audio: if catalog_model.audio { Some(true) } else { None },
+                };
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        p.models.push(new_row);
+                        report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                    }
+                });
+                self.page = Self::build_page(self.active_subpage, ctx);
+                ctx.notify();
+            }
+
+            AISettingsPageAction::OpenCatalogModal { provider_index } => {
+                let provider_index = *provider_index;
+                let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
+                let Some(provider) = providers.get(provider_index) else {
+                    log::warn!(
+                        "OpenCatalogModal: invalid provider_index {provider_index}"
+                    );
+                    return;
+                };
+                let already_added: std::collections::HashSet<String> =
+                    provider.models.iter().map(|m| m.id.clone()).collect();
+                self.catalog_modal = Some(super::catalog_modal::CatalogModalState::new(
+                    provider_index,
+                    provider.id.clone(),
+                    already_added,
+                ));
+                // Kick off a catalog load if we don't have one yet.
+                if self.catalog_cache.is_none() {
+                    self.handle_action(&AISettingsPageAction::LoadCatalog, ctx);
+                }
+                ctx.notify();
+            }
+
+            AISettingsPageAction::CloseCatalogModal => {
+                self.catalog_modal = None;
+                ctx.notify();
+            }
+
+            AISettingsPageAction::ToggleCatalogModelInModal { model_id, checked } => {
+                if let Some(modal) = self.catalog_modal.as_mut() {
+                    modal.toggle(model_id, *checked);
+                    ctx.notify();
+                }
+            }
+
+            AISettingsPageAction::SetCatalogModalFilter { filter } => {
+                if let Some(modal) = self.catalog_modal.as_mut() {
+                    modal.set_filter(*filter);
+                    ctx.notify();
+                }
+            }
+
+            AISettingsPageAction::SetCatalogModalSearch { text } => {
+                if let Some(modal) = self.catalog_modal.as_mut() {
+                    modal.set_search(text.clone());
+                    ctx.notify();
+                }
+            }
+
+            AISettingsPageAction::CommitCatalogModelsFromModal { provider_index } => {
+                let provider_index = *provider_index;
+                let Some(modal) = self.catalog_modal.take() else {
+                    return;
+                };
+                if modal.provider_index != provider_index {
+                    return;
+                }
+                let Some(cache) = self.catalog_cache.as_ref() else {
+                    return;
+                };
+                let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
+                let Some(provider) = providers.get(provider_index) else {
+                    return;
+                };
+                let candidate_set =
+                    ai::catalog::filter_models_for_api_type(provider.api_type, cache.all());
+                let candidate_iter = candidate_set.iter().copied();
+                let rows = modal.committed_rows(candidate_iter);
+                if rows.is_empty() {
+                    ctx.notify();
+                    return;
+                }
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        p.models.extend(rows);
+                        report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                    }
+                });
+                self.page = Self::build_page(self.active_subpage, ctx);
                 ctx.notify();
             }
 
