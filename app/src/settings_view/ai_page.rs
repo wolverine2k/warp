@@ -2414,6 +2414,25 @@ pub enum AISettingsPageAction {
         model_index: usize,
     },
 
+    /// Phase 4c-1. Cycle the model's `image: Option<bool>` field through
+    /// Off (`Some(false)`) → Auto (`None`) → On (`Some(true)`) → Off.
+    ToggleAgentProviderModelImage {
+        provider_index: usize,
+        model_index: usize,
+    },
+
+    /// Phase 4c-1. Same as `ToggleAgentProviderModelImage` for `pdf`.
+    ToggleAgentProviderModelPdf {
+        provider_index: usize,
+        model_index: usize,
+    },
+
+    /// Phase 4c-1. Same as `ToggleAgentProviderModelImage` for `audio`.
+    ToggleAgentProviderModelAudio {
+        provider_index: usize,
+        model_index: usize,
+    },
+
     /// Phase 4a. User clicked the "Fetch models" button on a provider
     /// card. Kicks off an async `fetch_models()` call; the resolve logic
     /// runs inline in the spawn callback and either opens the modal or
@@ -2502,6 +2521,19 @@ impl From<&AISettingsPageAction> for LoginGatedFeature {
             AttemptLoginGatedUpgrade => "Upgrade AI Usage",
             _ => "Unknown reason",
         }
+    }
+}
+
+/// Phase 4c-1. Three-state cycle for capability chips:
+///   None (Auto) → Some(true) (On) → Some(false) (Off) → None (Auto) …
+///
+/// The ordering matches the chip UX: clicking through is
+/// "indeterminate" → "explicit on" → "explicit off" → "indeterminate."
+fn cycle_capability_state(current: Option<bool>) -> Option<bool> {
+    match current {
+        None => Some(true),
+        Some(true) => Some(false),
+        Some(false) => None,
     }
 }
 
@@ -3951,6 +3983,60 @@ impl TypedActionView for AISettingsPageView {
                     if let Some(p) = providers.get_mut(provider_index) {
                         if let Some(m) = p.models.get_mut(model_index) {
                             m.tool_call = !m.tool_call;
+                            report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                        }
+                    }
+                });
+                ctx.notify();
+            }
+
+            AISettingsPageAction::ToggleAgentProviderModelImage {
+                provider_index,
+                model_index,
+            } => {
+                let provider_index = *provider_index;
+                let model_index = *model_index;
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        if let Some(m) = p.models.get_mut(model_index) {
+                            m.image = cycle_capability_state(m.image);
+                            report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                        }
+                    }
+                });
+                ctx.notify();
+            }
+
+            AISettingsPageAction::ToggleAgentProviderModelPdf {
+                provider_index,
+                model_index,
+            } => {
+                let provider_index = *provider_index;
+                let model_index = *model_index;
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        if let Some(m) = p.models.get_mut(model_index) {
+                            m.pdf = cycle_capability_state(m.pdf);
+                            report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                        }
+                    }
+                });
+                ctx.notify();
+            }
+
+            AISettingsPageAction::ToggleAgentProviderModelAudio {
+                provider_index,
+                model_index,
+            } => {
+                let provider_index = *provider_index;
+                let model_index = *model_index;
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        if let Some(m) = p.models.get_mut(model_index) {
+                            m.audio = cycle_capability_state(m.audio);
                             report_if_error!(settings.agent_providers.set_value(providers, ctx));
                         }
                     }
