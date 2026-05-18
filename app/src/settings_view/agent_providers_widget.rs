@@ -110,6 +110,8 @@ struct ProviderCardHandles {
     /// Phase 4a. Mouse state for the "Fetch models" button rendered next
     /// to "Test connection" in the card footer.
     fetch_models_button_state: MouseStateHandle,
+    /// Phase 4b. Mouse state for the "Browse catalog" footer button.
+    browse_catalog_button_state: MouseStateHandle,
     api_type_chip_states: HashMap<AgentProviderApiType, MouseStateHandle>,
     model_rows: Vec<ModelRowHandles>,
 }
@@ -130,6 +132,11 @@ pub(super) struct AgentProvidersWidget {
     /// and unit-testable; the widget rebuilds independently of modal
     /// open/close cycles.
     fetch_modal: FetchModalHandles,
+    /// Phase 4b. Mouse-state handles and search editor for the "Browse
+    /// catalog" modal. Pre-allocated at widget construction for the same
+    /// reason as `fetch_modal`. Row pool sized to 200 — the hard render
+    /// cap in `render_catalog_modal`.
+    catalog_modal: CatalogModalHandles,
 }
 
 /// Mouse-state handles for the "Fetched models" modal. `row_states` is
@@ -157,6 +164,48 @@ impl FetchModalHandles {
     }
 }
 
+/// Mouse-state handles and search editor for the "Browse catalog" modal.
+/// `row_states` is sized to 200 — the hard render cap in
+/// `render_catalog_modal` — so positional indexing never overruns the pool.
+struct CatalogModalHandles {
+    refresh_state: MouseStateHandle,
+    filter_this_provider_state: MouseStateHandle,
+    filter_all_providers_state: MouseStateHandle,
+    cancel_state: MouseStateHandle,
+    commit_state: MouseStateHandle,
+    row_states: Vec<MouseStateHandle>,
+    search_editor: ViewHandle<EditorView>,
+}
+
+impl CatalogModalHandles {
+    fn new(ctx: &mut ViewContext<AISettingsPageView>) -> Self {
+        let search_editor = ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::handle(ctx).as_ref(ctx);
+            let options = single_line_editor_options(appearance, false);
+            let mut editor = EditorView::single_line(options, ctx);
+            editor.set_placeholder_text("Search by id or name", ctx);
+            editor
+        });
+        ctx.subscribe_to_view(&search_editor, move |_, editor, event, ctx| {
+            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                let text = editor.as_ref(ctx).buffer_text(ctx);
+                ctx.dispatch_typed_action_deferred(
+                    AISettingsPageAction::SetCatalogModalSearch { text },
+                );
+            }
+        });
+        Self {
+            refresh_state: MouseStateHandle::default(),
+            filter_this_provider_state: MouseStateHandle::default(),
+            filter_all_providers_state: MouseStateHandle::default(),
+            cancel_state: MouseStateHandle::default(),
+            commit_state: MouseStateHandle::default(),
+            row_states: (0..200).map(|_| MouseStateHandle::default()).collect(),
+            search_editor,
+        }
+    }
+}
+
 impl AgentProvidersWidget {
     pub(super) fn new(ctx: &mut ViewContext<AISettingsPageView>) -> Self {
         let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
@@ -178,6 +227,7 @@ impl AgentProvidersWidget {
             add_button_state: MouseStateHandle::default(),
             cards,
             fetch_modal: FetchModalHandles::new(),
+            catalog_modal: CatalogModalHandles::new(ctx),
         }
     }
 
@@ -285,6 +335,7 @@ impl AgentProvidersWidget {
             add_model_button_state: MouseStateHandle::default(),
             test_connection_button_state: MouseStateHandle::default(),
             fetch_models_button_state: MouseStateHandle::default(),
+            browse_catalog_button_state: MouseStateHandle::default(),
             api_type_chip_states,
             model_rows,
         }
@@ -662,6 +713,218 @@ impl AgentProvidersWidget {
             .finish()
     }
 
+    /// Phase 4b. Renders the "Browse catalog" modal as a card-style panel
+    /// above the provider cards. Mirrors `render_fetched_models_modal` from
+    /// Phase 4a: a header, filter chip row + Refresh button, search input,
+    /// match-count caption, scrollable row list (up to 200 rows), and a
+    /// Cancel / Add N models footer.
+    fn render_catalog_modal(
+        &self,
+        modal: &super::catalog_modal::CatalogModalState,
+        providers: &[AgentProvider],
+        catalog: &[ai::catalog::CatalogModel],
+        catalog_load_failure: Option<&String>,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let provider = providers.get(modal.provider_index);
+        let api_type = provider.map(|p| p.api_type);
+        let provider_label = provider
+            .map(|p| {
+                if p.name.is_empty() {
+                    "(unnamed provider)".to_string()
+                } else {
+                    p.name.clone()
+                }
+            })
+            .unwrap_or_else(|| "(removed provider)".into());
+        let header_node = Container::new(
+            Text::new(
+                format!("Browse catalog — {provider_label}"),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(appearance.theme().active_ui_text_color().into())
+            .finish(),
+        )
+        .with_margin_bottom(8.)
+        .finish();
+
+        // Filter + search the catalog rows for the current modal state.
+        let filtered: Vec<&ai::catalog::CatalogModel> = match modal.filter {
+            super::catalog_modal::CatalogFilter::ThisProvider => match api_type {
+                Some(at) => ai::catalog::filter_models_for_api_type(at, catalog),
+                None => Vec::new(),
+            },
+            super::catalog_modal::CatalogFilter::AllProviders => catalog.iter().collect(),
+        };
+        let filtered: Vec<&ai::catalog::CatalogModel> = filtered
+            .into_iter()
+            .filter(|m| modal.matches_search(m))
+            .collect();
+
+        // Build the filter chip row.
+        let filter_chip = |label: &str, active: bool, state: MouseStateHandle, filter| {
+            let prefix = if active { "● " } else { "" };
+            Self::render_card_button(
+                format!("{prefix}{label}"),
+                state,
+                AISettingsPageAction::SetCatalogModalFilter { filter },
+                appearance,
+            )
+        };
+        let filter_row = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(filter_chip(
+                "This provider",
+                modal.filter == super::catalog_modal::CatalogFilter::ThisProvider,
+                self.catalog_modal.filter_this_provider_state.clone(),
+                super::catalog_modal::CatalogFilter::ThisProvider,
+            ))
+            .with_child(
+                Container::new(filter_chip(
+                    "All providers",
+                    modal.filter == super::catalog_modal::CatalogFilter::AllProviders,
+                    self.catalog_modal.filter_all_providers_state.clone(),
+                    super::catalog_modal::CatalogFilter::AllProviders,
+                ))
+                .with_margin_left(6.)
+                .finish(),
+            )
+            .with_child(
+                Container::new(Self::render_card_button(
+                    "Refresh",
+                    self.catalog_modal.refresh_state.clone(),
+                    AISettingsPageAction::RefreshCatalog,
+                    appearance,
+                ))
+                .with_margin_left(12.)
+                .finish(),
+            )
+            .finish();
+
+        // Search input.
+        let search_input =
+            Container::new(ChildView::new(&self.catalog_modal.search_editor).finish())
+                .with_margin_top(8.)
+                .with_margin_bottom(8.)
+                .finish();
+
+        // Caption: counts + load-failure indicator.
+        let mut caption_segments = vec![format!("{} model(s) match", filtered.len())];
+        if !modal.already_added.is_empty() {
+            caption_segments.push(format!(
+                "{} already on this provider",
+                modal.already_added.len()
+            ));
+        }
+        if let Some(reason) = catalog_load_failure {
+            let excerpt: String = reason.chars().take(80).collect();
+            caption_segments.push(format!("(load failed: {excerpt})"));
+        }
+        let caption_node = Container::new(
+            Text::new(
+                caption_segments.join(" · "),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(appearance.theme().disabled_ui_text_color().into())
+            .soft_wrap(true)
+            .finish(),
+        )
+        .with_margin_bottom(8.)
+        .finish();
+
+        // Row list.
+        let mut column = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(header_node)
+            .with_child(filter_row)
+            .with_child(search_input)
+            .with_child(caption_node);
+
+        for (row_index, model) in filtered.iter().take(200).enumerate() {
+            let is_already = modal.already_added.contains(&model.id);
+            let is_checked = modal.checked.contains(&model.id);
+            let metadata = match (model.context_window, model.max_output_tokens) {
+                (Some(c), Some(o)) => format!("  · {c} ctx · {o} out"),
+                (Some(c), None) => format!("  · {c} ctx"),
+                (None, Some(o)) => format!("  · {o} out"),
+                (None, None) => String::new(),
+            };
+            let label = if is_already {
+                format!("✓ {} ({}){metadata}", model.id, model.catalog_provider)
+            } else if is_checked {
+                format!("☑ {} ({}){metadata}", model.id, model.catalog_provider)
+            } else {
+                format!("☐ {} ({}){metadata}", model.id, model.catalog_provider)
+            };
+
+            let row_element: Box<dyn Element> = if is_already {
+                Container::new(
+                    Text::new(label, appearance.ui_font_family(), CARD_BUTTON_FONT_SIZE)
+                        .with_color(appearance.theme().disabled_ui_text_color().into())
+                        .finish(),
+                )
+                .with_uniform_padding(CARD_BUTTON_PADDING)
+                .finish()
+            } else {
+                let state = self
+                    .catalog_modal
+                    .row_states
+                    .get(row_index)
+                    .cloned()
+                    .unwrap_or_default();
+                let model_id = model.id.clone();
+                Self::render_card_button(
+                    label,
+                    state,
+                    AISettingsPageAction::ToggleCatalogModelInModal {
+                        model_id,
+                        checked: !is_checked,
+                    },
+                    appearance,
+                )
+            };
+
+            column = column.with_child(
+                Container::new(row_element)
+                    .with_margin_bottom(2.)
+                    .finish(),
+            );
+        }
+
+        // Footer: [Cancel] [Add N models] — right-aligned.
+        let cancel_button = Self::render_card_button(
+            "Cancel",
+            self.catalog_modal.cancel_state.clone(),
+            AISettingsPageAction::CloseCatalogModal,
+            appearance,
+        );
+        let commit_label = format!("Add {} models", modal.checked.len());
+        let commit_button = Self::render_card_button(
+            commit_label,
+            self.catalog_modal.commit_state.clone(),
+            AISettingsPageAction::CommitCatalogModelsFromModal {
+                provider_index: modal.provider_index,
+            },
+            appearance,
+        );
+        let footer = Flex::row()
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(cancel_button)
+            .with_child(Container::new(commit_button).with_margin_left(8.).finish())
+            .finish();
+        column = column.with_child(Container::new(footer).with_margin_top(10.).finish());
+
+        Container::new(column.finish())
+            .with_background(appearance.theme().surface_1())
+            .with_uniform_padding(12.)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .with_margin_bottom(12.)
+            .finish()
+    }
+
     fn render_model_row(
         provider_index: usize,
         provider_api_type: AgentProviderApiType,
@@ -987,6 +1250,12 @@ impl AgentProvidersWidget {
             AISettingsPageAction::FetchAgentProviderModels { provider_index },
             appearance,
         );
+        let browse_catalog_button = Self::render_card_button(
+            "Browse catalog",
+            card.browse_catalog_button_state.clone(),
+            AISettingsPageAction::OpenCatalogModal { provider_index },
+            appearance,
+        );
         let remove_button = Self::render_card_button(
             "Remove",
             card.remove_button_state.clone(),
@@ -995,8 +1264,8 @@ impl AgentProvidersWidget {
         );
 
         // Group additive actions on the left (Add Model, Test connection,
-        // Fetch models), with Remove on the right so the destructive action
-        // stays separated.
+        // Fetch models, Browse catalog), with Remove on the right so the
+        // destructive action stays separated.
         let left_buttons = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(add_model_button)
@@ -1007,6 +1276,11 @@ impl AgentProvidersWidget {
             )
             .with_child(
                 Container::new(fetch_models_button)
+                    .with_margin_left(8.)
+                    .finish(),
+            )
+            .with_child(
+                Container::new(browse_catalog_button)
                     .with_margin_left(8.)
                     .finish(),
             )
@@ -1125,6 +1399,24 @@ impl SettingsWidget for AgentProvidersWidget {
         // rather than a true z-axis float.
         if let Some(modal) = view.fetched_models_modal.as_ref() {
             column.add_child(self.render_fetched_models_modal(modal, &providers, appearance));
+        }
+
+        // Phase 4b. Render the "Browse catalog" modal immediately after the
+        // 4a modal slot. Both can be open independently (different actions
+        // open them), but in practice only one will be active at a time.
+        if let Some(modal) = view.catalog_modal.as_ref() {
+            let catalog: &[ai::catalog::CatalogModel] = view
+                .catalog_cache
+                .as_ref()
+                .map(|c| c.all())
+                .unwrap_or(&[]);
+            column.add_child(self.render_catalog_modal(
+                modal,
+                &providers,
+                catalog,
+                view.catalog_load_failure.as_ref(),
+                appearance,
+            ));
         }
 
         if providers.is_empty() {
