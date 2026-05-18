@@ -78,6 +78,33 @@ pub enum AnthropicContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         is_error: Option<bool>,
     },
+    /// Phase 4c-2. Inline image attachment. Anthropic wire shape:
+    /// `{"type":"image","source":{"type":"base64","media_type":"image/png","data":"..."}}`
+    #[serde(rename = "image")]
+    Image { source: AnthropicMediaSource },
+    /// Phase 4c-2. Inline document attachment (PDF). Anthropic wire shape:
+    /// `{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"..."}}`
+    #[serde(rename = "document")]
+    Document { source: AnthropicMediaSource },
+}
+
+/// Phase 4c-2. Shared source descriptor for `Image` and `Document` content
+/// blocks. Only `base64` source type is wired today; the enum leaves room
+/// for a future `url` variant without breaking wire compatibility.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AnthropicMediaSource {
+    #[serde(rename = "type")]
+    pub source_type: AnthropicSourceType,
+    pub media_type: String,
+    /// Raw base64-encoded bytes — no `data:...;base64,` URI prefix.
+    pub data: String,
+}
+
+/// Phase 4c-2. Source type discriminator for `AnthropicMediaSource`.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AnthropicSourceType {
+    Base64,
 }
 
 #[derive(Debug, Clone, Serialize)]

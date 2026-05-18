@@ -614,6 +614,107 @@ fn full_multi_turn_loop_round_trip() {
     assert!(!tools.is_empty());
 }
 
+// ---- Phase 4c-2: attachment blocks ----
+
+use crate::attachments::AgentAttachment;
+
+fn png_attachment() -> AgentAttachment {
+    AgentAttachment {
+        mime: "image/png".into(),
+        bytes: vec![0x89, 0x50, 0x4e, 0x47],
+        display_name: Some("test.png".into()),
+    }
+}
+
+fn pdf_attachment() -> AgentAttachment {
+    AgentAttachment {
+        mime: "application/pdf".into(),
+        bytes: vec![0x25, 0x50, 0x44, 0x46],
+        display_name: Some("test.pdf".into()),
+    }
+}
+
+#[test]
+fn text_only_turn_emits_just_text_block() {
+    let input = LocalProviderInput {
+        user_query: Some("hello".into()),
+        attachments: Vec::new(),
+        ..Default::default()
+    };
+    let req = compose_anthropic_messages_request(&input, &cfg());
+    assert_eq!(req.messages.len(), 1);
+    let user = &req.messages[0];
+    assert_eq!(user.role, AnthropicRole::User);
+    // Only the text block — no Image or Document blocks.
+    assert_eq!(user.content.len(), 1);
+    assert!(matches!(&user.content[0], AnthropicContentBlock::Text { text } if text == "hello"));
+}
+
+#[test]
+fn image_attachment_appends_image_block() {
+    let input = LocalProviderInput {
+        user_query: Some("what is this?".into()),
+        attachments: vec![png_attachment()],
+        ..Default::default()
+    };
+    let req = compose_anthropic_messages_request(&input, &cfg());
+    let user = req.messages.iter().find(|m| m.role == AnthropicRole::User).unwrap();
+    // text block first, then image block.
+    assert_eq!(user.content.len(), 2);
+    assert!(matches!(&user.content[0], AnthropicContentBlock::Text { .. }));
+    assert!(matches!(
+        &user.content[1],
+        AnthropicContentBlock::Image { source } if source.media_type == "image/png"
+    ));
+    // Verify the wire serialization shape.
+    let v = serde_json::to_value(&user.content[1]).unwrap();
+    assert_eq!(v["type"], "image");
+    assert_eq!(v["source"]["type"], "base64");
+    assert_eq!(v["source"]["media_type"], "image/png");
+    assert!(!v["source"]["data"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn pdf_attachment_emits_document_block() {
+    let input = LocalProviderInput {
+        user_query: Some("summarize this pdf".into()),
+        attachments: vec![pdf_attachment()],
+        ..Default::default()
+    };
+    let req = compose_anthropic_messages_request(&input, &cfg());
+    let user = req.messages.iter().find(|m| m.role == AnthropicRole::User).unwrap();
+    assert_eq!(user.content.len(), 2);
+    assert!(matches!(&user.content[0], AnthropicContentBlock::Text { .. }));
+    assert!(matches!(
+        &user.content[1],
+        AnthropicContentBlock::Document { source } if source.media_type == "application/pdf"
+    ));
+    // Verify the wire serialization shape.
+    let v = serde_json::to_value(&user.content[1]).unwrap();
+    assert_eq!(v["type"], "document");
+    assert_eq!(v["source"]["type"], "base64");
+    assert_eq!(v["source"]["media_type"], "application/pdf");
+}
+
+#[test]
+fn audio_attachment_dropped_no_extra_blocks() {
+    let audio = AgentAttachment {
+        mime: "audio/wav".into(),
+        bytes: vec![0x52, 0x49, 0x46, 0x46],
+        display_name: None,
+    };
+    let input = LocalProviderInput {
+        user_query: Some("transcribe this".into()),
+        attachments: vec![audio],
+        ..Default::default()
+    };
+    let req = compose_anthropic_messages_request(&input, &cfg());
+    let user = req.messages.iter().find(|m| m.role == AnthropicRole::User).unwrap();
+    // Audio is dropped; only the text block remains.
+    assert_eq!(user.content.len(), 1);
+    assert!(matches!(&user.content[0], AnthropicContentBlock::Text { text } if text == "transcribe this"));
+}
+
 // ---- model field ----
 
 #[test]

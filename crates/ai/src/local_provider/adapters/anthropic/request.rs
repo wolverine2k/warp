@@ -34,8 +34,8 @@ use std::collections::{HashMap, HashSet};
 use warp_multi_agent_api as api;
 
 use super::wire::{
-    AnthropicContentBlock, AnthropicMessage, AnthropicMessagesRequest, AnthropicRole,
-    AnthropicToolChoice,
+    AnthropicContentBlock, AnthropicMediaSource, AnthropicMessage, AnthropicMessagesRequest,
+    AnthropicRole, AnthropicSourceType, AnthropicToolChoice,
 };
 use crate::local_provider::{
     compaction,
@@ -116,6 +116,52 @@ pub fn compose_anthropic_messages_request(
 
     if let Some(q) = input.user_query.as_deref() {
         entries.push(RoleAndBlocks::user_text(q));
+    }
+
+    // Phase 4c-2: append per-attachment content blocks to the user turn.
+    // Only image/* and application/pdf are supported; audio/* and other
+    // mimes are dropped with a warning (Anthropic's API doesn't natively
+    // accept them at this writing).
+    if !input.attachments.is_empty() {
+        let mut attachment_blocks: Vec<AnthropicContentBlock> = Vec::new();
+        for attachment in &input.attachments {
+            if attachment.is_image() {
+                attachment_blocks.push(AnthropicContentBlock::Image {
+                    source: AnthropicMediaSource {
+                        source_type: AnthropicSourceType::Base64,
+                        media_type: attachment.mime.clone(),
+                        data: crate::attachments::encode_base64(&attachment.bytes),
+                    },
+                });
+            } else if attachment.is_pdf() {
+                attachment_blocks.push(AnthropicContentBlock::Document {
+                    source: AnthropicMediaSource {
+                        source_type: AnthropicSourceType::Base64,
+                        media_type: "application/pdf".into(),
+                        data: crate::attachments::encode_base64(&attachment.bytes),
+                    },
+                });
+            } else {
+                log::warn!(
+                    "Anthropic adapter: dropping unsupported attachment mime {} \
+                     (only image/* and application/pdf are supported on this api_type)",
+                    attachment.mime
+                );
+            }
+        }
+        if !attachment_blocks.is_empty() {
+            // Merge into the last user entry when one exists; otherwise
+            // create a new user entry for the attachment blocks alone.
+            match entries.last_mut() {
+                Some(last) if last.role == AnthropicRole::User => {
+                    last.blocks.extend(attachment_blocks);
+                }
+                _ => entries.push(RoleAndBlocks {
+                    role: AnthropicRole::User,
+                    blocks: attachment_blocks,
+                }),
+            }
+        }
     }
 
     // Splice missing tool_result blocks **before** merging so per-turn
