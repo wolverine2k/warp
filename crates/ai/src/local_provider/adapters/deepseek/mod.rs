@@ -213,7 +213,11 @@ fn build_deepseek_summarizer_body(
             };
             Some(DeepSeekChatMessage {
                 role,
-                content: msg.content.clone(),
+                content: msg
+                    .content
+                    .as_ref()
+                    .and_then(|c| c.as_text())
+                    .map(|s| s.to_string()),
                 tool_calls: None,
                 tool_call_id: None,
             })

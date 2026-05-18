@@ -618,13 +618,7 @@ fn gemini_cfg() -> LocalProviderConfig {
 }
 
 fn chat_msg(role: Role, text: &str) -> ChatMessage {
-    ChatMessage {
-        role,
-        content: Some(text.into()),
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    }
+    ChatMessage::text(role, text)
 }
 
 // ---- 19. gemini_adapter_chat_request_url_and_x_goog_api_key_header ----

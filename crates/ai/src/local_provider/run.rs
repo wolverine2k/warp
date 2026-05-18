@@ -643,21 +643,9 @@ pub fn build_summarizer_messages(
 ) -> Vec<ChatMessage> {
     let mut out: Vec<ChatMessage> = Vec::with_capacity(history.len() + 2);
     if let Some(sys) = system_prompt {
-        out.push(ChatMessage {
-            role: Role::System,
-            content: Some(sys.to_string()),
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        });
+        out.push(ChatMessage::text(Role::System, sys));
     }
     out.extend(history);
-    out.push(ChatMessage {
-        role: Role::User,
-        content: Some(user_prompt),
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    });
+    out.push(ChatMessage::text(Role::User, user_prompt));
     out
 }

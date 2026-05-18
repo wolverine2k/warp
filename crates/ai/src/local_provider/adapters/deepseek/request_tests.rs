@@ -554,13 +554,7 @@ fn http_client() -> reqwest::Client {
 }
 
 fn chat_msg(role: Role, text: &str) -> ChatMessage {
-    ChatMessage {
-        role,
-        content: Some(text.into()),
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    }
+    ChatMessage::text(role, text)
 }
 
 // ---- 1. deepseek_adapter_chat_request_url_and_bearer_header ----

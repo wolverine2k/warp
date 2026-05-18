@@ -204,7 +204,11 @@ pub fn apply_prune(
             None => continue,
         };
         if prune_set.contains(id) {
-            m.content = Some(PRUNED_TOOL_OUTPUT_PLACEHOLDER.to_string());
+            m.content = Some(
+                crate::local_provider::wire::ChatMessageContent::Text(
+                    PRUNED_TOOL_OUTPUT_PLACEHOLDER.to_string(),
+                ),
+            );
         }
     }
 }

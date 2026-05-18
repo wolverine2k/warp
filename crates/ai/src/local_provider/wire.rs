@@ -39,10 +39,13 @@ pub struct StreamOptions {
 #[derive(Debug, Clone, Serialize)]
 pub struct ChatMessage {
     pub role: Role,
-    /// Either text content (most messages) or `null` for assistant turns that only
-    /// emit tool calls. We model it as `Option<String>` and skip-if-none.
+    /// Either text content (most messages), a content-parts array (turns with
+    /// attachments), or `null` for assistant turns that only emit tool calls.
+    /// Phase 4c-2: changed from `Option<String>` to `Option<ChatMessageContent>`
+    /// using an untagged enum so text-only turns serialize as a plain JSON string
+    /// — byte-for-byte identical to the pre-4c-2 wire shape.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<ChatMessageContent>,
     /// Only present on assistant messages that emit tool calls.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
@@ -52,6 +55,56 @@ pub struct ChatMessage {
     /// Only present on `tool` role messages on some servers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+}
+
+impl ChatMessage {
+    /// Convenience constructor for text-only messages. Minimizes call-site
+    /// churn after Phase 4c-2's `content` type change.
+    pub fn text(role: Role, text: impl Into<String>) -> Self {
+        Self {
+            role,
+            content: Some(ChatMessageContent::Text(text.into())),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+        }
+    }
+}
+
+/// Phase 4c-2. OpenAi accepts either a plain string `content` (text-only
+/// turn) or an array of typed parts (turn with attachments). Untagged
+/// serde keeps the wire shape identical to before 4c-2 for text-only
+/// turns — `Text(String)` serializes as a JSON string, not as a
+/// tagged object.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ChatMessageContent {
+    Text(String),
+    Parts(Vec<ChatContentPart>),
+}
+
+impl ChatMessageContent {
+    /// Returns the contained text if this is the `Text` variant, else `None`.
+    /// Used by tests and history renderers that only care about plain-text content.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            ChatMessageContent::Text(s) => Some(s.as_str()),
+            ChatMessageContent::Parts(_) => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChatContentPart {
+    Text { text: String },
+    ImageUrl { image_url: ImageUrlSpec },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImageUrlSpec {
+    /// `data:image/png;base64,<base64-payload>` for inline images.
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

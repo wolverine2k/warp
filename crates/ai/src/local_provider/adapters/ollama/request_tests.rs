@@ -590,20 +590,8 @@ fn build_chat_request_sends_bearer_when_api_key_set() {
 fn build_summarizer_request_is_non_streaming_with_json_accept() {
     let input = SummarizerInput {
         messages: vec![
-            ChatMessage {
-                role: Role::System,
-                content: Some("You are a summarizer.".into()),
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
-            ChatMessage {
-                role: Role::User,
-                content: Some("Summarize this.".into()),
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
+            ChatMessage::text(Role::System, "You are a summarizer."),
+            ChatMessage::text(Role::User, "Summarize this."),
         ],
     };
     let req = OllamaAdapter

@@ -16,8 +16,8 @@ use crate::local_provider::{
     prompt,
     tools::{self, LocalTool},
     wire::{
-        ChatCompletionRequest, ChatMessage, Role, StreamOptions, ToolCall, ToolCallFunction,
-        ToolChoice,
+        ChatCompletionRequest, ChatContentPart, ChatMessage, ChatMessageContent, ImageUrlSpec,
+        Role, StreamOptions, ToolCall, ToolCallFunction, ToolChoice,
     },
 };
 
@@ -124,20 +124,8 @@ pub fn compose_chat_completion_request(
     // when `completed.is_empty()` (unaffected baseline).
     let projection = compaction_projection(input);
     if let Some(p) = &projection {
-        messages.push(ChatMessage {
-            role: Role::User,
-            content: Some(p.continue_prompt.clone()),
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        });
-        messages.push(ChatMessage {
-            role: Role::Assistant,
-            content: Some(p.summary_text.clone()),
-            tool_calls: None,
-            tool_call_id: None,
-            name: None,
-        });
+        messages.push(ChatMessage::text(Role::User, p.continue_prompt.clone()));
+        messages.push(ChatMessage::text(Role::Assistant, p.summary_text.clone()));
     }
 
     // Rendering modes:
@@ -188,13 +176,7 @@ pub fn compose_chat_completion_request(
             // message so the model sees `[user, assistant, ...]` rather
             // than a sequence of unprompted assistant outputs.
             if let Some(query) = synthetic_user_query_by_anchor.get(proto_msg.id.as_str()) {
-                messages.push(ChatMessage {
-                    role: Role::User,
-                    content: Some((*query).to_string()),
-                    tool_calls: None,
-                    tool_call_id: None,
-                    name: None,
-                });
+                messages.push(ChatMessage::text(Role::User, *query));
             }
             push_history_messages(&mut messages, proto_msg);
         }
@@ -214,10 +196,41 @@ pub fn compose_chat_completion_request(
         crate::local_provider::compaction::wire::apply_prune(&mut messages, &prune_set);
     }
 
-    if let Some(q) = input.user_query.as_deref() {
+    if input.user_query.is_some() || !input.attachments.is_empty() {
+        let user_content = if input.attachments.is_empty() {
+            ChatMessageContent::Text(
+                input.user_query.clone().unwrap_or_default(),
+            )
+        } else {
+            let mut parts: Vec<ChatContentPart> = Vec::new();
+            if let Some(text) = input.user_query.as_ref() {
+                if !text.is_empty() {
+                    parts.push(ChatContentPart::Text { text: text.clone() });
+                }
+            }
+            for attachment in &input.attachments {
+                if attachment.is_image() {
+                    parts.push(ChatContentPart::ImageUrl {
+                        image_url: ImageUrlSpec {
+                            url: crate::attachments::encode_data_uri(
+                                &attachment.mime,
+                                &attachment.bytes,
+                            ),
+                        },
+                    });
+                } else {
+                    log::warn!(
+                        "OpenAi adapter: dropping unsupported attachment mime {} \
+                         (only image/* is supported on this api_type)",
+                        attachment.mime
+                    );
+                }
+            }
+            ChatMessageContent::Parts(parts)
+        };
         messages.push(ChatMessage {
             role: Role::User,
-            content: Some(q.to_string()),
+            content: Some(user_content),
             tool_calls: None,
             tool_call_id: None,
             name: None,
@@ -290,13 +303,7 @@ fn system_message(local_tools: &[LocalTool], cfg: &LocalProviderConfig) -> ChatM
         cfg.context_window.filter(|n| *n > 0),
         apply_diffs_enabled,
     );
-    ChatMessage {
-        role: Role::System,
-        content: Some(prompt),
-        tool_calls: None,
-        tool_call_id: None,
-        name: None,
-    }
+    ChatMessage::text(Role::System, prompt)
 }
 
 /// Walk the rendered message list and ensure every assistant `tool_calls`
@@ -349,7 +356,7 @@ fn backfill_orphaned_tool_calls(
                 insert_at,
                 ChatMessage {
                     role: Role::Tool,
-                    content: Some(content),
+                    content: Some(ChatMessageContent::Text(content)),
                     tool_calls: None,
                     tool_call_id: Some(id),
                     name: None,
@@ -365,22 +372,10 @@ pub(crate) fn push_history_messages(out: &mut Vec<ChatMessage>, proto_msg: &api:
     use api::message::Message as M;
     match proto_msg.message.as_ref() {
         Some(M::UserQuery(q)) => {
-            out.push(ChatMessage {
-                role: Role::User,
-                content: Some(q.query.clone()),
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            });
+            out.push(ChatMessage::text(Role::User, q.query.clone()));
         }
         Some(M::AgentOutput(a)) => {
-            out.push(ChatMessage {
-                role: Role::Assistant,
-                content: Some(a.text.clone()),
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            });
+            out.push(ChatMessage::text(Role::Assistant, a.text.clone()));
         }
         Some(M::ToolCall(call)) => {
             // OpenAI represents tool calls on an assistant message with `tool_calls`.
@@ -405,7 +400,7 @@ pub(crate) fn push_history_messages(out: &mut Vec<ChatMessage>, proto_msg: &api:
         Some(M::ToolCallResult(result)) => {
             out.push(ChatMessage {
                 role: Role::Tool,
-                content: Some(summarize_tool_result(result)),
+                content: Some(ChatMessageContent::Text(summarize_tool_result(result))),
                 tool_calls: None,
                 tool_call_id: Some(result.tool_call_id.clone()),
                 name: None,
@@ -627,6 +622,12 @@ fn render_file_glob_v2(r: &api::FileGlobV2Result) -> String {
 mod tests {
     use super::*;
 
+    /// Test helper: extract the plain text from a `ChatMessageContent::Text`
+    /// variant, mirroring the old `Option<String>::as_deref()` call sites.
+    fn content_text(msg: &ChatMessage) -> Option<&str> {
+        msg.content.as_ref().and_then(|c| c.as_text())
+    }
+
     fn cfg() -> LocalProviderConfig {
         LocalProviderConfig {
             display_name: "Local".into(),
@@ -662,7 +663,7 @@ mod tests {
         let req = compose_chat_completion_request(&input, &cfg());
         assert_eq!(req.messages.len(), 2);
         assert!(matches!(req.messages[1].role, Role::User));
-        assert_eq!(req.messages[1].content.as_deref(), Some("hi"));
+        assert_eq!(content_text(&req.messages[1]), Some("hi"));
     }
 
     #[test]
@@ -752,11 +753,11 @@ mod tests {
         assert_eq!(req.messages.len(), 4);
         assert!(matches!(req.messages[0].role, Role::System));
         assert!(matches!(req.messages[1].role, Role::User));
-        assert_eq!(req.messages[1].content.as_deref(), Some("first"));
+        assert_eq!(content_text(&req.messages[1]), Some("first"));
         assert!(matches!(req.messages[2].role, Role::Assistant));
-        assert_eq!(req.messages[2].content.as_deref(), Some("ok"));
+        assert_eq!(content_text(&req.messages[2]), Some("ok"));
         assert!(matches!(req.messages[3].role, Role::User));
-        assert_eq!(req.messages[3].content.as_deref(), Some("second"));
+        assert_eq!(content_text(&req.messages[3]), Some("second"));
     }
 
     #[test]
@@ -871,7 +872,7 @@ mod tests {
         assert!(matches!(tool_msg.role, Role::Tool));
         assert_eq!(tool_msg.tool_call_id.as_deref(), Some("call_real"));
         assert_eq!(
-            tool_msg.content.as_deref(),
+            content_text(tool_msg),
             Some("[package]\nname = \"foo\"")
         );
     }
@@ -881,7 +882,7 @@ mod tests {
         let mut config = cfg();
         config.context_window = Some(4096);
         let req = compose_chat_completion_request(&empty_input(), &config);
-        let sys_content = req.messages[0].content.as_deref().unwrap();
+        let sys_content = content_text(&req.messages[0]).unwrap();
         assert!(sys_content.contains("4096"));
     }
 
@@ -1155,16 +1156,9 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         // Continue prompt has the overflow=true preamble.
-        assert!(req.messages[1]
-            .content
-            .as_deref()
-            .unwrap()
-            .contains("Continue"));
-        assert_eq!(
-            req.messages[2].content.as_deref(),
-            Some("## Goal\n- summary")
-        );
-        assert_eq!(req.messages[3].content.as_deref(), Some("post-compact ask"));
+        assert!(content_text(&req.messages[1]).unwrap().contains("Continue"));
+        assert_eq!(content_text(&req.messages[2]), Some("## Goal\n- summary"));
+        assert_eq!(content_text(&req.messages[3]), Some("post-compact ask"));
     }
 
     #[test]
@@ -1193,7 +1187,7 @@ mod tests {
         let req = compose_chat_completion_request(&input, &cfg());
         // system + synthetic user + synthetic assistant — that's it.
         assert_eq!(req.messages.len(), 3);
-        assert_eq!(req.messages[2].content.as_deref(), Some("manual digest"));
+        assert_eq!(content_text(&req.messages[2]), Some("manual digest"));
     }
 
     #[test]
@@ -1222,7 +1216,7 @@ mod tests {
         };
         let req = compose_chat_completion_request(&input, &cfg());
         assert_eq!(req.messages.len(), 2);
-        assert_eq!(req.messages[1].content.as_deref(), Some("hi"));
+        assert_eq!(content_text(&req.messages[1]), Some("hi"));
     }
 
     // ---- Phase B-6 multi-turn agent loop ----
@@ -1257,13 +1251,13 @@ mod tests {
         assert_eq!(req.messages.len(), 5);
         assert!(matches!(req.messages[0].role, Role::System));
         assert!(matches!(req.messages[1].role, Role::User));
-        assert_eq!(req.messages[1].content.as_deref(), Some("what is X?"));
+        assert_eq!(content_text(&req.messages[1]), Some("what is X?"));
         assert!(matches!(req.messages[2].role, Role::Assistant));
-        assert_eq!(req.messages[2].content.as_deref(), Some("first answer"));
+        assert_eq!(content_text(&req.messages[2]), Some("first answer"));
         assert!(matches!(req.messages[3].role, Role::User));
-        assert_eq!(req.messages[3].content.as_deref(), Some("and Y?"));
+        assert_eq!(content_text(&req.messages[3]), Some("and Y?"));
         assert!(matches!(req.messages[4].role, Role::Assistant));
-        assert_eq!(req.messages[4].content.as_deref(), Some("second answer"));
+        assert_eq!(content_text(&req.messages[4]), Some("second answer"));
     }
 
     #[test]
@@ -1288,7 +1282,7 @@ mod tests {
         assert_eq!(req.messages.len(), 2);
         assert!(matches!(req.messages[0].role, Role::System));
         assert!(matches!(req.messages[1].role, Role::Assistant));
-        assert_eq!(req.messages[1].content.as_deref(), Some("answer"));
+        assert_eq!(content_text(&req.messages[1]), Some("answer"));
     }
 
     #[test]
@@ -1353,24 +1347,21 @@ mod tests {
         assert!(matches!(req.messages[1].role, Role::Assistant));
         assert!(matches!(req.messages[2].role, Role::Tool));
         assert_eq!(req.messages[2].tool_call_id.as_deref(), Some("call_alpha"));
-        assert_eq!(
-            req.messages[2].content.as_deref(),
-            Some("[package]\nname = \"foo\"")
-        );
+        assert_eq!(content_text(&req.messages[2]), Some("[package]\nname = \"foo\""));
         assert!(matches!(req.messages[3].role, Role::Assistant));
         assert!(matches!(req.messages[4].role, Role::Tool));
         assert_eq!(req.messages[4].tool_call_id.as_deref(), Some("call_beta"));
         // No placeholder anywhere.
         for m in &req.messages {
             assert_ne!(
-                m.content.as_deref(),
+                content_text(m),
                 Some("(tool result not available)"),
                 "placeholder leaked: {:?}",
                 m
             );
         }
         assert!(matches!(req.messages[5].role, Role::User));
-        assert_eq!(req.messages[5].content.as_deref(), Some("now what?"));
+        assert_eq!(content_text(&req.messages[5]), Some("now what?"));
     }
 
     #[test]
@@ -1450,18 +1441,112 @@ mod tests {
         assert_eq!(req.messages.len(), 7);
         assert!(matches!(req.messages[0].role, Role::System));
         assert!(matches!(req.messages[1].role, Role::User));
-        assert_eq!(req.messages[1].content.as_deref(), Some("read Cargo.toml"));
+        assert_eq!(content_text(&req.messages[1]), Some("read Cargo.toml"));
         assert!(matches!(req.messages[2].role, Role::Assistant));
         assert!(matches!(req.messages[3].role, Role::Tool));
-        assert_eq!(req.messages[3].content.as_deref(), Some("Cargo.toml body"));
+        assert_eq!(content_text(&req.messages[3]), Some("Cargo.toml body"));
         assert!(matches!(req.messages[4].role, Role::Assistant));
         assert!(matches!(req.messages[5].role, Role::Tool));
-        assert_eq!(req.messages[5].content.as_deref(), Some("src/main.rs hits"));
+        assert_eq!(content_text(&req.messages[5]), Some("src/main.rs hits"));
         assert!(matches!(req.messages[6].role, Role::User));
-        assert_eq!(req.messages[6].content.as_deref(), Some("summarize"));
+        assert_eq!(content_text(&req.messages[6]), Some("summarize"));
 
         // Tools advertised non-null on every multi-turn body.
         let tools = req.tools.expect("tools should be advertised");
         assert!(!tools.is_empty());
+    }
+
+    // ---- Phase 4c-2 attachment tests ----
+
+    use crate::attachments::AgentAttachment;
+
+    fn png_attachment() -> AgentAttachment {
+        AgentAttachment {
+            mime: "image/png".into(),
+            bytes: vec![0x89, 0x50, 0x4e, 0x47],
+            display_name: Some("test.png".into()),
+        }
+    }
+
+    #[test]
+    fn text_only_turn_emits_string_content() {
+        let input = LocalProviderInput {
+            user_query: Some("hello".into()),
+            attachments: Vec::new(),
+            ..Default::default()
+        };
+        let req = compose_chat_completion_request(&input, &cfg());
+        let user_msg = req.messages.iter().find(|m| matches!(m.role, Role::User)).unwrap();
+        assert!(
+            matches!(&user_msg.content, Some(ChatMessageContent::Text(t)) if t == "hello"),
+            "expected Text(\"hello\"), got {:?}",
+            user_msg.content
+        );
+    }
+
+    #[test]
+    fn turn_with_image_emits_parts_array() {
+        let input = LocalProviderInput {
+            user_query: Some("what is this".into()),
+            attachments: vec![png_attachment()],
+            ..Default::default()
+        };
+        let req = compose_chat_completion_request(&input, &cfg());
+        let user_msg = req.messages.iter().find(|m| matches!(m.role, Role::User)).unwrap();
+        let parts = match &user_msg.content {
+            Some(ChatMessageContent::Parts(p)) => p,
+            other => panic!("expected Parts, got {other:?}"),
+        };
+        assert_eq!(parts.len(), 2);
+        assert!(
+            matches!(&parts[0], ChatContentPart::Text { text } if text == "what is this"),
+            "unexpected first part: {:?}",
+            parts[0]
+        );
+        assert!(
+            matches!(&parts[1], ChatContentPart::ImageUrl { image_url } if image_url.url.starts_with("data:image/png;base64,")),
+            "unexpected second part: {:?}",
+            parts[1]
+        );
+    }
+
+    #[test]
+    fn pdf_attachment_is_dropped_and_only_text_part_remains() {
+        let input = LocalProviderInput {
+            user_query: Some("read this".into()),
+            attachments: vec![AgentAttachment {
+                mime: "application/pdf".into(),
+                bytes: vec![1, 2, 3],
+                display_name: None,
+            }],
+            ..Default::default()
+        };
+        let req = compose_chat_completion_request(&input, &cfg());
+        let user_msg = req.messages.iter().find(|m| matches!(m.role, Role::User)).unwrap();
+        let parts = match &user_msg.content {
+            Some(ChatMessageContent::Parts(p)) => p,
+            other => panic!("expected Parts, got {other:?}"),
+        };
+        // PDF is dropped; only the text part remains.
+        assert_eq!(parts.len(), 1, "expected 1 part (text only), got {parts:?}");
+        assert!(matches!(&parts[0], ChatContentPart::Text { .. }));
+    }
+
+    #[test]
+    fn empty_user_query_with_image_emits_only_image_part() {
+        let input = LocalProviderInput {
+            user_query: Some("".into()),
+            attachments: vec![png_attachment()],
+            ..Default::default()
+        };
+        let req = compose_chat_completion_request(&input, &cfg());
+        let user_msg = req.messages.iter().find(|m| matches!(m.role, Role::User)).unwrap();
+        let parts = match &user_msg.content {
+            Some(ChatMessageContent::Parts(p)) => p,
+            other => panic!("expected Parts, got {other:?}"),
+        };
+        // Empty text is filtered out; only the image remains.
+        assert_eq!(parts.len(), 1, "expected 1 part (image only), got {parts:?}");
+        assert!(matches!(&parts[0], ChatContentPart::ImageUrl { .. }));
     }
 }

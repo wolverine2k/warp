@@ -704,20 +704,8 @@ fn build_chat_request_omits_api_key_header_when_unset() {
 fn build_summarizer_request_is_non_streaming_with_no_tools() {
     let input = SummarizerInput {
         messages: vec![
-            ChatMessage {
-                role: Role::System,
-                content: Some("You are a summarizer.".into()),
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
-            ChatMessage {
-                role: Role::User,
-                content: Some("Summarize this.".into()),
-                tool_calls: None,
-                tool_call_id: None,
-                name: None,
-            },
+            ChatMessage::text(Role::System, "You are a summarizer."),
+            ChatMessage::text(Role::User, "Summarize this."),
         ],
     };
     let req = AnthropicAdapter

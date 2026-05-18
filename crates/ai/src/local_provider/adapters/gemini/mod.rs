@@ -242,7 +242,12 @@ fn build_gemini_summarizer_body(
     let mut system_parts: Vec<wire::GeminiTextPart> = Vec::new();
     let mut entries: Vec<wire::GeminiContent> = Vec::new();
     for msg in &input.messages {
-        let text = msg.content.clone().unwrap_or_default();
+        let text = msg
+            .content
+            .as_ref()
+            .and_then(|c| c.as_text())
+            .unwrap_or_default()
+            .to_string();
         match msg.role {
             Role::System => {
                 if !text.is_empty() {

@@ -200,7 +200,12 @@ fn build_ollama_summarizer_body(
     use crate::local_provider::wire::Role;
     let mut messages: Vec<OllamaChatMessage> = Vec::with_capacity(input.messages.len());
     for msg in &input.messages {
-        let content = msg.content.clone().unwrap_or_default();
+        let content = msg
+            .content
+            .as_ref()
+            .and_then(|c| c.as_text())
+            .unwrap_or_default()
+            .to_string();
         let role = match msg.role {
             Role::System => OllamaRole::System,
             Role::User => OllamaRole::User,
