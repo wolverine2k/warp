@@ -3581,6 +3581,17 @@ impl TypedActionView for AISettingsPageView {
                                      {} model(s) returned",
                                     fetched.len()
                                 );
+                                // Phase 4b enrichment: if the catalog is loaded, fill missing
+                                // metadata before the modal opens.
+                                let fetched = if let Some(cache) = this.catalog_cache.as_ref() {
+                                    crate::ai::agent_providers::fetch_models::enrich_with_catalog(
+                                        fetched,
+                                        provider.api_type,
+                                        cache.all(),
+                                    )
+                                } else {
+                                    fetched
+                                };
                                 let already_added: std::collections::HashSet<String> =
                                     provider.models.iter().map(|m| m.id.clone()).collect();
                                 this.fetched_models_modal = Some(

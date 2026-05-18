@@ -142,6 +142,43 @@ fn truncate_to_120(s: &str) -> String {
     s.chars().take(120).collect()
 }
 
+/// Phase 4b cross-phase enrichment. After a successful fetch_models()
+/// call returns a Vec<DiscoveredModel> with whatever metadata the live
+/// upstream returned (typically just `id`), this helper cross-references
+/// each entry against the catalog and fills in missing `display_name`,
+/// `context_window`, and `max_output_tokens`. Multimodal capability
+/// flags are NOT lifted here — they end up on AgentProviderModel only
+/// when the user commits the row via the modal.
+///
+/// Catalog lookup is opt-in: the caller passes the catalog slice (or
+/// an empty slice to skip enrichment entirely). Existing fields on
+/// `DiscoveredModel` always win — the catalog only fills `None`s.
+pub fn enrich_with_catalog(
+    mut models: Vec<DiscoveredModel>,
+    api_type: AgentProviderApiType,
+    catalog: &[ai::catalog::CatalogModel],
+) -> Vec<DiscoveredModel> {
+    if catalog.is_empty() {
+        return models;
+    }
+    let candidate_set = ai::catalog::filter_models_for_api_type(api_type, catalog);
+    for d in &mut models {
+        let Some(c) = candidate_set.iter().find(|c| c.id == d.id) else {
+            continue;
+        };
+        if d.display_name.is_none() && !c.name.is_empty() {
+            d.display_name = Some(c.name.clone());
+        }
+        if d.context_window.is_none() {
+            d.context_window = c.context_window;
+        }
+        if d.max_output_tokens.is_none() {
+            d.max_output_tokens = c.max_output_tokens;
+        }
+    }
+    models
+}
+
 #[cfg(test)]
 #[path = "fetch_models_tests.rs"]
 mod tests;

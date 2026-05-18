@@ -342,3 +342,77 @@ async fn unsupported_api_type_returns_failed() {
     };
     assert!(msg.contains("Fetch models not supported"), "got: {msg}");
 }
+
+// ── enrich_with_catalog ──────────────────────────────────────────────────────
+
+use ai::catalog::CatalogModel;
+use ai::local_provider::adapters::DiscoveredModel;
+
+use super::enrich_with_catalog;
+
+fn catalog_entry(provider: &str, id: &str) -> CatalogModel {
+    CatalogModel {
+        catalog_provider: provider.into(),
+        id: id.into(),
+        name: format!("Display {id}"),
+        context_window: Some(200000),
+        max_output_tokens: Some(8192),
+        tool_call: true,
+        reasoning: false,
+        image: false,
+        pdf: false,
+        audio: false,
+        open_weights: false,
+    }
+}
+
+#[test]
+fn enrich_fills_missing_display_name() {
+    let d = DiscoveredModel {
+        id: "claude-sonnet-4-6".into(),
+        display_name: None,
+        context_window: None,
+        max_output_tokens: None,
+    };
+    let catalog = vec![catalog_entry("anthropic", "claude-sonnet-4-6")];
+    let enriched = enrich_with_catalog(
+        vec![d.clone()],
+        AgentProviderApiType::Anthropic,
+        &catalog,
+    );
+    assert_eq!(
+        enriched[0].display_name.as_deref(),
+        Some("Display claude-sonnet-4-6")
+    );
+    assert_eq!(enriched[0].context_window, Some(200000));
+    assert_eq!(enriched[0].max_output_tokens, Some(8192));
+}
+
+#[test]
+fn enrich_does_not_overwrite_existing_values() {
+    let d = DiscoveredModel {
+        id: "claude-sonnet-4-6".into(),
+        display_name: Some("User-set name".into()),
+        context_window: Some(99),
+        max_output_tokens: Some(11),
+    };
+    let catalog = vec![catalog_entry("anthropic", "claude-sonnet-4-6")];
+    let enriched =
+        enrich_with_catalog(vec![d], AgentProviderApiType::Anthropic, &catalog);
+    assert_eq!(enriched[0].display_name.as_deref(), Some("User-set name"));
+    assert_eq!(enriched[0].context_window, Some(99));
+    assert_eq!(enriched[0].max_output_tokens, Some(11));
+}
+
+#[test]
+fn enrich_with_empty_catalog_is_noop() {
+    let d = DiscoveredModel {
+        id: "claude-sonnet-4-6".into(),
+        display_name: None,
+        context_window: None,
+        max_output_tokens: None,
+    };
+    let enriched =
+        enrich_with_catalog(vec![d.clone()], AgentProviderApiType::Anthropic, &[]);
+    assert_eq!(enriched[0].display_name, None);
+}
