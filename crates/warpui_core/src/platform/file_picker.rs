@@ -21,15 +21,21 @@ pub enum FileType {
     Image,
     Yaml,
     Markdown,
+    /// PDF documents (application/pdf).
+    Pdf,
+    /// Audio files (audio/*).
+    Audio,
 }
 
 impl FileType {
     /// List of supported file extensions for this file type.
     pub fn extensions(&self) -> &[&str] {
         match self {
-            FileType::Image => &["png", "jpg", "jpeg"],
+            FileType::Image => &["png", "jpg", "jpeg", "webp", "gif", "heic"],
             FileType::Yaml => &["yaml", "yml"],
             FileType::Markdown => &["md", "markdown"],
+            FileType::Pdf => &["pdf"],
+            FileType::Audio => &["wav", "mp3", "m4a", "aac", "ogg"],
         }
     }
 
@@ -39,6 +45,8 @@ impl FileType {
             FileType::Image => "Image",
             FileType::Yaml => "Yaml",
             FileType::Markdown => "Markdown",
+            FileType::Pdf => "PDF",
+            FileType::Audio => "Audio",
         }
     }
 }

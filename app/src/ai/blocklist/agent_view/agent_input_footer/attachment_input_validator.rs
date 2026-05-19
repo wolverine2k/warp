@@ -3,11 +3,6 @@
 //! crates/ai/ because capability lookup depends on the user-settings store
 //! that's app-side.
 
-// Phase 4c-3 task 2 ships this module with no callers — the callers (📎
-// picker, drag-drop, paste) ship in Tasks 3, 5, 6 respectively. Remove this
-// allow when Task 3 wires the first caller.
-#![allow(dead_code)]
-
 use ai::attachments::AgentAttachment;
 use ai::capabilities::{resolve_audio, resolve_image, resolve_pdf};
 use ai::catalog::CatalogModel;

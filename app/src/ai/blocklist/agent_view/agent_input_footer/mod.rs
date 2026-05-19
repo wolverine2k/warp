@@ -74,6 +74,7 @@ use pathfinder_geometry::vector::{vec2f, Vector2F};
 use settings::Setting;
 use settings::ToggleableSetting;
 #[cfg(not(target_family = "wasm"))]
+#[cfg(not(target_family = "wasm"))]
 use std::env;
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
@@ -81,6 +82,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs;
+#[cfg(not(target_family = "wasm"))]
 #[cfg(feature = "voice_input")]
 use voice_input::{StartListeningError, VoiceSessionResult};
 
@@ -234,6 +236,15 @@ pub struct AgentInputFooter {
     // `Workspace::start_local_to_cloud_handoff`.
     handoff_to_cloud_button: ViewHandle<ActionButton>,
 
+    // Phase 4c-3 task 3. Attachment picker button (📎). Agent-view-only.
+    // Shared with Tasks 4-8 via `pending_attachments`.
+    attachment_picker_button: ViewHandle<ActionButton>,
+
+    // Phase 4c-3 task 3. Files picked by the user and validated but not yet
+    // submitted. Populated by the picker / drag-drop / paste handlers
+    // (Tasks 3, 5, 6). Consumed by the submit path. Default empty.
+    pending_attachments: Vec<ai::attachments::AgentAttachment>,
+
     // CLI agent voice input state (self-contained, bypasses editor voice flow).
     #[cfg(feature = "voice_input")]
     cli_voice_input_state: CLIVoiceInputState,
@@ -366,6 +377,18 @@ impl AgentInputFooter {
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(AgentInputFooterAction::OpenHandoffPane);
+                })
+        });
+
+        // Phase 4c-3 task 3. Attachment picker button (📎). Agent-view-only.
+        let attachment_picker_button = ctx.add_typed_action_view(|_ctx| {
+            ActionButton::new("", AgentInputButtonTheme)
+                .with_icon(Icon::Paperclip)
+                .with_tooltip("Attach file (image, PDF, or audio)")
+                .with_size(button_size)
+                .with_tooltip_alignment(TooltipAlignment::Left)
+                .on_click(|ctx| {
+                    ctx.dispatch_typed_action(AgentInputFooterAction::SelectAttachmentFile);
                 })
         });
 
@@ -791,6 +814,8 @@ impl AgentInputFooter {
             display_chip_config,
             fast_forward_button,
             handoff_to_cloud_button,
+            attachment_picker_button,
+            pending_attachments: Vec::new(),
             #[cfg(feature = "voice_input")]
             cli_voice_input_state: CLIVoiceInputState::default(),
             #[cfg(feature = "voice_input")]
@@ -968,6 +993,179 @@ impl AgentInputFooter {
                             ctx,
                         );
                     });
+                }
+            },
+            file_picker_config,
+        );
+    }
+
+    /// Phase 4c-3 task 3. Opens the native file picker filtered by the active
+    /// model's multimodal capability resolver result. For each picked file,
+    /// reads bytes, infers MIME from extension, routes through
+    /// `AttachmentInputValidator::validate`, appends to `pending_attachments`
+    /// on Ok or shows a rejection toast on Err.
+    #[cfg(not(target_family = "wasm"))]
+    fn select_attachment_file(&mut self, ctx: &mut ViewContext<Self>) {
+        use crate::ai::agent_providers::lookup_byop;
+        use crate::ai::llms::LLMPreferences;
+        use crate::settings::AgentProviderApiType;
+        use attachment_input_validator::{ActiveModelCaps, validate, rejection_message};
+
+        let active_llm = LLMPreferences::as_ref(ctx)
+            .get_active_base_model(ctx, Some(self.terminal_view_id))
+            .clone();
+
+        // Resolve api_type and per-model capability overrides from BYOP config
+        // (non-BYOP models get defaults, resolver falls through to heuristics).
+        let (api_type, image_setting, pdf_setting, audio_setting, raw_model_id) =
+            if let Some((provider, _api_key, model_id)) = lookup_byop(ctx, &active_llm.id) {
+                let model_settings = provider
+                    .models
+                    .iter()
+                    .find(|m| m.id == model_id)
+                    .map(|m| (m.image, m.pdf, m.audio))
+                    .unwrap_or((None, None, None));
+                (
+                    provider.api_type,
+                    model_settings.0,
+                    model_settings.1,
+                    model_settings.2,
+                    model_id,
+                )
+            } else {
+                (AgentProviderApiType::default(), None, None, None, active_llm.id.to_string())
+            };
+
+        let file_types =
+            picker_file_types_for_caps(api_type, &raw_model_id, image_setting, pdf_setting, audio_setting);
+
+        if file_types.is_empty() {
+            let window_id = ctx.window_id();
+            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    DismissibleToast::error(
+                        "The active model doesn't support image, PDF, or audio attachments."
+                            .to_owned(),
+                    ),
+                    window_id,
+                    ctx,
+                );
+            });
+            return;
+        }
+
+        let file_picker_config = warpui::platform::FilePickerConfiguration::new()
+            .allow_multi_select()
+            .set_allowed_file_types(file_types);
+
+        let window_id = ctx.window_id();
+        let view_id = ctx.view_id();
+        let pending_count = self.pending_attachments.len();
+
+        ctx.open_file_picker(
+            move |result, ctx| {
+                match result {
+                    Ok(paths) => {
+                        for path_str in paths {
+                            let path = std::path::Path::new(&path_str);
+                            let display_name = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .map(str::to_owned);
+                            let mime = mime_for_path(path);
+                            let bytes = match std::fs::read(path) {
+                                Ok(b) => b,
+                                Err(err) => {
+                                    let msg = format!("Could not read file: {err}");
+                                    let wid = ctx.window_id();
+                                    ToastStack::handle(ctx).update(ctx, |ts, ctx| {
+                                        ts.add_ephemeral_toast(
+                                            DismissibleToast::error(msg),
+                                            wid,
+                                            ctx,
+                                        );
+                                    });
+                                    continue;
+                                }
+                            };
+                            let candidate = ai::attachments::AgentAttachment {
+                                mime: mime.clone(),
+                                bytes,
+                                display_name,
+                                thumbnail_bytes: None,
+                            };
+
+                            // Re-read active model caps at validation time in case they
+                            // changed during async picker interaction.
+                            let active_llm_now = LLMPreferences::as_ref(ctx)
+                                .get_active_base_model(ctx, None)
+                                .clone();
+                            let (api_type_now, img_now, pdf_now, aud_now, model_id_now) =
+                                if let Some((prov, _key, mid)) =
+                                    lookup_byop(ctx, &active_llm_now.id)
+                                {
+                                    let ms = prov
+                                        .models
+                                        .iter()
+                                        .find(|m| m.id == mid)
+                                        .map(|m| (m.image, m.pdf, m.audio))
+                                        .unwrap_or((None, None, None));
+                                    (prov.api_type, ms.0, ms.1, ms.2, mid)
+                                } else {
+                                    (
+                                        AgentProviderApiType::default(),
+                                        None,
+                                        None,
+                                        None,
+                                        active_llm_now.id.to_string(),
+                                    )
+                                };
+                            let caps = ActiveModelCaps {
+                                api_type: api_type_now,
+                                model_id: &model_id_now,
+                                image_setting: img_now,
+                                pdf_setting: pdf_now,
+                                audio_setting: aud_now,
+                                catalog: &[],
+                            };
+
+                            // We don't have access to `self` in the closure, so we
+                            // dispatch a validated attachment back to the view.
+                            let cur_pending = pending_count;
+                            match validate(&candidate, cur_pending, &caps) {
+                                Ok(()) => {
+                                    ctx.dispatch_typed_action_for_view(
+                                        window_id,
+                                        view_id,
+                                        &AgentInputFooterAction::AppendValidatedAttachment(
+                                            candidate,
+                                        ),
+                                    );
+                                }
+                                Err(rej) => {
+                                    let msg = rejection_message(&rej);
+                                    let wid = ctx.window_id();
+                                    ToastStack::handle(ctx).update(ctx, |ts, ctx| {
+                                        ts.add_ephemeral_toast(
+                                            DismissibleToast::error(msg),
+                                            wid,
+                                            ctx,
+                                        );
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let wid = ctx.window_id();
+                        ToastStack::handle(ctx).update(ctx, |ts, ctx| {
+                            ts.add_ephemeral_toast(
+                                DismissibleToast::error(format!("{err}")),
+                                wid,
+                                ctx,
+                            );
+                        });
+                    }
                 }
             },
             file_picker_config,
@@ -1387,7 +1585,8 @@ impl AgentInputFooter {
             | AgentToolbarItemKind::NLDToggle
             | AgentToolbarItemKind::ContextWindowUsage
             | AgentToolbarItemKind::FastForwardToggle
-            | AgentToolbarItemKind::HandoffToCloud => None,
+            | AgentToolbarItemKind::HandoffToCloud
+            | AgentToolbarItemKind::AttachmentPicker => None,
         }
     }
 
@@ -1983,6 +2182,9 @@ impl AgentInputFooter {
                 // the active conversation isn't handoff-able.
                 Some(ChildView::new(&self.handoff_to_cloud_button).finish())
             }
+            AgentToolbarItemKind::AttachmentPicker => {
+                Some(ChildView::new(&self.attachment_picker_button).finish())
+            }
             // Handled by the available_in() guard above; included for exhaustiveness.
             AgentToolbarItemKind::FileExplorer
             | AgentToolbarItemKind::RichInput
@@ -2232,6 +2434,11 @@ pub enum AgentInputFooterAction {
     #[cfg(feature = "voice_input")]
     ToggleVoiceInput,
     SelectFile,
+    /// Phase 4c-3 task 3. Opens the native file picker filtered by the active
+    /// model's multimodal capability resolver (image/pdf/audio). On selection,
+    /// validates each file through `AttachmentInputValidator` and appends
+    /// valid picks to `AgentInputFooter::pending_attachments`.
+    SelectAttachmentFile,
     InsertFilePath(String),
     ToggleCodeReview,
     ToggleFileExplorer,
@@ -2252,6 +2459,10 @@ pub enum AgentInputFooterAction {
     ShowContextMenu {
         position: Vector2F,
     },
+    /// Phase 4c-3 task 3. Appended after picker → validator succeeds for a
+    /// single file. The attachment is already validated; the handler just
+    /// pushes it to `pending_attachments` and notifies the view.
+    AppendValidatedAttachment(ai::attachments::AgentAttachment),
 }
 
 impl TypedActionView for AgentInputFooter {
@@ -2280,6 +2491,10 @@ impl TypedActionView for AgentInputFooter {
                 } else {
                     ctx.emit(AgentInputFooterEvent::SelectFile);
                 }
+            }
+            AgentInputFooterAction::SelectAttachmentFile => {
+                #[cfg(not(target_family = "wasm"))]
+                self.select_attachment_file(ctx);
             }
             AgentInputFooterAction::InsertFilePath(path) => {
                 if let Some(agent) = self.cli_agent(ctx) {
@@ -2456,6 +2671,10 @@ impl TypedActionView for AgentInputFooter {
                 ctx.emit(AgentInputFooterEvent::ShowContextMenu {
                     position: *position,
                 });
+            }
+            AgentInputFooterAction::AppendValidatedAttachment(att) => {
+                self.pending_attachments.push(att.clone());
+                ctx.notify();
             }
         }
     }
@@ -2732,5 +2951,110 @@ impl ActionButtonTheme for NLDButtonTheme {
 
     fn should_opt_out_of_contrast_adjustment(&self) -> bool {
         true
+    }
+}
+
+/// Phase 4c-3 task 3. Builds the file-picker `FileType` filter from the active
+/// model's per-modality capability resolver results. An empty return value means
+/// no modality is supported — the caller should bail early rather than showing a
+/// picker that accepts nothing.
+fn picker_file_types_for_caps(
+    api_type: ai::local_provider::AgentProviderApiType,
+    model_id: &str,
+    image_setting: Option<bool>,
+    pdf_setting: Option<bool>,
+    audio_setting: Option<bool>,
+) -> Vec<warpui::platform::FileType> {
+    let mut types: Vec<warpui::platform::FileType> = Vec::new();
+    if ai::capabilities::resolve_image(api_type, model_id, image_setting, &[]) {
+        types.push(warpui::platform::FileType::Image);
+    }
+    if ai::capabilities::resolve_pdf(api_type, model_id, pdf_setting, &[]) {
+        types.push(warpui::platform::FileType::Pdf);
+    }
+    if ai::capabilities::resolve_audio(api_type, model_id, audio_setting, &[]) {
+        types.push(warpui::platform::FileType::Audio);
+    }
+    types
+}
+
+/// Phase 4c-3 task 3. Maps a file's extension to its canonical mime type.
+/// Returns `application/octet-stream` for unrecognized extensions — the caller
+/// routes the result through `AttachmentInputValidator` which will reject
+/// `UnknownMime`.
+fn mime_for_path(path: &std::path::Path) -> String {
+    match path
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("png") => "image/png".into(),
+        Some("jpg" | "jpeg") => "image/jpeg".into(),
+        Some("webp") => "image/webp".into(),
+        Some("gif") => "image/gif".into(),
+        Some("heic") => "image/heic".into(),
+        Some("pdf") => "application/pdf".into(),
+        Some("wav") => "audio/wav".into(),
+        Some("mp3") => "audio/mpeg".into(),
+        Some("m4a") => "audio/mp4".into(),
+        Some("aac") => "audio/aac".into(),
+        Some("ogg") => "audio/ogg".into(),
+        _ => "application/octet-stream".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn picker_filter_image_only_returns_image_extensions() {
+        // llava is an Ollama vision model; heuristic resolves image=true,
+        // pdf=false, audio=false when all settings are None (auto).
+        let types = picker_file_types_for_caps(
+            ai::local_provider::AgentProviderApiType::Ollama,
+            "llava",
+            None,
+            None,
+            None,
+        );
+        assert!(types
+            .iter()
+            .any(|t| matches!(t, warpui::platform::FileType::Image)));
+        assert!(!types
+            .iter()
+            .any(|t| matches!(t, warpui::platform::FileType::Pdf)));
+        assert!(!types
+            .iter()
+            .any(|t| matches!(t, warpui::platform::FileType::Audio)));
+    }
+
+    #[test]
+    fn picker_filter_no_modalities_returns_empty_vec() {
+        // Explicit false for all three modalities → empty type list.
+        let types = picker_file_types_for_caps(
+            ai::local_provider::AgentProviderApiType::Ollama,
+            "tinyllama-text-only",
+            Some(false),
+            Some(false),
+            Some(false),
+        );
+        assert!(types.is_empty());
+    }
+
+    #[test]
+    fn mime_for_path_known_extensions() {
+        assert_eq!(mime_for_path(std::path::Path::new("foo.png")), "image/png");
+        // Case-insensitive via to_ascii_lowercase.
+        assert_eq!(
+            mime_for_path(std::path::Path::new("foo.PDF")),
+            "application/pdf"
+        );
+        assert_eq!(mime_for_path(std::path::Path::new("foo.wav")), "audio/wav");
+        assert_eq!(
+            mime_for_path(std::path::Path::new("foo.xyz")),
+            "application/octet-stream"
+        );
     }
 }

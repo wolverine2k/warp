@@ -71,6 +71,10 @@ pub enum AgentToolbarItemKind {
 
     // Agent view only – "Hand off to cloud" chip.
     HandoffToCloud,
+
+    // Agent view only – opens the native file picker filtered by the active
+    // model's 4c-1 multimodal capability resolver result (image/pdf/audio).
+    AttachmentPicker,
 }
 
 impl AgentToolbarItemKind {
@@ -88,7 +92,8 @@ impl AgentToolbarItemKind {
             | Self::NLDToggle
             | Self::ContextWindowUsage
             | Self::FastForwardToggle
-            | Self::HandoffToCloud => ToolbarAvailability::AgentViewOnly,
+            | Self::HandoffToCloud
+            | Self::AttachmentPicker => ToolbarAvailability::AgentViewOnly,
             Self::FileExplorer | Self::RichInput | Self::Settings => {
                 ToolbarAvailability::CLIAgentOnly
             }
@@ -109,6 +114,8 @@ impl AgentToolbarItemKind {
             Self::FastForwardToggle => !status.is_viewer() || status.is_executor(),
             // Handoff is host-initiated; viewers cannot hand off another user's conversation.
             Self::HandoffToCloud => !status.is_viewer(),
+            // AttachmentPicker is host-action-only; viewers cannot attach files.
+            Self::AttachmentPicker => !status.is_viewer(),
             Self::ContextChip(_)
             | Self::ModelSelector
             | Self::NLDToggle
@@ -132,6 +139,7 @@ impl AgentToolbarItemKind {
             Self::Settings => "Settings",
             Self::FastForwardToggle => "Fast Forward",
             Self::HandoffToCloud => "Hand off to cloud",
+            Self::AttachmentPicker => "Attach",
         }
     }
 
@@ -151,6 +159,7 @@ impl AgentToolbarItemKind {
             // The bundled `upload-cloud-01.svg` (cloud-with-upward-arrow) is the
             // closest fit among the existing icons for V0; design may swap it later.
             Self::HandoffToCloud => Some(Icon::UploadCloud),
+            Self::AttachmentPicker => Some(Icon::Paperclip),
         }
     }
 
@@ -197,6 +206,7 @@ impl AgentToolbarItemKind {
         }
         items.push(Self::VoiceInput);
         items.push(Self::FileAttach);
+        items.push(Self::AttachmentPicker);
         items
     }
 
@@ -212,6 +222,7 @@ impl AgentToolbarItemKind {
             Self::VoiceInput,
             Self::FileAttach,
             Self::ContextWindowUsage,
+            Self::AttachmentPicker,
         ]);
         if FeatureFlag::FastForwardAutoexecuteButton.is_enabled() {
             items.push(Self::FastForwardToggle);
