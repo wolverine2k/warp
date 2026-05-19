@@ -3,6 +3,7 @@ mod attachment_input_validator;
 pub(super) mod chips;
 pub mod editor;
 mod environment_selector;
+mod drop_target_element;
 pub mod toolbar_item;
 
 use crate::{
@@ -2354,7 +2355,7 @@ impl View for AgentInputFooter {
                 .block_list()
                 .active_block()
                 .is_agent_in_control_or_tagged_in();
-        if showing_ftu_model_picker && self.render_ftu_callout {
+        let inner: Box<dyn Element> = if showing_ftu_model_picker && self.render_ftu_callout {
             let mut stack = Stack::new();
             stack.add_child(container.finish());
             stack.add_positioned_overlay_child(
@@ -2370,7 +2371,10 @@ impl View for AgentInputFooter {
             stack.finish()
         } else {
             container.finish()
-        }
+        };
+        // Phase 4c-3 task 5: wrap in the drop-target element so that files
+        // dragged onto the footer dispatch DragAndDropFiles.
+        Box::new(drop_target_element::AttachmentDropTargetElement::new(inner))
     }
 }
 
@@ -2504,6 +2508,11 @@ pub enum AgentInputFooterAction {
         mime: String,
         thumbnail: Vec<u8>,
     },
+    /// Phase 4c-3 task 5. Files dropped onto the input footer by the user.
+    /// The handler reads each file from disk, infers mime via `mime_for_path`,
+    /// validates through `AttachmentInputValidator`, and dispatches
+    /// `AppendValidatedAttachment` per valid file (toast per rejection).
+    DragAndDropFiles(Vec<std::path::PathBuf>),
 }
 
 impl TypedActionView for AgentInputFooter {
@@ -2804,6 +2813,91 @@ impl TypedActionView for AgentInputFooter {
                     }
                     ctx.notify();
                 }
+            }
+            #[cfg(not(target_family = "wasm"))]
+            AgentInputFooterAction::DragAndDropFiles(paths) => {
+                use crate::ai::agent_providers::lookup_byop;
+                use crate::ai::llms::LLMPreferences;
+                use crate::settings::AgentProviderApiType;
+                use attachment_input_validator::{ActiveModelCaps, rejection_message, validate};
+
+                let active_llm = LLMPreferences::as_ref(ctx)
+                    .get_active_base_model(ctx, None)
+                    .clone();
+                let (api_type, image_setting, pdf_setting, audio_setting, model_id) =
+                    if let Some((provider, _api_key, mid)) = lookup_byop(ctx, &active_llm.id) {
+                        let ms = provider
+                            .models
+                            .iter()
+                            .find(|m| m.id == mid)
+                            .map(|m| (m.image, m.pdf, m.audio))
+                            .unwrap_or((None, None, None));
+                        (provider.api_type, ms.0, ms.1, ms.2, mid)
+                    } else {
+                        (
+                            AgentProviderApiType::default(),
+                            None,
+                            None,
+                            None,
+                            active_llm.id.to_string(),
+                        )
+                    };
+                let caps = ActiveModelCaps {
+                    api_type,
+                    model_id: &model_id,
+                    image_setting,
+                    pdf_setting,
+                    audio_setting,
+                    catalog: &[],
+                };
+
+                let pending_count = self.pending_attachments.len();
+                let window_id = ctx.window_id();
+
+                for (offset, path) in paths.iter().enumerate() {
+                    let bytes = match std::fs::read(path) {
+                        Ok(b) => b,
+                        Err(err) => {
+                            log::warn!(
+                                "AgentInputFooter drop: failed to read {path:?}: {err}"
+                            );
+                            continue;
+                        }
+                    };
+                    let mime = mime_for_path(path);
+                    let display_name = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(str::to_owned);
+                    let candidate = ai::attachments::AgentAttachment {
+                        mime,
+                        bytes,
+                        display_name,
+                        thumbnail_bytes: None,
+                    };
+                    let cur_pending = pending_count + offset;
+                    match validate(&candidate, cur_pending, &caps) {
+                        Ok(()) => {
+                            ctx.dispatch_typed_action(
+                                &AgentInputFooterAction::AppendValidatedAttachment(candidate),
+                            );
+                        }
+                        Err(rej) => {
+                            let msg = rejection_message(&rej);
+                            ToastStack::handle(ctx).update(ctx, |ts, ctx| {
+                                ts.add_ephemeral_toast(
+                                    DismissibleToast::error(msg),
+                                    window_id,
+                                    ctx,
+                                );
+                            });
+                        }
+                    }
+                }
+            }
+            #[cfg(target_family = "wasm")]
+            AgentInputFooterAction::DragAndDropFiles(_paths) => {
+                // Drag-and-drop file reads are not supported on WASM.
             }
         }
     }
