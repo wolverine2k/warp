@@ -590,6 +590,89 @@ fn model_role_serializes_as_lowercase_string() {
     assert_ne!(v["contents"][model_entry]["role"], "MODEL");
 }
 
+// ---- attachments (Phase 4c-2) ----
+
+#[test]
+fn text_only_turn_emits_just_text_part() {
+    // A request with no attachments must produce exactly one Text part in the
+    // user content — no inline_data key in the serialized form.
+    let mut input = empty_input();
+    input.user_query = Some("what time is it?".into());
+    let req = compose_gemini_request(&input, &cfg());
+    let v = serde_json::to_value(&req).unwrap();
+    let user_entry = req
+        .contents
+        .iter()
+        .find(|c| c.role == GeminiRole::User)
+        .expect("user content present");
+    assert_eq!(user_entry.parts.len(), 1, "text-only turn must have exactly one part");
+    assert!(matches!(user_entry.parts[0], GeminiOutboundPart::Text(_)));
+    // Wire: no inline_data key on the parts.
+    for part in v["contents"][0]["parts"].as_array().unwrap() {
+        assert!(part.get("inline_data").is_none(), "no inline_data on text-only turn");
+    }
+}
+
+#[test]
+fn image_attachment_appends_inline_data_part() {
+    use crate::attachments::AgentAttachment;
+    let bytes = vec![0x89u8, 0x50, 0x4e, 0x47]; // PNG magic
+    let expected_b64 = crate::attachments::encode_base64(&bytes);
+    let mut input = empty_input();
+    input.user_query = Some("describe this image".into());
+    input.attachments = vec![AgentAttachment {
+        mime: "image/png".into(),
+        bytes,
+        display_name: None,
+    }];
+    let req = compose_gemini_request(&input, &cfg());
+    let user_entry = req
+        .contents
+        .iter()
+        .find(|c| c.role == GeminiRole::User)
+        .expect("user content present");
+    // text part + inline_data part
+    assert_eq!(user_entry.parts.len(), 2, "should have text + inline_data parts");
+    assert!(matches!(user_entry.parts[0], GeminiOutboundPart::Text(_)));
+    assert!(matches!(user_entry.parts[1], GeminiOutboundPart::InlineData(_)));
+    // Wire shape: {"inline_data":{"mime_type":"image/png","data":"<b64>"}}
+    let v = serde_json::to_value(&req).unwrap();
+    let inline = &v["contents"][0]["parts"][1];
+    assert_eq!(inline["inline_data"]["mime_type"], "image/png");
+    assert_eq!(inline["inline_data"]["data"], expected_b64);
+    // No data-URI prefix.
+    assert!(
+        !inline["inline_data"]["data"].as_str().unwrap().starts_with("data:"),
+        "data must be raw base64, not a data-URI"
+    );
+}
+
+#[test]
+fn audio_attachment_emits_inline_data_with_audio_mime() {
+    use crate::attachments::AgentAttachment;
+    let bytes = vec![0x52u8, 0x49, 0x46, 0x46]; // RIFF header (WAV)
+    let expected_b64 = crate::attachments::encode_base64(&bytes);
+    let mut input = empty_input();
+    input.user_query = Some("transcribe this".into());
+    input.attachments = vec![AgentAttachment {
+        mime: "audio/wav".into(),
+        bytes,
+        display_name: None,
+    }];
+    let req = compose_gemini_request(&input, &cfg());
+    let user_entry = req
+        .contents
+        .iter()
+        .find(|c| c.role == GeminiRole::User)
+        .expect("user content present");
+    assert_eq!(user_entry.parts.len(), 2, "should have text + inline_data parts");
+    assert!(matches!(user_entry.parts[1], GeminiOutboundPart::InlineData(_)));
+    let v = serde_json::to_value(&req).unwrap();
+    let inline = &v["contents"][0]["parts"][1];
+    assert_eq!(inline["inline_data"]["mime_type"], "audio/wav");
+    assert_eq!(inline["inline_data"]["data"], expected_b64);
+}
+
 // ============================================================
 // Adapter-glue tests (GeminiAdapter + ProviderAdapter trait)
 // ============================================================

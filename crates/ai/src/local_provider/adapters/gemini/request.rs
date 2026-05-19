@@ -22,10 +22,11 @@ use std::collections::HashMap;
 use warp_multi_agent_api as api;
 
 use super::wire::{
-    GeminiContent, GeminiGenerateRequest, GeminiGenerationConfig, GeminiOutboundFunctionCall,
-    GeminiOutboundFunctionCallPart, GeminiOutboundFunctionResponse,
-    GeminiOutboundFunctionResponsePart, GeminiOutboundPart, GeminiRole, GeminiSystemInstruction,
-    GeminiTextPart, GeminiToolEnvelope, GeminiFunctionDeclaration,
+    GeminiContent, GeminiGenerateRequest, GeminiGenerationConfig, GeminiInlineData,
+    GeminiInlineDataPart, GeminiOutboundFunctionCall, GeminiOutboundFunctionCallPart,
+    GeminiOutboundFunctionResponse, GeminiOutboundFunctionResponsePart, GeminiOutboundPart,
+    GeminiRole, GeminiSystemInstruction, GeminiTextPart, GeminiToolEnvelope,
+    GeminiFunctionDeclaration,
 };
 use crate::local_provider::{
     compaction,
@@ -132,11 +133,27 @@ pub fn compose_gemini_request(
     }
 
     if let Some(q) = input.user_query.as_deref() {
+        let mut parts = vec![GeminiOutboundPart::Text(GeminiTextPart {
+            text: q.to_string(),
+        })];
+        for attachment in &input.attachments {
+            if attachment.is_image() || attachment.is_pdf() || attachment.is_audio() {
+                parts.push(GeminiOutboundPart::InlineData(GeminiInlineDataPart {
+                    inline_data: GeminiInlineData {
+                        mime_type: attachment.mime.clone(),
+                        data: crate::attachments::encode_base64(&attachment.bytes),
+                    },
+                }));
+            } else {
+                log::warn!(
+                    "Gemini adapter: dropping attachment with unrecognized mime {}",
+                    attachment.mime
+                );
+            }
+        }
         contents.push(GeminiContent {
             role: GeminiRole::User,
-            parts: vec![GeminiOutboundPart::Text(GeminiTextPart {
-                text: q.to_string(),
-            })],
+            parts,
         });
     }
 

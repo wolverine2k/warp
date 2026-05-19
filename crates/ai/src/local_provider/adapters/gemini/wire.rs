@@ -67,14 +67,31 @@ pub enum GeminiRole {
 }
 
 /// Outbound (request-side) parts. Each variant serializes with exactly one
-/// of `{text}`, `{functionCall}`, or `{functionResponse}` at the top level
-/// (untagged enum so the serde shape matches Gemini's wire format).
+/// of `{text}`, `{functionCall}`, `{functionResponse}`, or `{inline_data}`
+/// at the top level (untagged enum so the serde shape matches Gemini's wire
+/// format).
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum GeminiOutboundPart {
     Text(GeminiTextPart),
     FunctionCall(GeminiOutboundFunctionCallPart),
     FunctionResponse(GeminiOutboundFunctionResponsePart),
+    InlineData(GeminiInlineDataPart),
+}
+
+/// Wrapper so `GeminiOutboundPart::InlineData` serializes as
+/// `{"inline_data":{...}}` under the untagged enum.
+#[derive(Debug, Clone, Serialize)]
+pub struct GeminiInlineDataPart {
+    pub inline_data: GeminiInlineData,
+}
+
+/// Gemini inline-data payload for images, PDFs, and audio.
+/// `data` is raw base64 — no `data:` URI prefix.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GeminiInlineData {
+    pub mime_type: String,
+    pub data: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
