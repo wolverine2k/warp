@@ -1,3 +1,4 @@
+mod attachment_chip;
 mod attachment_input_validator;
 pub(super) mod chips;
 pub mod editor;
@@ -244,6 +245,10 @@ pub struct AgentInputFooter {
     // submitted. Populated by the picker / drag-drop / paste handlers
     // (Tasks 3, 5, 6). Consumed by the submit path. Default empty.
     pending_attachments: Vec<ai::attachments::AgentAttachment>,
+
+    // Phase 4c-3 task 4. One chip view per pending_attachment (same order).
+    // Rebuilt whenever pending_attachments changes length.
+    attachment_chips: Vec<warpui::ViewHandle<attachment_chip::AttachmentChip>>,
 
     // CLI agent voice input state (self-contained, bypasses editor voice flow).
     #[cfg(feature = "voice_input")]
@@ -816,6 +821,7 @@ impl AgentInputFooter {
             handoff_to_cloud_button,
             attachment_picker_button,
             pending_attachments: Vec::new(),
+            attachment_chips: Vec::new(),
             #[cfg(feature = "voice_input")]
             cli_voice_input_state: CLIVoiceInputState::default(),
             #[cfg(feature = "voice_input")]
@@ -2310,7 +2316,32 @@ impl View for AgentInputFooter {
             })
             .finish();
 
-        let mut container = Container::new(content).with_padding_bottom(8.0);
+        // Phase 4c-3 task 4. Attachment chip strip — rendered above the
+        // toolbar row when there are pending attachments.
+        let footer_body: Box<dyn Element> = if !self.attachment_chips.is_empty() {
+            let mut chip_strip = Wrap::row()
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_main_axis_alignment(MainAxisAlignment::Start)
+                .with_run_spacing(4.)
+                .with_spacing(4.);
+            for chip in &self.attachment_chips {
+                chip_strip.add_child(ChildView::new(chip).finish());
+            }
+            Flex::column()
+                .with_child(
+                    Container::new(chip_strip.finish())
+                        .with_padding_top(4.)
+                        .with_padding_bottom(4.)
+                        .finish(),
+                )
+                .with_child(content)
+                .finish()
+        } else {
+            content
+        };
+
+        let mut container = Container::new(footer_body).with_padding_bottom(8.0);
         if !has_prompt_alert {
             container = container.with_padding_right(16.);
         }
@@ -2463,6 +2494,16 @@ pub enum AgentInputFooterAction {
     /// single file. The attachment is already validated; the handler just
     /// pushes it to `pending_attachments` and notifies the view.
     AppendValidatedAttachment(ai::attachments::AgentAttachment),
+    /// Phase 4c-3 task 4. Removes the chip and attachment at `index`.
+    RemoveAttachment(usize),
+    /// Phase 4c-3 task 4. Stores decoded thumbnail bytes for the attachment
+    /// at `index` whose MIME type matches `mime` (safety check against stale
+    /// index after a removal race).
+    SetThumbnailBytes {
+        index: usize,
+        mime: String,
+        thumbnail: Vec<u8>,
+    },
 }
 
 impl TypedActionView for AgentInputFooter {
@@ -2673,8 +2714,96 @@ impl TypedActionView for AgentInputFooter {
                 });
             }
             AgentInputFooterAction::AppendValidatedAttachment(att) => {
+                let index = self.pending_attachments.len();
                 self.pending_attachments.push(att.clone());
+
+                // Build a chip view for the new attachment (thumbnail_source
+                // starts None; updated by SetThumbnailBytes once decode finishes).
+                let chip = ctx.add_typed_action_view(|ctx| {
+                    attachment_chip::AttachmentChip::new(
+                        att,
+                        None,
+                        attachment_chip::ChipCapabilityState::Supported,
+                        ctx,
+                    )
+                });
+                // When the × is clicked the chip emits AttachmentChipEvent::RemoveRequested.
+                ctx.subscribe_to_view(&chip, move |_footer, _chip, _event, ctx| {
+                    ctx.dispatch_typed_action(
+                        &AgentInputFooterAction::RemoveAttachment(index),
+                    );
+                });
+                self.attachment_chips.push(chip);
+
+                // Spawn background thumbnail decode for image attachments.
+                if att.is_image() {
+                    let bytes = att.bytes.clone();
+                    let mime = att.mime.clone();
+                    let _ = ctx.spawn(
+                        async move { attachment_chip::decode_thumbnail(&bytes) },
+                        move |_footer, maybe_thumbnail, ctx| {
+                            if let Some(thumbnail) = maybe_thumbnail {
+                                ctx.dispatch_typed_action(
+                                    &AgentInputFooterAction::SetThumbnailBytes {
+                                        index,
+                                        mime,
+                                        thumbnail,
+                                    },
+                                );
+                            }
+                        },
+                    );
+                }
+
                 ctx.notify();
+            }
+            AgentInputFooterAction::RemoveAttachment(index) => {
+                if *index < self.pending_attachments.len() {
+                    self.pending_attachments.remove(*index);
+                    self.attachment_chips.remove(*index);
+                    ctx.notify();
+                }
+            }
+            AgentInputFooterAction::SetThumbnailBytes {
+                index,
+                mime,
+                thumbnail,
+            } => {
+                // Safety check: the attachment at `index` must still exist and
+                // its MIME must match (guards against stale indices after removal).
+                let attachment_still_matches = self
+                    .pending_attachments
+                    .get(*index)
+                    .is_some_and(|a| &a.mime == mime);
+                if attachment_still_matches {
+                    self.pending_attachments[*index].thumbnail_bytes = Some(thumbnail.clone());
+
+                    // Insert the decoded bytes into the asset cache under a
+                    // stable Raw ID so the Image element can render them.
+                    let asset_id = format!("attachment-thumb-{index}-{mime}");
+                    warpui::assets::asset_cache::AssetCache::handle(ctx).update(
+                        ctx,
+                        |cache, ctx| {
+                            cache.insert_raw_asset_bytes::<warpui::image_cache::ImageType>(
+                                asset_id.clone(),
+                                thumbnail,
+                                ctx,
+                            );
+                        },
+                    );
+
+                    // Tell the chip view to use the new source.
+                    let source = warpui::assets::asset_cache::AssetSource::Raw {
+                        id: asset_id,
+                    };
+                    if let Some(chip) = self.attachment_chips.get(*index) {
+                        chip.update(ctx, |chip, ctx| {
+                            chip.set_thumbnail_source(source);
+                            ctx.notify();
+                        });
+                    }
+                    ctx.notify();
+                }
             }
         }
     }
