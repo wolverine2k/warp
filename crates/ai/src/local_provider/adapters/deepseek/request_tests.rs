@@ -744,6 +744,7 @@ fn png_attachment() -> AgentAttachment {
         mime: "image/png".into(),
         bytes: vec![1, 2, 3],
         display_name: Some("test.png".into()),
+        thumbnail_bytes: None,
     }
 }
 

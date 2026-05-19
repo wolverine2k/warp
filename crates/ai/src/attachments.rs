@@ -23,6 +23,35 @@ pub struct AgentAttachment {
     /// User-visible name for UI history rendering (4c-3). `None` is
     /// acceptable — the file picker may generate one if missing.
     pub display_name: Option<String>,
+    /// Phase 4c-3. Pre-decoded thumbnail bytes (128px PNG) for image
+    /// attachments. Decoded once at attach-time on a background task so the
+    /// chip-render path never blocks the UI thread. `None` for non-image
+    /// modalities (pdf/audio) and for images whose decoding failed (in which
+    /// case the chip falls back to the generic icon + filename rendering).
+    /// Runtime-only — never serialized into the conversation blob.
+    pub thumbnail_bytes: Option<Vec<u8>>,
+}
+
+/// Phase 4c-3. Persistence-friendly companion to `AgentAttachment`.
+/// Carries the user-visible name and mime type only — no bytes. Serialized
+/// into the conversation history JSON blob so post-reload history rendering
+/// can show a "not available" placeholder with the original filename.
+///
+/// `AgentAttachment` (the full runtime type) is NEVER serialized; bytes are
+/// session-scoped by design (see brainstorm 2026-05-19).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct AttachmentMetadata {
+    pub mime: String,
+    pub display_name: Option<String>,
+}
+
+impl From<&AgentAttachment> for AttachmentMetadata {
+    fn from(att: &AgentAttachment) -> Self {
+        Self {
+            mime: att.mime.clone(),
+            display_name: att.display_name.clone(),
+        }
+    }
 }
 
 impl AgentAttachment {

@@ -1154,6 +1154,7 @@ fn png_attachment() -> ai::attachments::AgentAttachment {
         mime: "image/png".into(),
         bytes: vec![0x89, 0x50, 0x4e, 0x47], // PNG magic bytes
         display_name: Some("test.png".into()),
+        thumbnail_bytes: None,
     }
 }
 
@@ -1240,6 +1241,7 @@ fn ollama_attachment_turn_emits_images_array_in_outbound_body() {
             mime: "image/png".into(),
             bytes,
             display_name: None,
+            thumbnail_bytes: None,
         }],
         tasks: vec![],
         supported_tools: vec![],
@@ -1279,6 +1281,7 @@ fn gemini_attachment_turn_emits_inline_data_part_in_outbound_body() {
             mime: "image/png".into(),
             bytes,
             display_name: None,
+            thumbnail_bytes: None,
         }],
         tasks: vec![],
         supported_tools: vec![],

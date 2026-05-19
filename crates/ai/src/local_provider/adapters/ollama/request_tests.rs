@@ -543,6 +543,7 @@ fn image_attachment_appends_base64_to_user_turn() {
         mime: "image/png".into(),
         bytes,
         display_name: None,
+        thumbnail_bytes: None,
     }];
     let req = compose_ollama_chat_request(&input, &cfg());
     // system + user(query + images)
@@ -568,6 +569,7 @@ fn pdf_attachment_dropped_with_warning() {
         mime: "application/pdf".into(),
         bytes: b"%PDF-1.4 fake".to_vec(),
         display_name: Some("doc.pdf".into()),
+        thumbnail_bytes: None,
     }];
     let req = compose_ollama_chat_request(&input, &cfg());
     // system + user(query) — no extra images-only message pushed.

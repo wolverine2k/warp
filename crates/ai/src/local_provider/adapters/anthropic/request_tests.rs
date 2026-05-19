@@ -623,6 +623,7 @@ fn png_attachment() -> AgentAttachment {
         mime: "image/png".into(),
         bytes: vec![0x89, 0x50, 0x4e, 0x47],
         display_name: Some("test.png".into()),
+        thumbnail_bytes: None,
     }
 }
 
@@ -631,6 +632,7 @@ fn pdf_attachment() -> AgentAttachment {
         mime: "application/pdf".into(),
         bytes: vec![0x25, 0x50, 0x44, 0x46],
         display_name: Some("test.pdf".into()),
+        thumbnail_bytes: None,
     }
 }
 
@@ -702,6 +704,7 @@ fn audio_attachment_dropped_no_extra_blocks() {
         mime: "audio/wav".into(),
         bytes: vec![0x52, 0x49, 0x46, 0x46],
         display_name: None,
+        thumbnail_bytes: None,
     };
     let input = LocalProviderInput {
         user_query: Some("transcribe this".into()),

@@ -624,6 +624,7 @@ fn image_attachment_appends_inline_data_part() {
         mime: "image/png".into(),
         bytes,
         display_name: None,
+        thumbnail_bytes: None,
     }];
     let req = compose_gemini_request(&input, &cfg());
     let user_entry = req
@@ -658,6 +659,7 @@ fn audio_attachment_emits_inline_data_with_audio_mime() {
         mime: "audio/wav".into(),
         bytes,
         display_name: None,
+        thumbnail_bytes: None,
     }];
     let req = compose_gemini_request(&input, &cfg());
     let user_entry = req

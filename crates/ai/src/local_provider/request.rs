@@ -1465,6 +1465,7 @@ mod tests {
             mime: "image/png".into(),
             bytes: vec![0x89, 0x50, 0x4e, 0x47],
             display_name: Some("test.png".into()),
+            thumbnail_bytes: None,
         }
     }
 
@@ -1518,6 +1519,7 @@ mod tests {
                 mime: "application/pdf".into(),
                 bytes: vec![1, 2, 3],
                 display_name: None,
+                thumbnail_bytes: None,
             }],
             ..Default::default()
         };
