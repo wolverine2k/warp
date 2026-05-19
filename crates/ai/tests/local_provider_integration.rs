@@ -1142,6 +1142,195 @@ async fn next_turn_after_compaction_drops_pre_compaction_history() {
     );
 }
 
+// ---------- Phase 4c-2 Task 7: cross-adapter attachment smoke tests ----------
+//
+// These tests drive each adapter's request-builder directly (Option A) —
+// no HTTP round-trip required. We build a `LocalProviderInput` with one
+// image attachment, call `compose_*`, serialize to JSON, and assert the
+// per-adapter multimodal wire shape.
+
+fn png_attachment() -> ai::attachments::AgentAttachment {
+    ai::attachments::AgentAttachment {
+        mime: "image/png".into(),
+        bytes: vec![0x89, 0x50, 0x4e, 0x47], // PNG magic bytes
+        display_name: Some("test.png".into()),
+    }
+}
+
+fn attachment_input() -> LocalProviderInput {
+    LocalProviderInput {
+        user_query: Some("describe this image".into()),
+        attachments: vec![png_attachment()],
+        tasks: vec![],
+        supported_tools: vec![],
+        ..Default::default()
+    }
+}
+
+fn base_cfg(api_type: ai::local_provider::AgentProviderApiType) -> ai::local_provider::config::LocalProviderConfig {
+    ai::local_provider::config::LocalProviderConfig {
+        display_name: "Test".into(),
+        base_url: "http://127.0.0.1:9999/v1".into(),
+        model_id: "test-model".into(),
+        api_key: None,
+        supports_tools: false,
+        context_window: None,
+        api_type,
+    }
+}
+
+#[test]
+fn openai_attachment_turn_emits_content_array_in_outbound_body() {
+    use ai::local_provider::request::compose_chat_completion_request;
+    let cfg = base_cfg(ai::local_provider::AgentProviderApiType::OpenAi);
+    let input = attachment_input();
+    let req = compose_chat_completion_request(&input, &cfg);
+    let v = serde_json::to_value(&req).unwrap();
+    // The last message is the user turn.
+    let messages = v["messages"].as_array().unwrap();
+    let user = messages.last().unwrap();
+    assert_eq!(user["role"], "user");
+    // content must be an array (Parts), not a plain string.
+    let content = &user["content"];
+    assert!(content.is_array(), "OpenAi: expected content array, got {content}");
+    let parts = content.as_array().unwrap();
+    // text part first
+    assert_eq!(parts[0]["type"], "text");
+    // image_url part second
+    assert_eq!(parts[1]["type"], "image_url");
+    let url = parts[1]["image_url"]["url"].as_str().unwrap();
+    assert!(
+        url.starts_with("data:image/png;base64,"),
+        "OpenAi: image_url must be a data-URI, got {url}"
+    );
+}
+
+#[test]
+fn anthropic_attachment_turn_emits_image_block_in_outbound_body() {
+    use ai::local_provider::adapters::anthropic::request::compose_anthropic_messages_request;
+    let cfg = base_cfg(ai::local_provider::AgentProviderApiType::Anthropic);
+    let input = attachment_input();
+    let req = compose_anthropic_messages_request(&input, &cfg);
+    let v = serde_json::to_value(&req).unwrap();
+    // Find the user message (role == "user").
+    let messages = v["messages"].as_array().unwrap();
+    let user = messages
+        .iter()
+        .find(|m| m["role"] == "user")
+        .expect("Anthropic: expected user message");
+    let content = user["content"].as_array().unwrap();
+    // First block: text; second block: image.
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[1]["source"]["type"], "base64");
+    assert_eq!(content[1]["source"]["media_type"], "image/png");
+    let data = content[1]["source"]["data"].as_str().unwrap();
+    assert!(!data.is_empty(), "Anthropic: base64 data must not be empty");
+}
+
+#[test]
+fn ollama_attachment_turn_emits_images_array_in_outbound_body() {
+    use ai::local_provider::adapters::ollama::request::compose_ollama_chat_request;
+    let cfg = base_cfg(ai::local_provider::AgentProviderApiType::Ollama);
+    let bytes = vec![0x89u8, 0x50, 0x4e, 0x47];
+    let expected_b64 = ai::attachments::encode_base64(&bytes);
+    let input = LocalProviderInput {
+        user_query: Some("describe this image".into()),
+        attachments: vec![ai::attachments::AgentAttachment {
+            mime: "image/png".into(),
+            bytes,
+            display_name: None,
+        }],
+        tasks: vec![],
+        supported_tools: vec![],
+        ..Default::default()
+    };
+    let req = compose_ollama_chat_request(&input, &cfg);
+    let v = serde_json::to_value(&req).unwrap();
+    // Find the user message (role == "user").
+    let messages = v["messages"].as_array().unwrap();
+    let user = messages
+        .iter()
+        .find(|m| m["role"] == "user")
+        .expect("Ollama: expected user message");
+    let images = user["images"].as_array().expect("Ollama: images must be an array");
+    assert_eq!(images.len(), 1, "Ollama: expected exactly one image entry");
+    assert_eq!(
+        images[0].as_str().unwrap(),
+        expected_b64,
+        "Ollama: image must be raw base64 (no data: prefix)"
+    );
+    // Confirm no data-URI prefix.
+    assert!(
+        !images[0].as_str().unwrap().starts_with("data:"),
+        "Ollama: images entries must be raw base64, not data-URIs"
+    );
+}
+
+#[test]
+fn gemini_attachment_turn_emits_inline_data_part_in_outbound_body() {
+    use ai::local_provider::adapters::gemini::request::compose_gemini_request;
+    let cfg = base_cfg(ai::local_provider::AgentProviderApiType::Gemini);
+    let bytes = vec![0x89u8, 0x50, 0x4e, 0x47];
+    let expected_b64 = ai::attachments::encode_base64(&bytes);
+    let input = LocalProviderInput {
+        user_query: Some("describe this image".into()),
+        attachments: vec![ai::attachments::AgentAttachment {
+            mime: "image/png".into(),
+            bytes,
+            display_name: None,
+        }],
+        tasks: vec![],
+        supported_tools: vec![],
+        ..Default::default()
+    };
+    let req = compose_gemini_request(&input, &cfg);
+    let v = serde_json::to_value(&req).unwrap();
+    // Find the user content entry.
+    let contents = v["contents"].as_array().unwrap();
+    let user = contents
+        .iter()
+        .find(|c| c["role"] == "user")
+        .expect("Gemini: expected user content");
+    let parts = user["parts"].as_array().unwrap();
+    // text part first, inline_data second.
+    assert!(parts[0].get("text").is_some(), "Gemini: first part must be text");
+    let inline = &parts[1]["inline_data"];
+    assert_eq!(inline["mime_type"], "image/png");
+    assert_eq!(
+        inline["data"].as_str().unwrap(),
+        expected_b64,
+        "Gemini: data must be raw base64"
+    );
+    assert!(
+        !inline["data"].as_str().unwrap().starts_with("data:"),
+        "Gemini: inline_data.data must be raw base64, not a data-URI"
+    );
+}
+
+#[test]
+fn deepseek_attachment_turn_emits_content_array_in_outbound_body() {
+    use ai::local_provider::adapters::deepseek::request::compose_deepseek_chat_request;
+    let cfg = base_cfg(ai::local_provider::AgentProviderApiType::DeepSeek);
+    let input = attachment_input();
+    let req = compose_deepseek_chat_request(&input, &cfg);
+    let v = serde_json::to_value(&req).unwrap();
+    // Same shape as OpenAi: content is an array with text + image_url parts.
+    let messages = v["messages"].as_array().unwrap();
+    let user = messages.last().unwrap();
+    assert_eq!(user["role"], "user");
+    let content = &user["content"];
+    assert!(content.is_array(), "DeepSeek: expected content array, got {content}");
+    let parts = content.as_array().unwrap();
+    assert_eq!(parts[0]["type"], "text");
+    assert_eq!(parts[1]["type"], "image_url");
+    let url = parts[1]["image_url"]["url"].as_str().unwrap();
+    assert!(
+        url.starts_with("data:image/png;base64,"),
+        "DeepSeek: image_url must be a data-URI, got {url}"
+    );
+}
+
 // ---------- Phase B-6 multi-turn agent loop ----------
 
 #[tokio::test]
