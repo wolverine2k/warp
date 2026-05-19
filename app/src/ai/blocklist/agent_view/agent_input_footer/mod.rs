@@ -1,3 +1,4 @@
+mod attachment_input_validator;
 pub(super) mod chips;
 pub mod editor;
 mod environment_selector;

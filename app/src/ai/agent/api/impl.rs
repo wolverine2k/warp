@@ -282,6 +282,7 @@ async fn route_to_local_provider(
         synthetic_user_queries,
         compaction_config: params.local_provider_compaction_config.clone(),
         compaction_state: params.local_provider_compaction_state.clone(),
+        attachments: vec![],
     };
 
     let http = reqwest::Client::new();
