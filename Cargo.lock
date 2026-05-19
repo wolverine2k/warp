@@ -305,6 +305,7 @@ dependencies = [
  "async-fs",
  "async-trait",
  "base16ct",
+ "base64 0.22.1",
  "bincode",
  "bytes",
  "cfg-if",
