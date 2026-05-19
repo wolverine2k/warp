@@ -109,7 +109,7 @@ fn system_prompt_becomes_first_message_with_role_system() {
     let req = compose_deepseek_chat_request(&input, &cfg());
     assert!(req.messages.len() >= 2);
     assert_eq!(req.messages[0].role, DeepSeekRole::System);
-    assert!(req.messages[0].content.as_deref().map(|s| !s.is_empty()).unwrap_or(false));
+    assert!(req.messages[0].content.as_ref().and_then(|c| c.as_text()).map(|s| !s.is_empty()).unwrap_or(false));
 }
 
 // ---- 2: user query ----
@@ -121,7 +121,7 @@ fn user_query_becomes_role_user_message() {
     let req = compose_deepseek_chat_request(&input, &cfg());
     assert_eq!(req.messages.len(), 2);
     assert_eq!(req.messages[1].role, DeepSeekRole::User);
-    assert_eq!(req.messages[1].content.as_deref(), Some("hello"));
+    assert_eq!(req.messages[1].content.as_ref().and_then(|c| c.as_text()), Some("hello"));
 }
 
 // ---- 3: agent output ----
@@ -142,7 +142,7 @@ fn agent_output_becomes_role_assistant_message() {
     assert_eq!(req.messages.len(), 2);
     assert_eq!(req.messages[1].role, DeepSeekRole::Assistant);
     assert_eq!(
-        req.messages[1].content.as_deref(),
+        req.messages[1].content.as_ref().and_then(|c| c.as_text()),
         Some("I can help with that.")
     );
 }
@@ -347,16 +347,17 @@ fn compaction_projection_synthesizes_user_assistant_summary_pair() {
     assert_eq!(req.messages[1].role, DeepSeekRole::User);
     assert!(req.messages[1]
         .content
-        .as_deref()
+        .as_ref()
+        .and_then(|c| c.as_text())
         .unwrap()
         .contains("Continue"));
     assert_eq!(req.messages[2].role, DeepSeekRole::Assistant);
     assert_eq!(
-        req.messages[2].content.as_deref(),
+        req.messages[2].content.as_ref().and_then(|c| c.as_text()),
         Some("## Goal\n- summary")
     );
     assert_eq!(req.messages[3].role, DeepSeekRole::User);
-    assert_eq!(req.messages[3].content.as_deref(), Some("post-compact ask"));
+    assert_eq!(req.messages[3].content.as_ref().and_then(|c| c.as_text()), Some("post-compact ask"));
 }
 
 // ---- 13: synthetic user query anchoring ----
@@ -377,9 +378,9 @@ fn synthetic_user_query_anchoring_works() {
     // system + user(what is X?) + assistant(first answer)
     assert_eq!(req.messages.len(), 3);
     assert_eq!(req.messages[1].role, DeepSeekRole::User);
-    assert_eq!(req.messages[1].content.as_deref(), Some("what is X?"));
+    assert_eq!(req.messages[1].content.as_ref().and_then(|c| c.as_text()), Some("what is X?"));
     assert_eq!(req.messages[2].role, DeepSeekRole::Assistant);
-    assert_eq!(req.messages[2].content.as_deref(), Some("first answer"));
+    assert_eq!(req.messages[2].content.as_ref().and_then(|c| c.as_text()), Some("first answer"));
 }
 
 // ---- 14: multi-turn round-trip ----
@@ -471,7 +472,7 @@ fn orphan_tool_call_uses_action_results_when_present_and_carries_tool_call_id() 
         .find(|m| m.role == DeepSeekRole::Tool)
         .expect("backfilled role:tool message should exist");
     assert_eq!(
-        tool_msg.content.as_deref(),
+        tool_msg.content.as_ref().and_then(|c| c.as_text()),
         Some("(action result content from controller)"),
         "action_results content should be used, not the placeholder"
     );
@@ -732,4 +733,88 @@ fn deepseek_adapter_parse_summarizer_response_top_level_error_yields_upstream_en
         }
         other => panic!("expected UpstreamErrorEnvelope, got {other:?}"),
     }
+}
+
+// ---- Phase 4c-2: attachment tests ----
+
+use crate::attachments::AgentAttachment;
+
+fn png_attachment() -> AgentAttachment {
+    AgentAttachment {
+        mime: "image/png".into(),
+        bytes: vec![1, 2, 3],
+        display_name: Some("test.png".into()),
+    }
+}
+
+// ---- 10: text-only matches OpenAi shape ----
+
+#[test]
+fn deepseek_text_only_matches_openai_shape() {
+    // Text-only turns must produce ChatMessageContent::Text — identical wire
+    // bytes to the OpenAi adapter's text-only path (plain JSON string, not an
+    // array).
+    let mut input = empty_input();
+    input.user_query = Some("hello deepseek".into());
+    let req = compose_deepseek_chat_request(&input, &cfg());
+    let last = req.messages.last().expect("at least one message");
+    assert_eq!(last.role, DeepSeekRole::User);
+    match &last.content {
+        Some(super::wire::ChatMessageContent::Text(s)) => {
+            assert_eq!(s, "hello deepseek");
+        }
+        other => panic!("expected ChatMessageContent::Text, got {other:?}"),
+    }
+    // Serializes as a plain JSON string, not an array.
+    let v = serde_json::to_value(req).unwrap();
+    let content = &v["messages"].as_array().unwrap().last().unwrap()["content"];
+    assert!(content.is_string(), "text-only content must serialize as a string, got {content:?}");
+    assert_eq!(content, "hello deepseek");
+}
+
+// ---- 11: image attachment emits content array ----
+
+#[test]
+fn deepseek_image_attachment_emits_content_array() {
+    // Image attachment turns must produce ChatMessageContent::Parts with a
+    // Text part followed by an ImageUrl part. Wire shape is identical to the
+    // OpenAi adapter's content-array shape.
+    let mut input = empty_input();
+    input.user_query = Some("look at this".into());
+    input.attachments = vec![png_attachment()];
+    let req = compose_deepseek_chat_request(&input, &cfg());
+    let last = req.messages.last().expect("at least one message");
+    assert_eq!(last.role, DeepSeekRole::User);
+    match &last.content {
+        Some(super::wire::ChatMessageContent::Parts(parts)) => {
+            assert_eq!(parts.len(), 2, "expected [text, image_url], got {parts:?}");
+            assert!(
+                matches!(&parts[0], super::wire::ChatContentPart::Text { text } if text == "look at this"),
+                "first part must be text, got {:?}",
+                parts[0]
+            );
+            match &parts[1] {
+                super::wire::ChatContentPart::ImageUrl { image_url } => {
+                    assert!(
+                        image_url.url.starts_with("data:image/png;base64,"),
+                        "image_url must be a data URI, got {}",
+                        image_url.url
+                    );
+                }
+                other => panic!("expected ImageUrl part, got {other:?}"),
+            }
+        }
+        other => panic!("expected ChatMessageContent::Parts, got {other:?}"),
+    }
+    // Serializes as a JSON array.
+    let v = serde_json::to_value(req).unwrap();
+    let content = &v["messages"].as_array().unwrap().last().unwrap()["content"];
+    assert!(content.is_array(), "attachment content must serialize as an array, got {content:?}");
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[0]["text"], "look at this");
+    assert_eq!(content[1]["type"], "image_url");
+    assert!(
+        content[1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"),
+        "image_url.url must be a data URI"
+    );
 }

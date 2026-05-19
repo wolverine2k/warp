@@ -217,7 +217,7 @@ fn build_deepseek_summarizer_body(
                     .content
                     .as_ref()
                     .and_then(|c| c.as_text())
-                    .map(|s| s.to_string()),
+                    .map(|s| wire::ChatMessageContent::Text(s.to_string())),
                 tool_calls: None,
                 tool_call_id: None,
             })

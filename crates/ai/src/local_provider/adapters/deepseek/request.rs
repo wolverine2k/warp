@@ -19,8 +19,9 @@ use std::collections::HashMap;
 use warp_multi_agent_api as api;
 
 use super::wire::{
-    DeepSeekChatMessage, DeepSeekChatRequest, DeepSeekOutboundToolCall,
-    DeepSeekOutboundToolCallFunction, DeepSeekRole, DeepSeekToolDef, DeepSeekToolFunction,
+    ChatContentPart, ChatMessageContent, DeepSeekChatMessage, DeepSeekChatRequest,
+    DeepSeekOutboundToolCall, DeepSeekOutboundToolCallFunction, DeepSeekRole, DeepSeekToolDef,
+    DeepSeekToolFunction, ImageUrlSpec,
 };
 use crate::local_provider::{
     compaction,
@@ -100,8 +101,47 @@ pub fn compose_deepseek_chat_request(
 
     backfill_orphaned_tool_calls(&mut staged, &input.action_results);
 
-    if let Some(q) = input.user_query.as_deref() {
-        staged.push(StagedMessage::user_text(q));
+    // Phase 4c-2: user turn with optional image attachments.
+    // DeepSeek's API is OpenAi-compatible — it accepts the same content-array
+    // shape (`[{type:"text",...},{type:"image_url",...}]`). Non-image
+    // attachments (pdf, audio) are dropped with a warning.
+    if input.user_query.is_some() || !input.attachments.is_empty() {
+        let user_content = if input.attachments.is_empty() {
+            ChatMessageContent::Text(input.user_query.clone().unwrap_or_default())
+        } else {
+            let mut parts: Vec<ChatContentPart> = Vec::new();
+            if let Some(text) = input.user_query.as_ref() {
+                if !text.is_empty() {
+                    parts.push(ChatContentPart::Text { text: text.clone() });
+                }
+            }
+            for attachment in &input.attachments {
+                if attachment.is_image() {
+                    parts.push(ChatContentPart::ImageUrl {
+                        image_url: ImageUrlSpec {
+                            url: crate::attachments::encode_data_uri(
+                                &attachment.mime,
+                                &attachment.bytes,
+                            ),
+                        },
+                    });
+                } else {
+                    log::warn!(
+                        "DeepSeek adapter: dropping unsupported attachment mime {} \
+                         (only image/* is supported on this api_type)",
+                        attachment.mime
+                    );
+                }
+            }
+            ChatMessageContent::Parts(parts)
+        };
+        staged.push(StagedMessage {
+            role: DeepSeekRole::User,
+            content: Some(user_content),
+            tool_calls: None,
+            proto_tool_call_id: None,
+            proto_tool_result_id: None,
+        });
     }
 
     let messages: Vec<DeepSeekChatMessage> =
@@ -140,7 +180,7 @@ fn tool_definitions_deepseek(enabled: &[LocalTool]) -> Vec<DeepSeekToolDef> {
 /// `DeepSeekChatMessage` before serialization.
 struct StagedMessage {
     role: DeepSeekRole,
-    content: Option<String>,
+    content: Option<ChatMessageContent>,
     tool_calls: Option<Vec<DeepSeekOutboundToolCall>>,
     /// Set when this assistant message represents a proto `Message::ToolCall`.
     /// Drives the backfill's id-keyed action_results lookup.
@@ -155,7 +195,7 @@ impl StagedMessage {
     fn system(text: String) -> Self {
         Self {
             role: DeepSeekRole::System,
-            content: Some(text),
+            content: Some(ChatMessageContent::Text(text)),
             tool_calls: None,
             proto_tool_call_id: None,
             proto_tool_result_id: None,
@@ -165,7 +205,7 @@ impl StagedMessage {
     fn user_text(text: &str) -> Self {
         Self {
             role: DeepSeekRole::User,
-            content: Some(text.to_string()),
+            content: Some(ChatMessageContent::Text(text.to_string())),
             tool_calls: None,
             proto_tool_call_id: None,
             proto_tool_result_id: None,
@@ -175,7 +215,7 @@ impl StagedMessage {
     fn assistant_text(text: &str) -> Self {
         Self {
             role: DeepSeekRole::Assistant,
-            content: Some(text.to_string()),
+            content: Some(ChatMessageContent::Text(text.to_string())),
             tool_calls: None,
             proto_tool_call_id: None,
             proto_tool_result_id: None,
@@ -247,7 +287,7 @@ fn push_proto_message(out: &mut Vec<StagedMessage>, proto_msg: &api::Message) {
         }
         Some(M::ToolCallResult(result)) => out.push(StagedMessage {
             role: DeepSeekRole::Tool,
-            content: Some(summarize_tool_result(result)),
+            content: Some(ChatMessageContent::Text(summarize_tool_result(result))),
             tool_calls: None,
             proto_tool_call_id: None,
             proto_tool_result_id: Some(result.tool_call_id.clone()),
@@ -301,7 +341,7 @@ fn backfill_orphaned_tool_calls(
             i + 1,
             StagedMessage {
                 role: DeepSeekRole::Tool,
-                content: Some(content),
+                content: Some(ChatMessageContent::Text(content)),
                 tool_calls: None,
                 proto_tool_call_id: None,
                 proto_tool_result_id: Some(tool_call_id),

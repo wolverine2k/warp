@@ -24,6 +24,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+// Re-export the shared content types so callers in this module don't need to
+// reach into `crate::local_provider::wire` directly.
+pub use crate::local_provider::wire::{ChatContentPart, ChatMessageContent, ImageUrlSpec};
+
 // ---------- Request (outbound) ----------
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,8 +42,12 @@ pub struct DeepSeekChatRequest {
 #[derive(Debug, Clone, Serialize)]
 pub struct DeepSeekChatMessage {
     pub role: DeepSeekRole,
+    /// Either a plain text string (text-only turn) or an array of content
+    /// parts (turn with image attachments). Uses the same untagged
+    /// `ChatMessageContent` enum as the OpenAi adapter — DeepSeek's API
+    /// accepts the identical wire shape.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<ChatMessageContent>,
     /// Required on assistant messages that carry tool_calls; absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<DeepSeekOutboundToolCall>>,
@@ -255,7 +263,7 @@ mod tests {
             stream: true,
             messages: vec![DeepSeekChatMessage {
                 role: DeepSeekRole::User,
-                content: Some("Hello!".into()),
+                content: Some(ChatMessageContent::Text("Hello!".into())),
                 tool_calls: None,
                 tool_call_id: None,
             }],
@@ -278,19 +286,19 @@ mod tests {
             messages: vec![
                 DeepSeekChatMessage {
                     role: DeepSeekRole::System,
-                    content: Some("You are helpful.".into()),
+                    content: Some(ChatMessageContent::Text("You are helpful.".into())),
                     tool_calls: None,
                     tool_call_id: None,
                 },
                 DeepSeekChatMessage {
                     role: DeepSeekRole::User,
-                    content: Some("Hi".into()),
+                    content: Some(ChatMessageContent::Text("Hi".into())),
                     tool_calls: None,
                     tool_call_id: None,
                 },
                 DeepSeekChatMessage {
                     role: DeepSeekRole::Assistant,
-                    content: Some("Hello!".into()),
+                    content: Some(ChatMessageContent::Text("Hello!".into())),
                     tool_calls: None,
                     tool_call_id: None,
                 },
@@ -337,7 +345,7 @@ mod tests {
     fn serializes_role_tool_with_tool_call_id() {
         let msg = DeepSeekChatMessage {
             role: DeepSeekRole::Tool,
-            content: Some("file contents here".into()),
+            content: Some(ChatMessageContent::Text("file contents here".into())),
             tool_calls: None,
             tool_call_id: Some("call_abc123".into()),
         };
