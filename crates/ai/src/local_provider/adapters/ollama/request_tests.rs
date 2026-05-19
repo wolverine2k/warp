@@ -512,6 +512,71 @@ fn context_window_threads_into_system_prompt() {
     );
 }
 
+// ---- attachments (Phase 4c-2) ----
+
+#[test]
+fn text_only_turn_omits_images_field() {
+    // A request with no attachments must NOT emit an `images` key so that
+    // text-only wire bytes are byte-for-byte identical to pre-4c-2 output.
+    let mut input = empty_input();
+    input.user_query = Some("what time is it?".into());
+    let req = compose_ollama_chat_request(&input, &cfg());
+    let v = serde_json::to_value(&req).unwrap();
+    for msg in v["messages"].as_array().unwrap() {
+        assert!(
+            msg.get("images").is_none(),
+            "images key must be absent on text-only message: {msg}"
+        );
+    }
+}
+
+#[test]
+fn image_attachment_appends_base64_to_user_turn() {
+    use crate::attachments::AgentAttachment;
+    // 3-byte PNG-ish payload; expected b64 computed via the same helper
+    // the adapter uses so the test doesn't re-implement base64 encoding.
+    let bytes = vec![0x00u8, 0x01, 0x02];
+    let expected_b64 = crate::attachments::encode_base64(&bytes);
+    let mut input = empty_input();
+    input.user_query = Some("describe this image".into());
+    input.attachments = vec![AgentAttachment {
+        mime: "image/png".into(),
+        bytes,
+        display_name: None,
+    }];
+    let req = compose_ollama_chat_request(&input, &cfg());
+    // system + user(query + images)
+    assert_eq!(req.messages.len(), 2);
+    let user_msg = &req.messages[1];
+    assert_eq!(user_msg.role, OllamaRole::User);
+    assert_eq!(user_msg.content, "describe this image");
+    assert_eq!(user_msg.images, vec![expected_b64]);
+    // Wire: images key must be present with the raw base64 value.
+    let v = serde_json::to_value(req).unwrap();
+    let img = &v["messages"][1]["images"][0];
+    assert!(img.is_string());
+    assert!(!img.as_str().unwrap().starts_with("data:"));
+}
+
+#[test]
+fn pdf_attachment_dropped_with_warning() {
+    use crate::attachments::AgentAttachment;
+    // PDF attachment — Ollama chat API has no document block type.
+    let mut input = empty_input();
+    input.user_query = Some("summarize this pdf".into());
+    input.attachments = vec![AgentAttachment {
+        mime: "application/pdf".into(),
+        bytes: b"%PDF-1.4 fake".to_vec(),
+        display_name: Some("doc.pdf".into()),
+    }];
+    let req = compose_ollama_chat_request(&input, &cfg());
+    // system + user(query) — no extra images-only message pushed.
+    assert_eq!(req.messages.len(), 2);
+    let v = serde_json::to_value(&req).unwrap();
+    // The user turn must have no images key (PDF was dropped).
+    assert!(v["messages"][1].get("images").is_none());
+}
+
 // ---- OllamaAdapter (ProviderAdapter trait impl) ----
 //
 // Exercises the adapter's HTTP shape: URLs, auth headers, stream:false on

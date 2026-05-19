@@ -217,6 +217,7 @@ fn build_ollama_summarizer_body(
             role,
             content,
             tool_calls: None,
+            images: Vec::new(),
         });
     }
     let options = cfg

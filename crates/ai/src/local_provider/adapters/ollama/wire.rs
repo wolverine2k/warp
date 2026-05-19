@@ -36,6 +36,11 @@ pub struct OllamaChatMessage {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<OllamaOutboundToolCall>>,
+    /// Phase 4c-2. Base64-encoded image attachments (no data-URI prefix —
+    /// raw base64 only). Empty Vec is the default; serialized only when
+    /// non-empty so text-only turns produce the same wire bytes as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -190,11 +195,13 @@ mod tests {
                     role: OllamaRole::System,
                     content: "You are helpful.".into(),
                     tool_calls: None,
+                    images: Vec::new(),
                 },
                 OllamaChatMessage {
                     role: OllamaRole::User,
                     content: "Hello!".into(),
                     tool_calls: None,
+                    images: Vec::new(),
                 },
             ],
             tools: None,
@@ -221,6 +228,7 @@ mod tests {
                     arguments: json!({"paths": ["Cargo.toml"]}),
                 },
             }]),
+            images: Vec::new(),
         };
         let v = serde_json::to_value(&msg).unwrap();
         // arguments must serialize as an object, not a string.
@@ -273,6 +281,7 @@ mod tests {
             role: OllamaRole::Tool,
             content: "result text".into(),
             tool_calls: None,
+            images: Vec::new(),
         };
         let v = serde_json::to_value(&msg).unwrap();
         assert_eq!(v["role"], "tool");

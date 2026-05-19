@@ -113,6 +113,44 @@ pub fn compose_ollama_chat_request(
         staged.push(StagedMessage::user_text(q));
     }
 
+    // Phase 4c-2: append base64-encoded image attachments to the user turn.
+    // Ollama's `/api/chat` only supports images — PDF and audio attachments
+    // are dropped with a warning (there is no document block type in the
+    // native Ollama chat API).
+    if !input.attachments.is_empty() {
+        let mut image_b64s: Vec<String> = Vec::new();
+        for attachment in &input.attachments {
+            if attachment.is_image() {
+                // Raw base64, no data-URI prefix. Ollama's native shape is
+                // `images: ["<base64>", ...]`, not a data URI.
+                image_b64s.push(crate::attachments::encode_base64(&attachment.bytes));
+            } else {
+                log::warn!(
+                    "Ollama adapter: dropping unsupported attachment mime {} \
+                     (only image/* is supported on the native /api/chat endpoint)",
+                    attachment.mime
+                );
+            }
+        }
+        if !image_b64s.is_empty() {
+            // Merge into the last user turn when one already exists;
+            // otherwise push a new user message that carries only the images.
+            match staged.last_mut() {
+                Some(last) if last.role == OllamaRole::User => {
+                    last.images.extend(image_b64s);
+                }
+                _ => staged.push(StagedMessage {
+                    role: OllamaRole::User,
+                    content: String::new(),
+                    tool_calls: None,
+                    images: image_b64s,
+                    proto_tool_call_id: None,
+                    proto_tool_result_id: None,
+                }),
+            }
+        }
+    }
+
     let messages: Vec<OllamaChatMessage> = staged.into_iter().map(|s| s.finalize()).collect();
 
     let options = cfg
@@ -159,6 +197,9 @@ struct StagedMessage {
     role: OllamaRole,
     content: String,
     tool_calls: Option<Vec<OllamaOutboundToolCall>>,
+    /// Phase 4c-2. Base64-encoded image attachments (raw base64, no data-URI
+    /// prefix). Non-empty only on the user turn that carries attachments.
+    images: Vec<String>,
     /// Set when this assistant message represents a proto `Message::ToolCall`.
     /// Drives the backfill's id-keyed action_results lookup.
     proto_tool_call_id: Option<String>,
@@ -173,6 +214,7 @@ impl StagedMessage {
             role: OllamaRole::System,
             content: text,
             tool_calls: None,
+            images: Vec::new(),
             proto_tool_call_id: None,
             proto_tool_result_id: None,
         }
@@ -182,6 +224,7 @@ impl StagedMessage {
             role: OllamaRole::User,
             content: text.to_string(),
             tool_calls: None,
+            images: Vec::new(),
             proto_tool_call_id: None,
             proto_tool_result_id: None,
         }
@@ -191,6 +234,7 @@ impl StagedMessage {
             role: OllamaRole::Assistant,
             content: text.to_string(),
             tool_calls: None,
+            images: Vec::new(),
             proto_tool_call_id: None,
             proto_tool_result_id: None,
         }
@@ -201,6 +245,7 @@ impl StagedMessage {
             role: self.role,
             content: self.content,
             tool_calls: self.tool_calls,
+            images: self.images,
         }
     }
 }
@@ -245,6 +290,7 @@ fn push_proto_message(out: &mut Vec<StagedMessage>, proto_msg: &api::Message) {
                             arguments: args,
                         },
                     }]),
+                    images: Vec::new(),
                     proto_tool_call_id: Some(call.tool_call_id.clone()),
                     proto_tool_result_id: None,
                 });
@@ -254,6 +300,7 @@ fn push_proto_message(out: &mut Vec<StagedMessage>, proto_msg: &api::Message) {
             role: OllamaRole::Tool,
             content: summarize_tool_result(result),
             tool_calls: None,
+            images: Vec::new(),
             proto_tool_call_id: None,
             proto_tool_result_id: Some(result.tool_call_id.clone()),
         }),
@@ -310,6 +357,7 @@ fn backfill_orphaned_tool_calls(
                 role: OllamaRole::Tool,
                 content,
                 tool_calls: None,
+                images: Vec::new(),
                 proto_tool_call_id: None,
                 proto_tool_result_id: Some(tool_call_id),
             },
