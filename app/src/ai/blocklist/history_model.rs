@@ -1767,6 +1767,34 @@ impl BlocklistAIHistoryModel {
             .chain(live_queries_vec)
     }
 
+    /// Phase 4c-3 task 9. Returns the file attachment metadata recorded for the
+    /// given exchange, if any. Searches `persisted_queries` by exchange ID so
+    /// the transcript renderer can show attachment chips on user turns.
+    ///
+    /// Returns an empty `Vec` when the exchange has no file attachments or
+    /// when no persisted query matches the given ID (e.g. live-only exchanges
+    /// that were never flushed to SQLite, or exchanges predating task 8).
+    pub(crate) fn file_attachment_metadata_for_exchange(
+        &self,
+        exchange_id: AIAgentExchangeId,
+    ) -> Vec<ai::attachments::AttachmentMetadata> {
+        self.persisted_queries
+            .iter()
+            .find(|pq| pq.exchange_id == exchange_id)
+            .map(|pq| {
+                pq.inputs
+                    .iter()
+                    .flat_map(|input| match input {
+                        PersistedAIInputType::Query {
+                            file_attachment_metadata,
+                            ..
+                        } => file_attachment_metadata.clone(),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Returns `Some` with the [`AIConversationId`] of the active conversation inside the
     /// [`crate::terminal::TerminalView`] with the given [`EntityId`] if there is one. Returns
     /// `None` otherwise.

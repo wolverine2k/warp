@@ -857,6 +857,13 @@ impl View for AIBlock {
         } else {
             vec![]
         };
+        // Phase 4c-3 task 9. Fetch file-attachment metadata (mime + display_name)
+        // for this exchange so the transcript chip row can be rendered on user turns.
+        // Bytes are session-scoped and never reach the renderer — metadata-only from
+        // the persisted JSON blob is the single source of truth for both in-session
+        // and post-reload renders (tasks 9 + 10 combined).
+        let file_attachment_metadata_list = BlocklistAIHistoryModel::as_ref(app)
+            .file_attachment_metadata_for_exchange(self.client_ids.client_exchange_id);
         if let Some((
             query_for_display,
             input_index,
@@ -941,6 +948,7 @@ impl View for AIBlock {
                         .pending_context_selected_text()
                         .is_some(),
                     attachments: &attachment_name_list,
+                    file_attachment_metadata: &file_attachment_metadata_list,
                     find_context: self.find_model.as_ref(app).is_find_bar_open().then_some(
                         FindContext {
                             model: self.find_model.as_ref(app),
