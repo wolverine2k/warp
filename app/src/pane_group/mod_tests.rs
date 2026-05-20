@@ -154,6 +154,7 @@ fn initialize_app(app: &mut App) {
         AIRequestUsageModel::new_for_test(ServerApiProvider::as_ref(ctx).get_ai_client(), ctx)
     });
     app.add_singleton_model(SessionPermissionsManager::new);
+    app.add_singleton_model(::ai::local_provider::AgentProviderSecrets::new);
     app.add_singleton_model(LLMPreferences::new);
     app.add_singleton_model(HarnessAvailabilityModel::new);
     #[cfg(feature = "voice_input")]

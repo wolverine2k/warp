@@ -140,11 +140,11 @@ fn initialize_app(app: &mut App) {
     app.add_singleton_model(AgentNotificationsModel::new);
     app.add_singleton_model(AgentConversationsModel::new);
     app.add_singleton_model(SessionPermissionsManager::new);
+    app.add_singleton_model(::ai::local_provider::AgentProviderSecrets::new);
     app.add_singleton_model(LLMPreferences::new);
     app.add_singleton_model(HarnessAvailabilityModel::new);
     app.add_singleton_model(|_| SettingsPaneManager::new());
     app.add_singleton_model(|_| AIFactManager::new());
-    app.add_singleton_model(::ai::local_provider::AgentProviderSecrets::new);
 
     // Initialize file-based MCP dependencies.
     app.add_singleton_model(|_| DetectedRepositories::default());
