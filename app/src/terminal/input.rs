@@ -12847,6 +12847,25 @@ impl Input {
             return;
         }
 
+        // Phase 4c-3 task 7. Block submission when any pending attachment is
+        // unsupported by the active model; show a toast naming the offending
+        // file so the user knows what to do.
+        if let Some(message) = self
+            .agent_input_footer
+            .as_ref(ctx)
+            .pending_attachment_rejection_message(ctx)
+        {
+            let window_id = ctx.window_id();
+            ToastStack::handle(ctx).update(ctx, |toast_stack, ctx| {
+                toast_stack.add_ephemeral_toast(
+                    DismissibleToast::error(message),
+                    window_id,
+                    ctx,
+                );
+            });
+            return;
+        }
+
         IgnoredSuggestionsModel::handle(ctx).update(ctx, |model, ctx| {
             model.remove_ignored_suggestion(ai_query.clone(), SuggestionType::AIQuery, ctx);
         });

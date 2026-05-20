@@ -1880,6 +1880,67 @@ impl AgentInputFooter {
         self.model_selector.as_ref(app).is_open()
     }
 
+    /// Phase 4c-3 task 7. Returns `Err` with the first unsupported
+    /// attachment's rejection when any pending attachment's modality is not
+    /// supported by the active model. Returns `Ok(())` when
+    /// `pending_attachments` is empty or all pass the capability check.
+    /// Used by the agent-mode submit handler to block submission and toast
+    /// the user.
+    pub fn check_pending_attachments_supported(
+        &self,
+        ctx: &AppContext,
+    ) -> Result<(), attachment_input_validator::AttachmentRejection> {
+        use crate::ai::agent_providers::lookup_byop;
+        use crate::ai::llms::LLMPreferences;
+        use crate::settings::AgentProviderApiType;
+
+        if self.pending_attachments.is_empty() {
+            return Ok(());
+        }
+
+        let active_llm = LLMPreferences::as_ref(ctx)
+            .get_active_base_model(ctx, Some(self.terminal_view_id))
+            .clone();
+        let (api_type, image_setting, pdf_setting, audio_setting, model_id) =
+            if let Some((provider, _api_key, mid)) = lookup_byop(ctx, &active_llm.id) {
+                let ms = provider
+                    .models
+                    .iter()
+                    .find(|m| m.id == mid)
+                    .map(|m| (m.image, m.pdf, m.audio))
+                    .unwrap_or((None, None, None));
+                (provider.api_type, ms.0, ms.1, ms.2, mid)
+            } else {
+                (
+                    AgentProviderApiType::default(),
+                    None,
+                    None,
+                    None,
+                    active_llm.id.to_string(),
+                )
+            };
+
+        check_pending_attachments_against_caps(
+            &self.pending_attachments,
+            api_type,
+            &model_id,
+            image_setting,
+            pdf_setting,
+            audio_setting,
+        )
+    }
+
+    /// Phase 4c-3 task 7. Returns the human-readable toast message for the
+    /// first unsupported pending attachment, or `None` when submission is
+    /// allowed. Wraps `check_pending_attachments_supported` so callers (e.g.
+    /// `terminal::input`) don't need to reference the private
+    /// `attachment_input_validator` module.
+    pub fn pending_attachment_rejection_message(&self, ctx: &AppContext) -> Option<String> {
+        self.check_pending_attachments_supported(ctx)
+            .err()
+            .map(|rej| attachment_input_validator::rejection_message(&rej))
+    }
+
     fn update_ftu_callout_render_state(&mut self, ctx: &mut ViewContext<Self>) {
         let ftu_dismissed = *AISettings::as_ref(ctx).ftu_model_callout_dismissed;
         if !self.render_ftu_callout && ftu_dismissed {
@@ -2884,15 +2945,51 @@ impl TypedActionView for AgentInputFooter {
                 let index = self.pending_attachments.len();
                 self.pending_attachments.push(att.clone());
 
+                // Phase 4c-3 task 7. Compute capability state at chip
+                // construction time so the red border is shown immediately
+                // if the active model doesn't support this modality.
+                // Re-runs each render (reactive), so state updates when
+                // the user switches models.
+                let caps_state = {
+                    use crate::ai::agent_providers::lookup_byop;
+                    use crate::ai::llms::LLMPreferences;
+                    use crate::settings::AgentProviderApiType;
+
+                    let active_llm = LLMPreferences::as_ref(ctx)
+                        .get_active_base_model(ctx, Some(self.terminal_view_id))
+                        .clone();
+                    let (api_type, image_setting, pdf_setting, audio_setting, model_id) =
+                        if let Some((provider, _api_key, mid)) = lookup_byop(ctx, &active_llm.id) {
+                            let ms = provider
+                                .models
+                                .iter()
+                                .find(|m| m.id == mid)
+                                .map(|m| (m.image, m.pdf, m.audio))
+                                .unwrap_or((None, None, None));
+                            (provider.api_type, ms.0, ms.1, ms.2, mid)
+                        } else {
+                            (
+                                AgentProviderApiType::default(),
+                                None,
+                                None,
+                                None,
+                                active_llm.id.to_string(),
+                            )
+                        };
+                    chip_capability_state_for_attachment(
+                        att,
+                        api_type,
+                        &model_id,
+                        image_setting,
+                        pdf_setting,
+                        audio_setting,
+                    )
+                };
+
                 // Build a chip view for the new attachment (thumbnail_source
                 // starts None; updated by SetThumbnailBytes once decode finishes).
                 let chip = ctx.add_typed_action_view(|ctx| {
-                    attachment_chip::AttachmentChip::new(
-                        att,
-                        None,
-                        attachment_chip::ChipCapabilityState::Supported,
-                        ctx,
-                    )
+                    attachment_chip::AttachmentChip::new(att, None, caps_state, ctx)
                 });
                 // When the × is clicked the chip emits AttachmentChipEvent::RemoveRequested.
                 ctx.subscribe_to_view(&chip, move |_footer, _chip, _event, ctx| {
@@ -3342,6 +3439,77 @@ impl ActionButtonTheme for NLDButtonTheme {
 /// model's per-modality capability resolver results. An empty return value means
 /// no modality is supported — the caller should bail early rather than showing a
 /// picker that accepts nothing.
+/// Phase 4c-3 task 7. Pure submit predicate: returns `Err` with the first
+/// unsupported attachment's rejection when any pending attachment's modality
+/// is not supported by the given capability parameters, else `Ok(())`.
+/// Extracted as a free function so unit tests can call it without an
+/// `AppContext`. The `AppContext`-aware method
+/// `AgentInputFooter::check_pending_attachments_supported` resolves the caps
+/// and delegates here.
+fn check_pending_attachments_against_caps(
+    pending_attachments: &[ai::attachments::AgentAttachment],
+    api_type: ai::local_provider::AgentProviderApiType,
+    model_id: &str,
+    image_setting: Option<bool>,
+    pdf_setting: Option<bool>,
+    audio_setting: Option<bool>,
+) -> Result<(), attachment_input_validator::AttachmentRejection> {
+    for attachment in pending_attachments {
+        let state = chip_capability_state_for_attachment(
+            attachment,
+            api_type,
+            model_id,
+            image_setting,
+            pdf_setting,
+            audio_setting,
+        );
+        if let attachment_chip::ChipCapabilityState::UnsupportedByActiveModel { modality } = state {
+            return Err(
+                attachment_input_validator::AttachmentRejection::UnsupportedModality {
+                    modality,
+                    model_id: model_id.to_string(),
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Phase 4c-3 task 7. Per-chip capability lookup. Returns
+/// `ChipCapabilityState::UnsupportedByActiveModel` when the active model
+/// doesn't support this attachment's modality, else `Supported`. Drives
+/// both the chip's red border and the submit-time gate (helper reused by
+/// `check_pending_attachments_supported`).
+fn chip_capability_state_for_attachment(
+    attachment: &ai::attachments::AgentAttachment,
+    api_type: ai::local_provider::AgentProviderApiType,
+    model_id: &str,
+    image_setting: Option<bool>,
+    pdf_setting: Option<bool>,
+    audio_setting: Option<bool>,
+) -> attachment_chip::ChipCapabilityState {
+    if attachment.is_image()
+        && !ai::capabilities::resolve_image(api_type, model_id, image_setting, &[])
+    {
+        return attachment_chip::ChipCapabilityState::UnsupportedByActiveModel {
+            modality: attachment_input_validator::Modality::Image,
+        };
+    } else if attachment.is_pdf()
+        && !ai::capabilities::resolve_pdf(api_type, model_id, pdf_setting, &[])
+    {
+        return attachment_chip::ChipCapabilityState::UnsupportedByActiveModel {
+            modality: attachment_input_validator::Modality::Pdf,
+        };
+    } else if attachment.is_audio()
+        && !ai::capabilities::resolve_audio(api_type, model_id, audio_setting, &[])
+    {
+        return attachment_chip::ChipCapabilityState::UnsupportedByActiveModel {
+            modality: attachment_input_validator::Modality::Audio,
+        };
+    }
+    attachment_chip::ChipCapabilityState::Supported
+}
+
 fn picker_file_types_for_caps(
     api_type: ai::local_provider::AgentProviderApiType,
     model_id: &str,
@@ -3502,5 +3670,88 @@ mod tests {
                 .as_ref()
                 .is_some_and(|paths| !warpui::clipboard_utils::get_image_filepaths_from_paths(paths).is_empty());
         assert!(!clipboard_has_image_content);
+    }
+
+    // Phase 4c-3 task 7 — per-chip capability state and submit predicate tests.
+
+    fn make_attachment(mime: &str) -> ai::attachments::AgentAttachment {
+        ai::attachments::AgentAttachment {
+            mime: mime.to_owned(),
+            bytes: vec![0u8; 4],
+            display_name: Some("test_file".to_owned()),
+            thumbnail_bytes: None,
+        }
+    }
+
+    #[test]
+    fn chip_capability_state_for_image_unsupported_returns_unsupported() {
+        // Explicit false for image → UnsupportedByActiveModel.
+        let att = make_attachment("image/png");
+        let state = chip_capability_state_for_attachment(
+            &att,
+            ai::local_provider::AgentProviderApiType::Ollama,
+            "text-only-model",
+            Some(false),
+            None,
+            None,
+        );
+        assert_eq!(
+            state,
+            attachment_chip::ChipCapabilityState::UnsupportedByActiveModel {
+                modality: attachment_input_validator::Modality::Image,
+            },
+        );
+    }
+
+    #[test]
+    fn chip_capability_state_for_supported_modality_returns_supported() {
+        // llava resolves image=true by heuristic (None override).
+        let att = make_attachment("image/png");
+        let state = chip_capability_state_for_attachment(
+            &att,
+            ai::local_provider::AgentProviderApiType::Ollama,
+            "llava",
+            None,
+            None,
+            None,
+        );
+        assert_eq!(state, attachment_chip::ChipCapabilityState::Supported);
+    }
+
+    #[test]
+    fn check_pending_attachments_pure_returns_ok_when_empty() {
+        // Empty pending list → Ok regardless of caps.
+        let attachments: Vec<ai::attachments::AgentAttachment> = vec![];
+        let result = check_pending_attachments_against_caps(
+            &attachments,
+            ai::local_provider::AgentProviderApiType::Ollama,
+            "text-only-model",
+            Some(false),
+            Some(false),
+            Some(false),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn check_pending_attachments_pure_returns_err_when_any_unsupported() {
+        // One image attachment + image explicitly disabled → Err.
+        let attachments = vec![make_attachment("image/png")];
+        let result = check_pending_attachments_against_caps(
+            &attachments,
+            ai::local_provider::AgentProviderApiType::Ollama,
+            "text-only-model",
+            Some(false),
+            None,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            attachment_input_validator::AttachmentRejection::UnsupportedModality {
+                modality: attachment_input_validator::Modality::Image,
+                ..
+            },
+        ));
     }
 }
