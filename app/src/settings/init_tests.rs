@@ -222,6 +222,14 @@ fn test_migration_does_not_rerun_when_marker_present() {
     warpui::App::test((), |mut app| async move {
         let _guard = FeatureFlag::SettingsFile.override_enabled(true);
 
+        // Per-test tempdir path so `needs_settings_file_migration`'s
+        // file-exists check doesn't short-circuit against the developer's
+        // real ~/.warp/settings.toml. The tempdir is created but the
+        // settings.toml file inside is never written, so the path-exists
+        // gate returns false as the test expects.
+        let temp = tempfile::TempDir::new().unwrap();
+        let toml_path = temp.path().join("settings.toml");
+
         app.update(init_test_app);
 
         // Seed the native store with a public setting.
@@ -235,7 +243,7 @@ fn test_migration_does_not_rerun_when_marker_present() {
         // Before migration, the guard should allow migration.
         app.read(|ctx| {
             assert!(
-                needs_settings_file_migration(ctx),
+                needs_settings_file_migration(ctx, &toml_path),
                 "migration should be needed before first run"
             );
         });
@@ -248,7 +256,7 @@ fn test_migration_does_not_rerun_when_marker_present() {
         // After migration, the marker should prevent re-migration.
         app.read(|ctx| {
             assert!(
-                !needs_settings_file_migration(ctx),
+                !needs_settings_file_migration(ctx, &toml_path),
                 "migration should not be needed after marker is written"
             );
         });

@@ -122,7 +122,8 @@ pub fn init(
     // One-time migration: copy public settings from the platform-native store
     // into the TOML file so existing users don't lose their customizations
     // when the settings file feature is first enabled.
-    if needs_settings_file_migration(ctx) {
+    let toml_path = super::user_preferences_toml_file_path();
+    if needs_settings_file_migration(ctx, &toml_path) {
         migrate_native_settings_to_settings_file(ctx);
     }
 
@@ -330,15 +331,21 @@ pub fn init_public_user_preferences() -> (user_preferences::Model, Option<user_p
 ///
 /// Migration is needed when all of the following are true:
 /// 1. The `SettingsFile` feature flag is enabled.
-/// 2. The `settings.toml` file does not yet exist on disk.
+/// 2. The `settings.toml` file does not yet exist on disk at `toml_path`.
 /// 3. The migration-complete marker is absent from the native store
 ///    (handles the case where a user deletes `settings.toml` to reset).
-fn needs_settings_file_migration(ctx: &AppContext) -> bool {
+///
+/// `toml_path` is the resolved settings-file path; the production caller
+/// passes `super::user_preferences_toml_file_path()`. Taking it as an
+/// explicit parameter lets unit tests substitute a tempdir path that's
+/// guaranteed not to exist (avoiding the developer's real ~/.warp/settings.toml
+/// short-circuiting the check via condition #2).
+fn needs_settings_file_migration(ctx: &AppContext, toml_path: &std::path::Path) -> bool {
     if !FeatureFlag::SettingsFile.is_enabled() {
         return false;
     }
 
-    if super::user_preferences_toml_file_path().exists() {
+    if toml_path.exists() {
         return false;
     }
 
