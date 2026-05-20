@@ -18,7 +18,7 @@ use std::time::Duration;
 use ai::local_provider::{
     compaction::{
         commit_summarization, try_compact, AutoCompactionOutcome, CompactionConfig,
-        CompactionState, TokenCounts,
+        CompactionState, CompactionTarget, TokenCounts,
     },
     config::LocalProviderConfig,
     request::LocalProviderInput,
@@ -985,7 +985,7 @@ async fn auto_compact_round_trip_overflow_summarizes_and_commits() {
     let outcome = try_compact(
         &messages,
         &mut state,
-        &cfg,
+        &CompactionTarget::same_model(cfg),
         &compaction_cfg,
         tokens,
         false, // manual

@@ -31,7 +31,7 @@ mod algorithm_tests;
 
 pub use auto::{try_compact, AutoCompactionError, AutoCompactionOutcome};
 pub use commit::{commit_summarization, CommitOutcome};
-pub use config::CompactionConfig;
+pub use config::{CompactionConfig, CompactionTarget};
 pub use overflow::{is_overflow, usable, ModelLimit, TokenCounts};
 pub use state::{CompactionState, CompactionTrigger, CompletedCompaction, MessageMarker};
 

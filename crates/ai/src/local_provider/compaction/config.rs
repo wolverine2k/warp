@@ -8,6 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::super::config::LocalProviderConfig;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CompactionConfig {
     /// Auto-trigger summarization on token-overflow. Phase B (B-3) only.
@@ -48,5 +50,24 @@ impl CompactionConfig {
         self.preserve_recent_tokens.unwrap_or_else(|| {
             MAX_PRESERVE_RECENT_TOKENS.min(MIN_PRESERVE_RECENT_TOKENS.max(usable_tokens / 4))
         })
+    }
+}
+
+/// Phase 4d. Carries both the conversation's primary model config and the
+/// (potentially different) summarizer model config. Overflow detection uses
+/// `primary_cfg`; budget computation and the actual summarizer call use
+/// `summarizer_cfg`.
+#[derive(Debug, Clone)]
+pub struct CompactionTarget {
+    pub primary_cfg: LocalProviderConfig,
+    pub summarizer_cfg: LocalProviderConfig,
+}
+
+impl CompactionTarget {
+    pub fn same_model(cfg: LocalProviderConfig) -> Self {
+        Self {
+            summarizer_cfg: cfg.clone(),
+            primary_cfg: cfg,
+        }
     }
 }

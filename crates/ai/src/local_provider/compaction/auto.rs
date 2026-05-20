@@ -12,13 +12,12 @@ use crate::local_provider::{
     compaction::{
         algorithm::{self, MessageRef},
         commit::{commit_summarization, CommitOutcome},
-        config::CompactionConfig,
+        config::{CompactionConfig, CompactionTarget},
         overflow::{is_overflow, usable, ModelLimit, TokenCounts},
         prompt::build_prompt,
         state::CompactionState,
         wire::{build_tool_name_lookup, build_views},
     },
-    config::LocalProviderConfig,
     run::{build_summarizer_messages, run_summarizer_turn, SummarizerError, SummarizerInput},
     wire::ChatMessage,
 };
@@ -63,13 +62,13 @@ pub enum AutoCompactionError {
 pub async fn try_compact(
     messages: &[api::Message],
     state: &mut CompactionState,
-    cfg: &LocalProviderConfig,
+    target: &CompactionTarget,
     compaction_cfg: &CompactionConfig,
     tokens: TokenCounts,
     manual: bool,
     http: &reqwest::Client,
 ) -> Result<AutoCompactionOutcome, AutoCompactionError> {
-    let model = ModelLimit::from_context_window(cfg.context_window.map(|n| n as usize));
+    let model = ModelLimit::from_context_window(target.primary_cfg.context_window.map(|n| n as usize));
     if !manual && !is_overflow(compaction_cfg, tokens, model) {
         return Ok(AutoCompactionOutcome::Skipped);
     }
@@ -79,7 +78,8 @@ pub async fn try_compact(
     let tool_names = build_tool_name_lookup(messages_refs.iter().copied());
     let views = build_views(&messages_refs, &tool_names, state);
 
-    let usable_tokens = usable(compaction_cfg, model);
+    let summarizer_model = ModelLimit::from_context_window(target.summarizer_cfg.context_window.map(|n| n as usize));
+    let usable_tokens = usable(compaction_cfg, summarizer_model);
     let preserve_budget = compaction_cfg.preserve_recent_budget(usable_tokens);
     let select_result = algorithm::select(
         &views,
@@ -124,7 +124,7 @@ pub async fn try_compact(
         SummarizerInput {
             messages: summarizer_messages,
         },
-        cfg,
+        &target.summarizer_cfg,
         http,
     )
     .await?;
@@ -148,6 +148,7 @@ mod tests {
 
     use super::*;
     use crate::local_provider::compaction::CompactionConfig;
+    use crate::local_provider::compaction::config::CompactionTarget;
     use crate::local_provider::config::LocalProviderConfig;
 
     /// reqwest's default rustls feature requires a crypto provider before
@@ -198,7 +199,7 @@ mod tests {
         let r = try_compact(
             &messages,
             &mut state,
-            &cfg(),
+            &CompactionTarget::same_model(cfg()),
             &compaction_cfg,
             TokenCounts {
                 total: 1_000_000,
@@ -225,7 +226,7 @@ mod tests {
         let r = try_compact(
             &messages,
             &mut state,
-            &large_window_cfg,
+            &CompactionTarget::same_model(large_window_cfg),
             &compaction_cfg,
             TokenCounts {
                 total: 100, // way under usable budget
@@ -243,4 +244,49 @@ mod tests {
     // The "happy path" case where try_compact actually fires the
     // summarizer is exercised in `crates/ai/tests/local_provider_integration.rs`
     // (auto_compaction_round_trip), which boots a JSON mock server.
+
+    #[test]
+    fn compaction_target_same_model_has_identical_configs() {
+        let cfg = LocalProviderConfig {
+            display_name: "Test".into(),
+            base_url: "http://127.0.0.1:1/v1".into(),
+            model_id: "test-model".into(),
+            api_key: None,
+            supports_tools: true,
+            context_window: Some(128_000),
+            api_type: crate::local_provider::AgentProviderApiType::OpenAi,
+        };
+        let target = CompactionTarget::same_model(cfg.clone());
+        assert_eq!(target.primary_cfg, cfg);
+        assert_eq!(target.summarizer_cfg, cfg);
+    }
+
+    #[test]
+    fn compaction_target_split_has_different_configs() {
+        let primary = LocalProviderConfig {
+            display_name: "Primary".into(),
+            base_url: "http://127.0.0.1:1/v1".into(),
+            model_id: "big-model".into(),
+            api_key: None,
+            supports_tools: true,
+            context_window: Some(128_000),
+            api_type: crate::local_provider::AgentProviderApiType::OpenAi,
+        };
+        let summarizer = LocalProviderConfig {
+            display_name: "Summarizer".into(),
+            base_url: "http://127.0.0.1:2/v1".into(),
+            model_id: "small-model".into(),
+            api_key: None,
+            supports_tools: false,
+            context_window: Some(32_000),
+            api_type: crate::local_provider::AgentProviderApiType::Ollama,
+        };
+        let target = CompactionTarget {
+            primary_cfg: primary.clone(),
+            summarizer_cfg: summarizer.clone(),
+        };
+        assert_eq!(target.primary_cfg.model_id, "big-model");
+        assert_eq!(target.summarizer_cfg.model_id, "small-model");
+        assert_ne!(target.primary_cfg, target.summarizer_cfg);
+    }
 }
