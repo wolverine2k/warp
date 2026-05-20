@@ -1142,6 +1142,126 @@ async fn next_turn_after_compaction_drops_pre_compaction_history() {
     );
 }
 
+// ---------- Phase 4d Task 7: cross-model compaction routes summarizer ----------
+
+#[tokio::test]
+async fn cross_model_compaction_routes_summarizer_to_separate_server() {
+    use warp_multi_agent_api as api;
+    init_crypto_provider();
+
+    // Boot TWO mock JSON servers: one for the agent model, one for the
+    // compaction model. Only the compaction server should receive a request
+    // because `try_compact` dispatches the summarizer to `target.summarizer_cfg`.
+    let agent_body = "{\
+        \"id\":\"cmpl-agent\",\
+        \"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"agent response\"},\"finish_reason\":\"stop\"}]\
+    }";
+    let compaction_body = "{\
+        \"id\":\"cmpl-compact\",\
+        \"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"## Goal\\n- cross-model summary\"},\"finish_reason\":\"stop\"}]\
+    }";
+    let (agent_url, agent_captured) = spawn_json_mock_server(agent_body.to_string()).await;
+    let (compaction_url, compaction_captured) =
+        spawn_json_mock_server(compaction_body.to_string()).await;
+
+    // Build a CompactionTarget with split configs: primary (agent) has a tiny
+    // context window so overflow triggers; summarizer points at the compaction
+    // server with a large window.
+    let target = CompactionTarget {
+        primary_cfg: LocalProviderConfig {
+            display_name: "Agent".into(),
+            base_url: agent_url,
+            model_id: "agent-model".into(),
+            api_key: None,
+            supports_tools: true,
+            context_window: Some(64), // tiny — triggers overflow
+            api_type: ai::local_provider::AgentProviderApiType::OpenAi,
+        },
+        summarizer_cfg: LocalProviderConfig {
+            display_name: "Compactor".into(),
+            base_url: compaction_url,
+            model_id: "compaction-model".into(),
+            api_key: None,
+            supports_tools: false,
+            context_window: Some(128_000),
+            api_type: ai::local_provider::AgentProviderApiType::OpenAi,
+        },
+    };
+
+    // History: enough messages that select() finds a head/tail split.
+    let messages: Vec<api::Message> = (0..6)
+        .map(|i| api::Message {
+            id: format!("m{i}"),
+            message: Some(api::message::Message::UserQuery(api::message::UserQuery {
+                query: format!("turn-{i} {}", "x".repeat(200)),
+                ..Default::default()
+            })),
+            ..Default::default()
+        })
+        .collect();
+
+    let mut state = CompactionState::default();
+    let compaction_cfg = CompactionConfig::default();
+    let tokens = TokenCounts {
+        total: 1_000_000, // force overflow against the tiny primary window
+        ..Default::default()
+    };
+    let http = reqwest::Client::new();
+
+    let outcome = try_compact(
+        &messages,
+        &mut state,
+        &target,
+        &compaction_cfg,
+        tokens,
+        false, // not manual
+        &http,
+    )
+    .await
+    .expect("cross-model compact succeeds");
+
+    // Assert 1: the outcome is Compacted with the compaction server's summary.
+    match outcome {
+        AutoCompactionOutcome::Compacted(o) => {
+            assert!(
+                o.summary_text.contains("cross-model summary"),
+                "expected compaction server summary text, got: {}",
+                o.summary_text
+            );
+        }
+        AutoCompactionOutcome::Skipped => {
+            panic!("expected Compacted, got Skipped — select() may not be picking a tail")
+        }
+    }
+
+    // Assert 2: the compaction server received a request.
+    let compaction_bytes = compaction_captured.lock().await;
+    assert!(
+        !compaction_bytes.is_empty(),
+        "compaction server should have received the summarizer request"
+    );
+    let compaction_request = String::from_utf8_lossy(&compaction_bytes);
+    assert!(
+        compaction_request.contains("compaction-model"),
+        "summarizer request should target the compaction model, got:\n{compaction_request}"
+    );
+
+    // Assert 3: the agent server did NOT receive a request.
+    let agent_bytes = agent_captured.lock().await;
+    assert!(
+        agent_bytes.is_empty(),
+        "agent server should NOT have received any request during compaction, \
+         but got {} bytes",
+        agent_bytes.len()
+    );
+
+    // Assert 4: state was committed correctly.
+    assert_eq!(state.completed().len(), 1);
+    let last = &state.completed()[0];
+    assert!(last.auto);
+    assert!(last.overflow);
+}
+
 // ---------- Phase 4c-2 Task 7: cross-adapter attachment smoke tests ----------
 //
 // These tests drive each adapter's request-builder directly (Option A) —
