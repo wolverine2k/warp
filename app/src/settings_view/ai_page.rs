@@ -2512,6 +2512,14 @@ pub enum AISettingsPageAction {
     CommitCatalogModelsFromModal {
         provider_index: usize,
     },
+
+    // ----- Phase 4d: Dedicated compaction model -----
+    /// Set the dedicated summarization/compaction model. Empty strings
+    /// clear to default (use conversation model).
+    SetCompactionModel {
+        provider_id: String,
+        model_id: String,
+    },
 }
 
 impl From<&AISettingsPageAction> for LoginGatedFeature {
@@ -4040,6 +4048,24 @@ impl TypedActionView for AISettingsPageView {
                             report_if_error!(settings.agent_providers.set_value(providers, ctx));
                         }
                     }
+                });
+                ctx.notify();
+            }
+
+            // ----- Phase 4d: Dedicated compaction model -----
+            AISettingsPageAction::SetCompactionModel {
+                provider_id,
+                model_id,
+            } => {
+                let provider_id = provider_id.clone();
+                let model_id = model_id.clone();
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings
+                        .byop_compaction_model_provider_id
+                        .set_value(provider_id, ctx));
+                    report_if_error!(settings
+                        .byop_compaction_model_id
+                        .set_value(model_id, ctx));
                 });
                 ctx.notify();
             }
