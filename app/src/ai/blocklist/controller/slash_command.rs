@@ -167,6 +167,7 @@ impl SlashCommandRequest {
                 entrypoint,
                 is_auto_resume_after_error: false,
             }),
+            /*attachments*/ Vec::new(),
             /*default_to_follow_up_on_success*/ true,
             /*can_attempt_resume_on_error*/ true,
             is_queued_prompt,

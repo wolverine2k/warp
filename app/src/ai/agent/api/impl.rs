@@ -282,7 +282,9 @@ async fn route_to_local_provider(
         synthetic_user_queries,
         compaction_config: params.local_provider_compaction_config.clone(),
         compaction_state: params.local_provider_compaction_state.clone(),
-        attachments: vec![],
+        // Phase 4c-3 task 8. Populated from AgentInputFooter::drain_pending_attachments
+        // at submit time; empty for all non-footer-submit dispatch paths.
+        attachments: params.attachments.clone(),
     };
 
     let http = reqwest::Client::new();

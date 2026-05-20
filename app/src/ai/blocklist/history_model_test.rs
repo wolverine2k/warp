@@ -45,6 +45,7 @@ fn create_persisted_query(
             text: query_text.to_string(),
             context: Default::default(),
             referenced_attachments: Default::default(),
+            file_attachment_metadata: Vec::new(),
         }],
         output_status: AIQueryHistoryOutputStatus::Completed,
         working_directory: None,

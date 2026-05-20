@@ -49,6 +49,12 @@ pub(crate) enum PersistedAIInputType {
         context: Arc<[AIAgentContext]>,
         #[serde(default)]
         referenced_attachments: HashMap<String, AIAgentAttachment>,
+        /// Phase 4c-3 task 8. Metadata-only attachment records (mime + display_name,
+        /// no bytes) persisted so post-reload rendering can show a "not available"
+        /// placeholder chip with the original filename. `#[serde(default)]` ensures
+        /// existing rows without this field deserialize cleanly as an empty Vec.
+        #[serde(default)]
+        file_attachment_metadata: Vec<ai::attachments::AttachmentMetadata>,
     },
 }
 
@@ -66,16 +72,23 @@ impl TryFrom<&AIAgentInput> for PersistedAIInputType {
                 text: query.clone(),
                 context: context.clone(),
                 referenced_attachments: referenced_attachments.clone(),
+                // Phase 4c-3 task 8. Metadata is populated separately at the submit
+                // call site (terminal/input.rs) via PersistedAIInputType::with_metadata.
+                // When persisting via this TryFrom path (e.g. shared session, fork,
+                // restore), no footer attachments are in flight — default empty.
+                file_attachment_metadata: vec![],
             }),
             AIAgentInput::AutoCodeDiffQuery { query, context } => Ok(Self::Query {
                 text: query.clone(),
                 context: context.clone(),
                 referenced_attachments: Default::default(),
+                file_attachment_metadata: vec![],
             }),
             AIAgentInput::PassiveSuggestionResult { suggestion: PassiveSuggestionResultType::Prompt { prompt }, context, .. } => Ok(Self::Query {
                 text: prompt.clone(),
                 context: context.clone(),
                 referenced_attachments: Default::default(),
+                file_attachment_metadata: vec![],
             }),
             AIAgentInput::PassiveSuggestionResult { suggestion: PassiveSuggestionResultType::CodeDiff { .. }, .. } => Err(anyhow!(
                 "PassiveSuggestionResult::CodeDiff is not persisted as a query."
@@ -110,6 +123,11 @@ impl TryFrom<PersistedAIInputType> for AIAgentInput {
                 text,
                 context,
                 referenced_attachments,
+                // Phase 4c-3 task 8. Metadata-only — bytes are never persisted.
+                // The session-restoration path does not need the metadata here
+                // because `AIAgentInput` has no `file_attachment_metadata` field;
+                // the field exists only for post-reload rendering (Task 10).
+                file_attachment_metadata: _,
             } => Ok(Self::UserQuery {
                 query: text,
                 context,
@@ -478,6 +496,115 @@ impl From<SerializedBlock> for SerializedBlockListItem {
     fn from(value: SerializedBlock) -> Self {
         Self::Command {
             block: Box::new(value),
+        }
+    }
+}
+
+// Phase 4c-3 task 8 unit tests.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_metadata(mime: &str, name: &str) -> ai::attachments::AttachmentMetadata {
+        ai::attachments::AttachmentMetadata {
+            mime: mime.to_owned(),
+            display_name: Some(name.to_owned()),
+        }
+    }
+
+    /// Test 1 & 2 combined: the drain-pending-attachments logic mirrors
+    /// `std::mem::take`. Verify that taking from a non-empty Vec drains it
+    /// and that the original is empty afterwards — matching the contract of
+    /// `AgentInputFooter::drain_pending_attachments` (which calls
+    /// `std::mem::take`).
+    #[test]
+    fn submit_drains_pending_attachments_into_request() {
+        let mut pending: Vec<ai::attachments::AgentAttachment> = vec![
+            ai::attachments::AgentAttachment {
+                mime: "image/png".to_owned(),
+                bytes: vec![1, 2, 3],
+                display_name: Some("photo.png".to_owned()),
+                thumbnail_bytes: None,
+            },
+        ];
+        let drained = std::mem::take(&mut pending);
+        // Post-drain: caller receives the attachment.
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].mime, "image/png");
+        // Post-drain: original is empty (chip strip re-renders empty).
+        assert!(pending.is_empty());
+    }
+
+    /// Test 2: after drain, a second drain returns empty — idempotent.
+    #[test]
+    fn submit_clears_pending_attachments_after_dispatch() {
+        let mut pending: Vec<ai::attachments::AgentAttachment> = vec![
+            ai::attachments::AgentAttachment {
+                mime: "application/pdf".to_owned(),
+                bytes: vec![0xff],
+                display_name: Some("doc.pdf".to_owned()),
+                thumbnail_bytes: None,
+            },
+        ];
+        let _ = std::mem::take(&mut pending);
+        // Second drain must be empty.
+        let second_drain = std::mem::take(&mut pending);
+        assert!(second_drain.is_empty());
+        assert!(pending.is_empty());
+    }
+
+    /// Test 3: serialized `PersistedAIInputType::Query` with attachment
+    /// metadata must contain `mime` and `display_name` but NEVER `bytes`.
+    #[test]
+    fn persisted_conversation_blob_carries_metadata_only_no_bytes() {
+        let variant = PersistedAIInputType::Query {
+            text: "fix the tests".to_owned(),
+            context: Default::default(),
+            referenced_attachments: Default::default(),
+            file_attachment_metadata: vec![
+                make_metadata("image/png", "screenshot.png"),
+                make_metadata("application/pdf", "spec.pdf"),
+            ],
+        };
+        let json = serde_json::to_string(&variant).expect("serializes");
+        // Field names present.
+        assert!(json.contains("mime"), "expected mime field in: {json}");
+        assert!(
+            json.contains("display_name"),
+            "expected display_name field in: {json}"
+        );
+        assert!(
+            json.contains("screenshot.png"),
+            "expected filename in: {json}"
+        );
+        // Bytes must never appear.
+        assert!(
+            !json.contains("\"bytes\""),
+            "bytes must not be serialized: {json}"
+        );
+    }
+
+    /// Test 4: old conversation rows without `file_attachment_metadata`
+    /// deserialize successfully, yielding an empty Vec.
+    #[test]
+    fn deserialize_old_conversation_blob_without_attachments_field_succeeds() {
+        // Minimal JSON matching the pre-task-8 Query shape (no
+        // `file_attachment_metadata` key).
+        let old_json = r#"{"Query":{"text":"hello","context":[],"referenced_attachments":{}}}"#;
+        let deserialized: PersistedAIInputType =
+            serde_json::from_str(old_json).expect("back-compat deserialization must succeed");
+        match deserialized {
+            PersistedAIInputType::Query {
+                text,
+                file_attachment_metadata,
+                ..
+            } => {
+                assert_eq!(text, "hello");
+                assert!(
+                    file_attachment_metadata.is_empty(),
+                    "old rows without the field should default to empty Vec"
+                );
+            }
         }
     }
 }

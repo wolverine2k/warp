@@ -144,6 +144,11 @@ pub struct RequestParams {
     /// at `RequestParams::new` time so the dispatch fork stays AppContext-free.
     /// Phase A consumes only `prune`; Phase B-3 will consume the rest.
     pub local_provider_compaction_config: ai::local_provider::compaction::CompactionConfig,
+    /// Phase 4c-3 task 8. File attachments drained from `AgentInputFooter`
+    /// at submit time. Forwarded verbatim to `LocalProviderInput.attachments`
+    /// by the local-provider dispatch fork in `api/impl.rs`. Empty for all
+    /// warp.dev / cloud paths (they use their own upload mechanism).
+    pub attachments: Vec<ai::attachments::AgentAttachment>,
     /// Snapshot of the conversation's compaction sidecar (Phase B-2). Cloned
     /// from `AIConversation::compaction_state` at request build time so the
     /// dispatch fork can hand it to the request translator.
@@ -411,6 +416,9 @@ impl RequestParams {
                 crate::ai::local_provider_config::compaction_config_from_app(app),
             local_provider_compaction_state: conversation.compaction_state,
             local_provider_history: conversation.local_provider_history,
+            // Phase 4c-3 task 8. Default empty; callers that drain
+            // AgentInputFooter::pending_attachments set this after construction.
+            attachments: vec![],
         }
     }
 }

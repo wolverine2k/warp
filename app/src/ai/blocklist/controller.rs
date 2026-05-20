@@ -390,6 +390,11 @@ struct InputQuery {
     /// Additional referenced attachments to include in the query
     /// (e.g. file path references from shared session file uploads).
     additional_attachments: HashMap<String, AIAgentAttachment>,
+    /// Phase 4c-3 task 8. File attachments drained from `AgentInputFooter`
+    /// at submit time. Forwarded to `RequestParams.attachments` so the
+    /// local-provider dispatch fork can carry bytes upstream. Always empty
+    /// for paths that don't originate from the user's input footer.
+    file_attachments: Vec<ai::attachments::AgentAttachment>,
 }
 
 impl InputQuery {
@@ -715,6 +720,7 @@ impl BlocklistAIController {
         }
 
         let additional_attachments = input_query.additional_attachments;
+        let file_attachments = input_query.file_attachments;
         let ai_input = match input_query.input_query {
             InputQueryType::UserSubmittedQueryFromInput {
                 static_query_type,
@@ -763,6 +769,7 @@ impl BlocklistAIController {
                 entrypoint: entrypoint_type,
                 is_auto_resume_after_error: false,
             }),
+            file_attachments,
             /*default_to_follow_up_on_success*/ true,
             /*can_attempt_resume_on_error*/ true,
             is_queued_prompt,
@@ -869,6 +876,7 @@ impl BlocklistAIController {
             static_query_type,
             entrypoint_type,
             participant_id,
+            vec![],
             /*is_queued_prompt*/ false,
             ctx,
         );
@@ -891,17 +899,23 @@ impl BlocklistAIController {
             static_query_type,
             entrypoint_type,
             participant_id,
+            vec![],
             /*is_queued_prompt*/ true,
             ctx,
         );
     }
 
+    // Phase 4c-3 task 8: `file_attachments` added to thread pending attachments
+    // through to the dispatch site. Bumps arg count past clippy's default
+    // threshold of 7.
+    #[allow(clippy::too_many_arguments)]
     fn send_user_query_in_new_conversation_internal(
         &mut self,
         query: String,
         static_query_type: Option<StaticQueryType>,
         entrypoint_type: EntrypointType,
         participant_id: Option<ParticipantId>,
+        file_attachments: Vec<ai::attachments::AgentAttachment>,
         is_queued_prompt: bool,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -939,6 +953,7 @@ impl BlocklistAIController {
                         running_command: Some(running_command),
                     },
                     additional_attachments: HashMap::new(),
+                    file_attachments,
                 },
                 entrypoint_type,
                 participant_id,
@@ -955,6 +970,7 @@ impl BlocklistAIController {
                         running_command: None,
                     },
                     additional_attachments: HashMap::new(),
+                    file_attachments,
                 },
                 entrypoint_type,
                 participant_id,
@@ -978,6 +994,7 @@ impl BlocklistAIController {
             None,
             false,
             HashMap::new(),
+            vec![],
             EntrypointType::AgentInitiated,
             /*is_queued_prompt*/ false,
             ctx,
@@ -998,7 +1015,54 @@ impl BlocklistAIController {
             participant_id,
             false, // skip_running_command_detection
             HashMap::new(),
+            vec![],
             EntrypointType::UserInitiated,
+            /*is_queued_prompt*/ false,
+            ctx,
+        );
+    }
+
+    /// Phase 4c-3 task 8. Sends a user query with file attachments (bytes) drained
+    /// from `AgentInputFooter`. Forwards them to `RequestParams.attachments` so the
+    /// local-provider dispatch fork can carry them upstream via the 4c-2 wire path.
+    pub fn send_user_query_in_conversation_with_file_attachments(
+        &mut self,
+        query: String,
+        conversation_id: AIConversationId,
+        participant_id: Option<ParticipantId>,
+        file_attachments: Vec<ai::attachments::AgentAttachment>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.send_user_query_in_conversation_internal(
+            query,
+            conversation_id,
+            participant_id,
+            false, // skip_running_command_detection
+            HashMap::new(),
+            file_attachments,
+            EntrypointType::UserInitiated,
+            /*is_queued_prompt*/ false,
+            ctx,
+        );
+    }
+
+    /// Phase 4c-3 task 8. Sends a new-conversation user query with file attachments (bytes)
+    /// drained from `AgentInputFooter`. Forwards them to `RequestParams.attachments` so the
+    /// local-provider dispatch fork can carry them upstream via the 4c-2 wire path.
+    pub fn send_user_query_in_new_conversation_with_file_attachments(
+        &mut self,
+        query: String,
+        file_attachments: Vec<ai::attachments::AgentAttachment>,
+        entrypoint_type: EntrypointType,
+        participant_id: Option<ParticipantId>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.send_user_query_in_new_conversation_internal(
+            query,
+            None,
+            entrypoint_type,
+            participant_id,
+            file_attachments,
             /*is_queued_prompt*/ false,
             ctx,
         );
@@ -1021,6 +1085,7 @@ impl BlocklistAIController {
             participant_id,
             false, // skip_running_command_detection
             HashMap::new(),
+            vec![],
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ true,
             ctx,
@@ -1042,6 +1107,7 @@ impl BlocklistAIController {
             participant_id,
             false, // skip_running_command_detection
             additional_attachments,
+            vec![],
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             ctx,
@@ -1065,6 +1131,7 @@ impl BlocklistAIController {
             participant_id,
             true, // skip_running_command_detection
             HashMap::new(),
+            vec![],
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
             ctx,
@@ -1079,6 +1146,7 @@ impl BlocklistAIController {
         participant_id: Option<ParticipantId>,
         skip_running_command_detection: bool,
         additional_attachments: HashMap<String, AIAgentAttachment>,
+        file_attachments: Vec<ai::attachments::AgentAttachment>,
         entrypoint_type: EntrypointType,
         is_queued_prompt: bool,
         ctx: &mut ModelContext<Self>,
@@ -1188,6 +1256,7 @@ impl BlocklistAIController {
                     running_command,
                 },
                 additional_attachments,
+                file_attachments,
             },
             entrypoint_type,
             participant_id,
@@ -1212,6 +1281,7 @@ impl BlocklistAIController {
                     running_command: None,
                 },
                 additional_attachments: HashMap::new(),
+                file_attachments: vec![],
             },
             EntrypointType::ZeroStateAgentModePromptSuggestion,
             participant_id,
@@ -1248,6 +1318,7 @@ impl BlocklistAIController {
                 which_task,
                 input_query: InputQueryType::AIInputType { ai_input },
                 additional_attachments: HashMap::new(),
+                file_attachments: vec![],
             },
             EntrypointType::UserInitiated,
             participant_id,
@@ -1382,6 +1453,7 @@ impl BlocklistAIController {
                     },
                 },
                 additional_attachments: HashMap::new(),
+                file_attachments: vec![],
             },
             EntrypointType::TriggerPassiveSuggestion {
                 trigger: trigger_type,
@@ -1506,6 +1578,7 @@ impl BlocklistAIController {
         let result = self.send_request_input(
             request_input,
             None,
+            vec![],
             /*default_to_follow_up_on_success*/ false,
             /*can_attempt_resume_on_error*/ true,
             /*is_queued_prompt*/ false,
@@ -1737,6 +1810,7 @@ impl BlocklistAIController {
                     ctx,
                 ),
                 None,
+                /*attachments*/ Vec::new(),
                 /*default_to_follow_up_on_success*/ true,
                 /*can_attempt_resume_on_error*/ true,
                 /*is_queued_prompt*/ false,
@@ -1850,6 +1924,7 @@ impl BlocklistAIController {
                 ctx,
             ),
             metadata,
+            vec![],
             /*default_to_follow_up_on_success*/ true,
             can_attempt_resume_on_error,
             /*is_queued_prompt*/ false,
@@ -1898,6 +1973,7 @@ impl BlocklistAIController {
                 },
                 is_auto_resume_after_error: false,
             }),
+            vec![],
             /*default_to_follow_up_on_success=*/ false,
             /*can_attempt_resume_on_error*/ true,
             /*is_queued_prompt*/ false,
@@ -2066,6 +2142,7 @@ impl BlocklistAIController {
                 },
                 is_auto_resume_after_error: false,
             }),
+            vec![],
             /*default_to_follow_up_on_success*/ false,
             /*can_attempt_resume_on_error*/ true,
             /*is_queued_prompt*/ false,
@@ -2126,10 +2203,12 @@ impl BlocklistAIController {
     /// input) for an existing conversation. Consider calling [`Self::send_custom_ai_input_query`] if
     /// you're trying to send a query with a custom [`AIAgentInput`] type where you'd like the "normal"
     /// flow that handles existing conversations properly.
+    #[allow(clippy::too_many_arguments)]
     fn send_request_input(
         &mut self,
         request_input: RequestInput,
         query_metadata: Option<RequestMetadata>,
+        file_attachments: Vec<ai::attachments::AgentAttachment>,
         default_to_follow_up_on_success: bool,
         can_attempt_resume_on_error: bool,
         is_queued_prompt: bool,
@@ -2247,6 +2326,9 @@ impl BlocklistAIController {
         );
         request_params.parent_agent_id = parent_agent_id;
         request_params.agent_name = agent_name;
+        // Phase 4c-3 task 8. Forward drained footer attachments to the local-
+        // provider dispatch fork. Empty for all non-footer-submit paths.
+        request_params.attachments = file_attachments;
 
         let server_conversation_token_for_identifiers =
             conversation_data.server_conversation_token.clone();

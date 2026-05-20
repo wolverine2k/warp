@@ -1941,6 +1941,21 @@ impl AgentInputFooter {
             .map(|rej| attachment_input_validator::rejection_message(&rej))
     }
 
+    /// Phase 4c-3 task 8. Drains pending attachments for dispatch. Called by
+    /// the submit handler immediately before the controller call is made.
+    /// Returns `Vec<AgentAttachment>` (with bytes for the upstream wire path),
+    /// leaving `pending_attachments` empty so the chip strip re-renders as
+    /// empty after submit. Metadata-only copies for persistence are derived
+    /// at the call site via `AttachmentMetadata::from`.
+    pub fn drain_pending_attachments(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) -> Vec<ai::attachments::AgentAttachment> {
+        let drained = std::mem::take(&mut self.pending_attachments);
+        ctx.notify();
+        drained
+    }
+
     fn update_ftu_callout_render_state(&mut self, ctx: &mut ViewContext<Self>) {
         let ftu_dismissed = *AISettings::as_ref(ctx).ftu_model_callout_dismissed;
         if !self.render_ftu_callout && ftu_dismissed {

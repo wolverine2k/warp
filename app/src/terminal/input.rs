@@ -12874,19 +12874,48 @@ impl Input {
             model.handle_input_buffer_submitted(ctx);
         });
 
+        // Phase 4c-3 task 8. Drain pending file attachments from the input
+        // footer before dispatch so bytes reach the local-provider wire path and
+        // the chip strip re-renders empty after submit.
+        let file_attachments = self
+            .agent_input_footer
+            .update(ctx, |footer, ctx| footer.drain_pending_attachments(ctx));
+
         if let Some(conversation_id) = self
             .ai_context_model
             .as_ref(ctx)
             .selected_conversation_id(ctx)
         {
-            self.ai_controller.update(ctx, move |controller, ctx| {
-                controller.send_user_query_in_conversation(ai_query, conversation_id, None, ctx)
-            });
-        } else {
+            if file_attachments.is_empty() {
+                self.ai_controller.update(ctx, move |controller, ctx| {
+                    controller.send_user_query_in_conversation(ai_query, conversation_id, None, ctx)
+                });
+            } else {
+                self.ai_controller.update(ctx, move |controller, ctx| {
+                    controller.send_user_query_in_conversation_with_file_attachments(
+                        ai_query,
+                        conversation_id,
+                        None,
+                        file_attachments,
+                        ctx,
+                    )
+                });
+            }
+        } else if file_attachments.is_empty() {
             self.ai_controller.update(ctx, move |controller, ctx| {
                 controller.send_user_query_in_new_conversation(
                     ai_query,
                     None,
+                    EntrypointType::UserInitiated,
+                    None,
+                    ctx,
+                );
+            });
+        } else {
+            self.ai_controller.update(ctx, move |controller, ctx| {
+                controller.send_user_query_in_new_conversation_with_file_attachments(
+                    ai_query,
+                    file_attachments,
                     EntrypointType::UserInitiated,
                     None,
                     ctx,
