@@ -50,7 +50,9 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 
 > **Verification gate:** the 7-smoke manual checklist (see plan-phase-4c-3.md). Covers 📎 picker per api_type, drag-drop, paste, model-switch chip-red-border, 5-attachment limit, 20-MB size cap, and reload showing the chip placeholder. Once all seven smokes pass, Phase 4c (all three sub-phases) flips to ✅.
 
-**Future phases (4d)** — dedicated compaction model — remain unscheduled and will get their own design + plan when started.
+**Phase 4d (dedicated compaction model)** code is complete on `multi-local-llm` (final commit `ff70b225`). Adds a `CompactionDispatcher` module that owns setting resolution, fallback, and dispatch for the compaction pipeline. A new `CompactionTarget { primary_cfg, summarizer_cfg }` type separates overflow detection (primary model's context_window) from summarizer budget and dispatch (compaction model's context_window). The "Summarization model" dropdown in the BYOP compaction settings section shows all configured provider×model pairs plus a "Use conversation model" default. When the configured model is unavailable, dispatch silently falls back to the conversation's primary model, and the settings page shows an inline warning. ~11 new unit tests across CompactionTarget (2), CompactionDispatcher (4), settings UI (2), dropdown (2), integration (1).
+
+> **Verification gate:** manual smoke with two BYOP providers — agent on provider A, compaction on provider B. Confirm summarizer requests hit provider B. Delete provider B, confirm settings warning and fallback to provider A.
 
 | Phase | Plan | Status |
 |---|---|---|
@@ -69,6 +71,7 @@ The work extends the single-local-provider scaffolding from `nmehta/local-llm-pr
 | 4c-1 — Capabilities resolver + Off/Auto/On chips per model row | [`plan-phase-4c-1.md`](plan-phase-4c-1.md) | 🧪 code complete — pending live smoke |
 | 4c-2 — AgentAttachment data model + per-adapter wire shapes | [`plan-phase-4c-2.md`](plan-phase-4c-2.md) | 🧪 code complete — pending live smoke |
 | 4c-3 — Input UI + send-time enforcement + history rendering | [`plan-phase-4c-3.md`](plan-phase-4c-3.md) | 🧪 code complete — pending live smoke |
+| 4d — Dedicated compaction model | [`plan-phase-4d.md`](plan-phase-4d.md) | 🧪 code complete — pending live smoke |
 
 The full design — data model, dispatch flow, migration strategy, risks — is in [`design.md`](design.md).
 
@@ -88,6 +91,7 @@ The full design — data model, dispatch flow, migration strategy, risks — is 
 - **Phase 4c-1 (pending live smoke):** three new tri-state capability chips per model row in Settings → AI (🖼️ image · 📄 pdf · 🎙️ audio). Cycles Off / Auto / On on click. The Auto state shows the resolver-inferred value in dim text. No send-path effect yet — 4c-3 wires these in.
 - **Phase 4c-2 (programmatic only, no UI yet):** the BYOP wire path now carries attachments. Programmatic / test callers can populate `LocalProviderInput.attachments` and each adapter emits the upstream's multimodal shape. User-facing file picker + send-time enforcement land in 4c-3.
 - **Phase 4c-3 (full multimodal UX):** 📎 button + drag-drop + Cmd/Ctrl+V paste attach images, PDFs, and audio (per active-model capabilities). Send is disabled when an attachment's modality isn't supported by the active model. Conversation history shows a chip with icon + filename for each attached file on a user turn (image / pdf / audio); bytes are session-only — the chip persists across reloads from metadata, but the actual file content stays in the session that sent it.
+- **Phase 4d (dedicated compaction model):** New "Summarization model" dropdown in Settings → AI (BYOP section) lets users route conversation compaction to a cheaper/faster model while the primary agent model handles agent work. Falls back to the conversation model when the configured compaction model is unavailable.
 
 **Architecture:**
 - Type system in `app/src/settings/ai.rs`: `AgentProvider`, `AgentProviderModel`, `AgentProviderKind` (`OpenAiCompatible` only today), `AgentProviderApiType` (`OpenAi`, `Anthropic`, `Ollama`, `Gemini`, `DeepSeek` active; `OpenAiResp` enum variant reserved for Phase 4).
@@ -108,12 +112,14 @@ The full design — data model, dispatch flow, migration strategy, risks — is 
 - **Phase 4c-1:** New `crates/ai/src/capabilities.rs` resolver with `resolve_image / resolve_pdf / resolve_audio(api_type, model_id, model_setting, catalog) -> bool`. Precedence chain: explicit user setting > 4b catalog > per-api_type heuristic table (`gpt-4o*` / `claude-3+` / `gemini-1.5+` / `llava*` etc.) > conservative-false. Three new `AISettingsPageAction` variants cycle the existing `Option<bool>` fields; widget renders the chips with a `[MouseStateHandle; 3]` pool on `ModelRowHandles`.
 - **Phase 4c-2:** New `crates/ai/src/attachments.rs` with `AgentAttachment { mime, bytes, display_name }` + `encode_base64` / `encode_data_uri` helpers. `LocalProviderInput` gains `attachments: Vec<AgentAttachment>` (default empty). Per-adapter wire-type extensions: OpenAi/DeepSeek `ChatMessageContent` becomes an untagged enum supporting Text(String) | Parts(Vec<ChatContentPart>); Anthropic `AnthropicContentBlock` gains Image + Document variants with a shared `AnthropicMediaSource`; Ollama `OllamaChatMessage` gains `images: Vec<String>` (raw base64); Gemini `GeminiOutboundPart` gains an `InlineData` variant. Each translator gates the new shape on `!attachments.is_empty()` so text-only turns are bit-for-bit unchanged.
 - **Phase 4c-3:** New `AttachmentInputValidator` shared funnel (`app/src/ai/blocklist/agent_view/agent_input_footer/attachment_input_validator.rs`) gates picker/drag/paste on modality (4c-1 resolver), file size (≤20 MiB), and turn limit (≤5). `AgentInputFooter.pending_attachments: Vec<AgentAttachment>` lives in memory; drained on submit into `LocalProviderInput.attachments` at the dispatch site (`app/src/ai/agent/api/impl.rs:283`). New `attachment_chip` widget renders thumbnails (pre-decoded at attach-time on a background task) for images and icon+filename for pdf/audio in the input strip. Persisted `PersistedAIInputType::Query` gains `#[serde(default)] file_attachment_metadata: Vec<AttachmentMetadata>` — mime + display_name only; bytes stay session-scoped. The transcript renders the same metadata-only chip on user turns (both in-session and post-reload), via `render_file_attachment_metadata` in `block/view_impl/query.rs` — no separate "not available" branch needed because the metadata IS the source of truth for the transcript view.
+- **Phase 4d:** New `CompactionTarget { primary_cfg, summarizer_cfg }` in `crates/ai/src/local_provider/compaction/config.rs` separates overflow detection from summarizer dispatch. New `CompactionDispatcher` at `app/src/ai/compaction_dispatcher.rs` reads `byop_compaction_model_provider_id` + `byop_compaction_model_id` from AISettings, resolves via `snapshot_for_request`, and builds the target. Existing `local_provider_compaction.rs` functions delegate to the dispatcher. Settings UI gains a "Summarization model" dropdown + inline availability warning in the BYOP compaction section.
 
 ## Future phases (per [`design.md`](design.md) §9)
 
 Each gets its own design + plan when started:
 
-- **Phase 4a–d** — `/models` fetch button, models.dev catalog sync, multimodal capability resolution (image / pdf / audio), dedicated compaction model.
+- **Phase 4a–c** — `/models` fetch button, models.dev catalog sync, multimodal capability resolution (image / pdf / audio) — all code complete, pending live smoke.
+- **Phase 4d** — dedicated compaction model — code complete on `multi-local-llm`, pending live smoke.
 
 ## Operational notes
 
