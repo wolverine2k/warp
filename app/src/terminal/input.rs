@@ -344,7 +344,7 @@ use super::{
     History, HistoryEntry, SizeInfo, TerminalModel, UpArrowHistoryConfig,
 };
 use crate::ai::blocklist::agent_view::{
-    AgentInputFooter, AgentInputFooterEvent, AgentViewController,
+    AgentInputFooter, AgentInputFooterAction, AgentInputFooterEvent, AgentViewController,
 };
 use crate::terminal::view::ambient_agent::{
     HarnessSelector, HarnessSelectorEvent, HostSelector, HostSelectorEvent, NakedHeaderButtonTheme,
@@ -10015,6 +10015,30 @@ impl Input {
                 });
         if is_viewer && !is_cloud_mode_with_images {
             self.insert_clipboard_text_content(ctx, content);
+            return;
+        }
+
+        // When the agent view is active and the clipboard carries image content,
+        // route image attachment through AgentInputFooter (Phase 4c-3 task 6) so
+        // images become `AgentAttachment`s validated by `attachment_input_validator`.
+        // Text paste is always handled by `Input` below so the editor receives it.
+        let in_active_agent_view = self.agent_view_controller.as_ref(ctx).is_active();
+        let clipboard_has_image_content = content.has_image_data()
+            || content
+                .paths
+                .as_ref()
+                .is_some_and(|paths| !warpui::clipboard_utils::get_image_filepaths_from_paths(paths).is_empty());
+        if in_active_agent_view && clipboard_has_image_content {
+            self.agent_input_footer.update(ctx, |footer, ctx| {
+                ctx.dispatch_typed_action(
+                    &AgentInputFooterAction::PasteFromClipboard(content.clone()),
+                );
+                let _ = footer;
+            });
+            // Also insert any text content so the editor still gets it.
+            if warpui::clipboard::should_insert_text_on_paste(&content) {
+                self.insert_clipboard_text_content(ctx, content);
+            }
             return;
         }
 
