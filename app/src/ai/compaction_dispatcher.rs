@@ -300,3 +300,7 @@ impl CompactionDispatcher {
         total
     }
 }
+
+#[cfg(test)]
+#[path = "compaction_dispatcher_tests.rs"]
+mod tests;
