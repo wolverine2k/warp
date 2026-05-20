@@ -32,6 +32,35 @@
 
 [Warp](https://www.warp.dev) is an agentic development environment, born out of the terminal. Use Warp's built-in coding agent, or bring your own CLI agent (Claude Code, Codex, Gemini CLI, and others).
 
+## Bring Your Own Provider (BYOP)
+
+Warp's Agent Mode supports **custom AI providers** alongside the built-in Warp cloud models. Configure multiple providers simultaneously and pick a specific provider and model per conversation — all from **Settings > AI > Custom AI Providers**.
+
+### Supported Providers
+
+| Provider | API Type | Streaming | Notes |
+|---|---|---|---|
+| **OpenAI** | OpenAI-compatible | SSE | GPT-4o, GPT-4 Turbo, o-series, and any OpenAI-compatible endpoint |
+| **Anthropic** | Native Messages API | SSE | Claude Opus, Sonnet, Haiku via `api.anthropic.com` or self-hosted relays |
+| **Ollama** | Native `/api/chat` | NDJSON | Local models (Llama, Mistral, Qwen, etc.) with native tool-call support |
+| **Google Gemini** | Native `generateContent` | SSE | Gemini 1.5/2.0 via `generativelanguage.googleapis.com` |
+| **DeepSeek** | OpenAI-compatible | SSE | DeepSeek-Chat and DeepSeek-Reasoner (chain-of-thought rendered separately) |
+
+Any OpenAI-compatible endpoint (LM Studio, vLLM, text-generation-inference, LocalAI, etc.) works out of the box with the **OpenAI** API type.
+
+### Key Features
+
+- **Multiple providers at once** — run Ollama locally, Anthropic in the cloud, and a remote OpenAI-compatible box side by side. Each conversation picks its own provider and model.
+- **One-click model discovery** — the **Fetch models** button queries each provider's upstream model-list endpoint; the **Browse catalog** modal pre-fills metadata from the open-source [models.dev](https://models.dev) catalog.
+- **Multimodal attachments** — attach images, PDFs, and audio files to agent turns via the file-picker button, drag-and-drop, or paste-from-clipboard. Each adapter translates attachments into the provider's native wire format. Per-model capability chips (image / pdf / audio) in settings control which modalities are allowed.
+- **Dedicated compaction model** — route conversation summarization to a separate, cheaper model (e.g., Haiku or a local Ollama model) while the primary agent model handles reasoning and tool use. Configure via the **Summarization model** dropdown in the BYOP settings section.
+- **Test connection** — per-provider probe button confirms endpoint reachability before you start a conversation.
+- **Auto-migration** — existing single-provider configurations are migrated automatically on first launch.
+
+### Configuration
+
+Providers are stored in `settings.toml` under `agents.warp_agent.providers`. API keys are stored in the OS keychain. See [`specs/multi-local-llm/design.md`](https://github.com/wolverine2k/warp/blob/multi-local-llm/specs/multi-local-llm/design.md) for the full architecture and [`specs/multi-local-llm/README.md`](https://github.com/wolverine2k/warp/blob/multi-local-llm/specs/multi-local-llm/README.md) for per-phase implementation status.
+
 ## Installation
 
 You can [download Warp](https://www.warp.dev/download) and [read our docs](https://docs.warp.dev/) for platform-specific instructions.
