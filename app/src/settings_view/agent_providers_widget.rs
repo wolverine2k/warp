@@ -27,6 +27,7 @@ use crate::editor::{
     EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
 };
 use crate::settings::{AISettings, AgentProvider, AgentProviderApiType, AgentProviderModel};
+use crate::view_components::{Dropdown, DropdownItem};
 
 use super::ai_page::{AISettingsPageAction, AISettingsPageView};
 use super::fetched_models_modal::FetchedModelsModalState;
@@ -142,6 +143,12 @@ pub(super) struct AgentProvidersWidget {
     /// reason as `fetch_modal`. Row pool sized to 200 — the hard render
     /// cap in `render_catalog_modal`.
     catalog_modal: CatalogModalHandles,
+    /// Phase 4d. Dropdown for the dedicated compaction/summarization model
+    /// selector. Built at widget construction time with entries from all
+    /// configured providers × models, plus a "Use conversation model"
+    /// default. Rebuilt alongside the widget whenever provider config
+    /// changes (Add/Remove provider triggers `build_page` → `new`).
+    compaction_dropdown: ViewHandle<Dropdown<AISettingsPageAction>>,
 }
 
 /// Mouse-state handles for the "Fetched models" modal. `row_states` is
@@ -228,12 +235,72 @@ impl AgentProvidersWidget {
         // provider) don't refetch.
         ctx.dispatch_typed_action_deferred(AISettingsPageAction::LoadCatalog);
 
+        // Phase 4d. Build the compaction/summarization model dropdown.
+        let compaction_dropdown = Self::build_compaction_dropdown(&providers, ctx);
+
         Self {
             add_button_state: MouseStateHandle::default(),
             cards,
             fetch_modal: FetchModalHandles::new(),
             catalog_modal: CatalogModalHandles::new(ctx),
+            compaction_dropdown,
         }
+    }
+
+    // ---- Phase 4d: Compaction model dropdown ---------------------------------
+
+    /// Build (or rebuild) the summarization/compaction model dropdown.
+    /// Called once from `new()` — the widget is rebuilt whenever provider
+    /// config changes (Add/Remove provider → `build_page` → `new`).
+    fn build_compaction_dropdown(
+        providers: &[AgentProvider],
+        ctx: &mut ViewContext<AISettingsPageView>,
+    ) -> ViewHandle<Dropdown<AISettingsPageAction>> {
+        let ai_settings = AISettings::as_ref(ctx);
+        let current_provider_id = ai_settings.byop_compaction_model_provider_id.to_string();
+        let current_model_id = ai_settings.byop_compaction_model_id.to_string();
+
+        let mut items: Vec<DropdownItem<AISettingsPageAction>> = Vec::new();
+
+        // Default entry — clear to "use conversation model".
+        items.push(DropdownItem::new(
+            "Use conversation model",
+            AISettingsPageAction::SetCompactionModel {
+                provider_id: String::new(),
+                model_id: String::new(),
+            },
+        ));
+
+        // One entry per (provider, model) pair.
+        let mut selected_index: usize = 0;
+        for provider in providers {
+            for model in &provider.models {
+                let label = if model.name.is_empty() {
+                    format!("{} / {}", provider.name, model.id)
+                } else {
+                    format!("{} / {}", provider.name, model.name)
+                };
+                let action = AISettingsPageAction::SetCompactionModel {
+                    provider_id: provider.id.clone(),
+                    model_id: model.id.clone(),
+                };
+                if provider.id == current_provider_id && model.id == current_model_id {
+                    selected_index = items.len();
+                }
+                items.push(DropdownItem::new(label, action));
+            }
+        }
+
+        let selected = selected_index;
+        ctx.add_typed_action_view(move |ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_top_bar_max_width(250.);
+            dropdown.set_menu_width(250., ctx);
+            dropdown.set_menu_max_height(250., ctx);
+            dropdown.add_items(items, ctx);
+            dropdown.set_selected_by_index(selected, ctx);
+            dropdown
+        })
     }
 
     // ---- Construction helpers ------------------------------------------------
@@ -1546,6 +1613,82 @@ impl SettingsWidget for AgentProvidersWidget {
                     app,
                 ));
             }
+        }
+
+        // Phase 4d. Summarization model dropdown — only shown when at
+        // least one provider is configured (otherwise there are no
+        // candidate models to pick from).
+        if !providers.is_empty() {
+            let compaction_label = Container::new(
+                Text::new(
+                    "Summarization model".to_string(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(if is_any_ai_enabled {
+                    appearance.theme().active_ui_text_color().into()
+                } else {
+                    appearance.theme().disabled_ui_text_color().into()
+                })
+                .finish(),
+            )
+            .with_margin_top(FIELD_LABEL_MARGIN_TOP)
+            .with_margin_bottom(FIELD_LABEL_MARGIN_BOTTOM)
+            .finish();
+
+            let compaction_description = Container::new(
+                Text::new(
+                    "Choose which model compacts long conversations. \
+                     Defaults to the active conversation model."
+                        .to_string(),
+                    appearance.ui_font_family(),
+                    appearance.ui_font_size(),
+                )
+                .with_color(appearance.theme().disabled_ui_text_color().into())
+                .soft_wrap(true)
+                .finish(),
+            )
+            .with_margin_bottom(4.)
+            .finish();
+
+            let dropdown_element = ChildView::new(&self.compaction_dropdown).finish();
+
+            let mut compaction_section = Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(compaction_label)
+                .with_child(compaction_description)
+                .with_child(dropdown_element);
+
+            // Inline warning when the configured model is unavailable.
+            let ai_settings = AISettings::as_ref(app);
+            let configured_provider =
+                ai_settings.byop_compaction_model_provider_id.to_string();
+            if !configured_provider.is_empty()
+                && !crate::ai::compaction_dispatcher::CompactionDispatcher::compaction_model_available(app)
+            {
+                let warning = Container::new(
+                    Text::new(
+                        "Configured summarization model is unavailable \
+                         — compaction will use the conversation model."
+                            .to_string(),
+                        appearance.ui_font_family(),
+                        appearance.ui_font_size(),
+                    )
+                    .with_color(appearance.theme().disabled_ui_text_color().into())
+                    .soft_wrap(true)
+                    .finish(),
+                )
+                .with_margin_top(4.)
+                .finish();
+                compaction_section.add_child(warning);
+            }
+
+            column.add_child(
+                Container::new(compaction_section.finish())
+                    .with_margin_top(8.)
+                    .with_margin_bottom(12.)
+                    .finish(),
+            );
         }
 
         Container::new(column.finish())

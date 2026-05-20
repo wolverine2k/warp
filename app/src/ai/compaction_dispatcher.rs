@@ -51,8 +51,7 @@ impl CompactionDispatcher {
     }
 
     /// Returns `true` when the user's dedicated compaction model is reachable.
-    /// Used by the settings UI for inline warnings (Task 7).
-    #[allow(dead_code)] // Wired up by Phase 4d Task 7 settings-UI inline warning.
+    /// Used by the settings UI for inline warnings (Phase 4d Task 6).
     pub fn compaction_model_available(ctx: &AppContext) -> bool {
         let ai_settings = AISettings::as_ref(ctx);
         let provider_id = ai_settings.byop_compaction_model_provider_id.to_string();
