@@ -1118,9 +1118,11 @@ impl AgentProvidersWidget {
             appearance,
         );
 
-        // Remove button
+        // Remove button. Labeled "× Remove model" so it is discoverable
+        // and clearly distinct from the bottom-row "Remove" button that
+        // deletes the entire provider.
         let remove_button = Self::render_card_button(
-            "\u{00d7}",
+            "\u{00d7} Remove model",
             row.remove_button_state.clone(),
             AISettingsPageAction::RemoveAgentProviderModel {
                 provider_index,
