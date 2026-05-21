@@ -257,7 +257,7 @@ impl SlashCommandRequest {
                 }]
             }
             SlashCommandRequest::Summarize { prompt, .. } => {
-                vec![AIAgentInput::SummarizeConversation { prompt }]
+                vec![AIAgentInput::SummarizeConversation { prompt, context }]
             }
             SlashCommandRequest::FetchReviewComments { repo_path } => {
                 vec![AIAgentInput::FetchReviewComments { repo_path, context }]
