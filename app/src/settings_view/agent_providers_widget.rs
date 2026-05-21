@@ -1036,15 +1036,10 @@ impl AgentProvidersWidget {
         row: &ModelRowHandles,
         view: &AISettingsPageView,
         appearance: &Appearance,
+        label_color: warp_core::ui::theme::Fill,
     ) -> Box<dyn Element> {
-        let cell = |flex: f32, v: &ViewHandle<EditorView>| -> Box<dyn Element> {
-            Expanded::new(
-                flex,
-                Container::new(ChildView::new(v).finish())
-                    .with_margin_right(MODEL_ROW_GAP)
-                    .finish(),
-            )
-            .finish()
+        let editor_element = |v: &ViewHandle<EditorView>| -> Box<dyn Element> {
+            Container::new(ChildView::new(v).finish()).finish()
         };
 
         // Tool call chip: shows current state
@@ -1134,22 +1129,58 @@ impl AgentProvidersWidget {
             appearance,
         );
 
-        let row_element: Box<dyn Element> = Flex::row()
+        // Vertically stacked field blocks so long display names / model IDs
+        // don't overflow into adjacent cells. Chips + remove button live on
+        // their own row below the fields.
+        let chips_row: Box<dyn Element> = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(cell(2., &row.name_editor))
-            .with_child(cell(2., &row.id_editor))
-            .with_child(cell(1., &row.context_editor))
+            .with_main_axis_alignment(MainAxisAlignment::Start)
             .with_child(
                 Container::new(tool_chip)
                     .with_margin_right(MODEL_ROW_GAP)
                     .finish(),
             )
-            .with_child(Container::new(image_chip).with_margin_left(6.).finish())
-            .with_child(Container::new(pdf_chip).with_margin_left(6.).finish())
-            .with_child(Container::new(audio_chip).with_margin_left(6.).finish())
             .with_child(
-                Container::new(remove_button)
-                    .with_margin_left(6.)
+                Container::new(image_chip)
+                    .with_margin_right(MODEL_ROW_GAP)
+                    .finish(),
+            )
+            .with_child(
+                Container::new(pdf_chip)
+                    .with_margin_right(MODEL_ROW_GAP)
+                    .finish(),
+            )
+            .with_child(
+                Container::new(audio_chip)
+                    .with_margin_right(MODEL_ROW_GAP)
+                    .finish(),
+            )
+            .with_child(Container::new(remove_button).finish())
+            .finish();
+
+        let row_element: Box<dyn Element> = Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(field_block(
+                "Display Name",
+                editor_element(&row.name_editor),
+                label_color,
+                appearance,
+            ))
+            .with_child(field_block(
+                "Model ID",
+                editor_element(&row.id_editor),
+                label_color,
+                appearance,
+            ))
+            .with_child(field_block(
+                "Context Window (tokens)",
+                editor_element(&row.context_editor),
+                label_color,
+                appearance,
+            ))
+            .with_child(
+                Container::new(chips_row)
+                    .with_margin_top(MODEL_ROW_GAP)
                     .finish(),
             )
             .finish();
@@ -1286,47 +1317,10 @@ impl AgentProvidersWidget {
             .finish();
             models_column.add_child(empty_hint);
         } else {
-            // Table header
-            let dim = appearance.theme().disabled_ui_text_color();
-            let header_cell = |flex: f32, label: &str| -> Box<dyn Element> {
-                Expanded::new(
-                    flex,
-                    Container::new(
-                        Text::new(
-                            label.to_string(),
-                            appearance.ui_font_family(),
-                            appearance.ui_font_size(),
-                        )
-                        .with_color(dim.into())
-                        .finish(),
-                    )
-                    .with_margin_right(MODEL_ROW_GAP)
-                    .finish(),
-                )
-                .finish()
-            };
-            let header = Container::new(
-                Flex::row()
-                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                    .with_child(header_cell(2., "Display Name"))
-                    .with_child(header_cell(2., "Model ID"))
-                    .with_child(header_cell(1., "Ctx (tokens)"))
-                    // Spacer for tools + remove columns
-                    .with_child(
-                        Text::new(
-                            "  ".to_string(),
-                            appearance.ui_font_family(),
-                            appearance.ui_font_size(),
-                        )
-                        .with_color(dim.into())
-                        .finish(),
-                    )
-                    .finish(),
-            )
-            .with_margin_bottom(2.)
-            .finish();
-            models_column.add_child(header);
-
+            // Each model renders as a vertical card-block with labeled
+            // fields stacked. No table header — long display names / model
+            // IDs would overflow into adjacent flex cells in a horizontal
+            // layout, causing visual jumbling.
             for (model_index, model_row_handles) in card.model_rows.iter().enumerate() {
                 let model = match provider.models.get(model_index) {
                     Some(m) => m,
@@ -1341,8 +1335,9 @@ impl AgentProvidersWidget {
                         model_row_handles,
                         view,
                         appearance,
+                        label_color,
                     ))
-                    .with_margin_bottom(MODEL_ROW_GAP)
+                    .with_margin_bottom(MODEL_ROW_GAP * 2.0)
                     .finish(),
                 );
             }
