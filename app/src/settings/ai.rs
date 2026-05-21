@@ -796,6 +796,20 @@ pub struct AgentProvider {
     /// display.
     #[serde(default)]
     pub models: Vec<AgentProviderModel>,
+
+    /// Phase 5a. When true, this provider's models appear in the orchestration
+    /// model picker (subject to harness-compatibility and reachability
+    /// filters). Default false so existing/half-configured providers don't
+    /// pollute orchestration until explicitly opted in.
+    #[serde(default)]
+    pub available_for_orchestration: bool,
+
+    /// Phase 5a. Name of a managed secret holding this provider's API key for
+    /// Remote orchestration. Empty means "not configured for Remote" — the
+    /// provider is Local-only for orchestration. Populated by the Auto-create
+    /// button in the settings UI (Phase 5b).
+    #[serde(default)]
+    pub remote_secret_name: String,
 }
 
 impl AgentProvider {
@@ -813,6 +827,8 @@ impl Default for AgentProvider {
             api_type: Default::default(),
             base_url: Default::default(),
             models: Default::default(),
+            available_for_orchestration: false,
+            remote_secret_name: Default::default(),
         }
     }
 }

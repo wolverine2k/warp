@@ -780,3 +780,47 @@ fn test_mark_quota_banner_as_dismissed() {
         });
     });
 }
+
+#[test]
+fn agent_provider_deserializes_without_orchestration_fields() {
+    // Simulates a settings file from before Phase 5a — no
+    // available_for_orchestration or remote_secret_name fields.
+    let json = r#"{
+        "id": "test-uuid-1234",
+        "name": "My Provider",
+        "kind": "open_ai_compatible",
+        "api_type": "open_ai",
+        "base_url": "https://api.example.com/v1",
+        "models": [
+            { "name": "gpt-4o", "id": "gpt-4o" }
+        ]
+    }"#;
+
+    let provider: AgentProvider = serde_json::from_str(json).expect("should deserialize");
+    assert_eq!(provider.id, "test-uuid-1234");
+    assert_eq!(provider.name, "My Provider");
+    assert_eq!(provider.models.len(), 1);
+    assert!(!provider.available_for_orchestration);
+    assert!(provider.remote_secret_name.is_empty());
+}
+
+#[test]
+fn agent_provider_round_trips_orchestration_fields() {
+    let provider = AgentProvider {
+        id: "test-uuid-5678".to_owned(),
+        name: "Orchestration Provider".to_owned(),
+        kind: AgentProviderKind::default(),
+        api_type: AgentProviderApiType::Anthropic,
+        base_url: "https://api.anthropic.com/v1".to_owned(),
+        models: vec![AgentProviderModel::from_id("claude-sonnet-4-20250514".to_owned())],
+        available_for_orchestration: true,
+        remote_secret_name: "byop-test-uuid-5678".to_owned(),
+    };
+
+    let json = serde_json::to_string(&provider).expect("should serialize");
+    let restored: AgentProvider = serde_json::from_str(&json).expect("should deserialize");
+
+    assert_eq!(restored.available_for_orchestration, true);
+    assert_eq!(restored.remote_secret_name, "byop-test-uuid-5678");
+    assert_eq!(restored, provider);
+}

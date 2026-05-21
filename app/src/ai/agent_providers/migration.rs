@@ -111,6 +111,8 @@ pub fn migrate_legacy_local_provider_if_needed(ctx: &mut AppContext) {
             pdf: None,
             audio: None,
         }],
+        available_for_orchestration: false,
+        remote_secret_name: String::new(),
     };
 
     // Move the secret: __legacy__ -> <uuid>.
