@@ -116,6 +116,11 @@ pub enum AISubpage {
     Knowledge,
     /// Third-party CLI agent settings.
     ThirdPartyCLIAgents,
+    /// Custom AI Providers (BYOP) — multi-provider configuration, model
+    /// discovery, multimodal capabilities, dedicated compaction model.
+    /// Extracted from the WarpAgent page so the providers list doesn't
+    /// clutter the main AI page once a user adds multiple models.
+    CustomAIProviders,
 }
 
 impl AISubpage {
@@ -125,6 +130,7 @@ impl AISubpage {
             SettingsSection::AgentProfiles => Some(Self::Profiles),
             SettingsSection::Knowledge => Some(Self::Knowledge),
             SettingsSection::ThirdPartyCLIAgents => Some(Self::ThirdPartyCLIAgents),
+            SettingsSection::CustomAIProviders => Some(Self::CustomAIProviders),
             // AgentMCPServers renders the standalone MCPServers page, not an AI subpage.
             _ => None,
         }
@@ -1992,13 +1998,15 @@ impl AISettingsPageView {
                 }
                 widgets.push(Box::new(CloudHandoffWidget::default()));
                 widgets.push(Box::new(ApiKeysWidget::new(ctx)));
-                widgets.push(Box::new(AgentProvidersWidget::new(ctx)));
                 widgets.push(Box::new(AwsBedrockWidget::new(ctx)));
                 widgets.push(Box::new(AgentAttributionWidget::default()));
                 widgets.push(Box::new(OtherAIWidget::default()));
                 if FeatureFlag::AgentModeComputerUse.is_enabled() {
                     widgets.push(Box::new(CloudAgentComputerUseWidget::default()));
                 }
+            }
+            Some(AISubpage::CustomAIProviders) => {
+                widgets.push(Box::new(AgentProvidersWidget::new(ctx)));
             }
             Some(AISubpage::Profiles) => {
                 if !FeatureFlag::UsageBasedPricing.is_enabled() {

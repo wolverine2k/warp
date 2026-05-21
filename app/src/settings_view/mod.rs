@@ -252,6 +252,7 @@ pub enum SettingsSection {
     AgentMCPServers,
     Knowledge,
     ThirdPartyCLIAgents,
+    CustomAIProviders,
     /// Internal backing-page identifier for CodeSettingsPageView. Multiple subpages
     /// (CodeIndexing, EditorAndCodeReview) share this single backing page,
     /// so this variant is needed as the key in `settings_pages`.
@@ -281,6 +282,7 @@ impl Display for SettingsSection {
             SettingsSection::AgentMCPServers => write!(f, "MCP servers"),
             SettingsSection::Knowledge => write!(f, "Knowledge"),
             SettingsSection::ThirdPartyCLIAgents => write!(f, "Third party CLI agents"),
+            SettingsSection::CustomAIProviders => write!(f, "Custom AI Providers"),
             SettingsSection::CodeIndexing => write!(f, "Indexing and projects"),
             SettingsSection::EditorAndCodeReview => write!(f, "Editor and Code Review"),
             SettingsSection::CloudEnvironments => write!(f, "Environments"),
@@ -305,6 +307,7 @@ impl SettingsSection {
                 | Self::AgentMCPServers
                 | Self::Knowledge
                 | Self::ThirdPartyCLIAgents
+                | Self::CustomAIProviders
         )
     }
 
@@ -338,6 +341,7 @@ impl SettingsSection {
     pub fn ai_subpages() -> &'static [Self] {
         &[
             Self::WarpAgent,
+            Self::CustomAIProviders,
             Self::AgentProfiles,
             Self::AgentMCPServers,
             Self::Knowledge,

@@ -129,6 +129,7 @@ fn non_subpage_sections_map_to_themselves() {
 fn ai_subpages_list_contains_all_ai_subpage_variants() {
     let subpages = SettingsSection::ai_subpages();
     assert!(subpages.contains(&SettingsSection::WarpAgent));
+    assert!(subpages.contains(&SettingsSection::CustomAIProviders));
     assert!(subpages.contains(&SettingsSection::AgentProfiles));
     assert!(subpages.contains(&SettingsSection::AgentMCPServers));
     assert!(subpages.contains(&SettingsSection::Knowledge));
@@ -714,9 +715,9 @@ fn expanded_umbrella_produces_section_stop_per_subpage() {
 
     let stops = build_nav_stops(&nav_items, |_| true);
 
-    // Expect: Account, WarpAgent, AgentProfiles, AgentMCPServers, Knowledge,
-    // ThirdPartyCLIAgents, BillingAndUsage, <Code umbrella>,
-    // <Cloud platform umbrella>, Teams.
+    // Expect: Account, WarpAgent, CustomAIProviders, AgentProfiles,
+    // AgentMCPServers, Knowledge, ThirdPartyCLIAgents, BillingAndUsage,
+    // <Code umbrella>, <Cloud platform umbrella>, Teams.
     let sections: Vec<_> = stops
         .iter()
         .map(|s| match s {
@@ -729,6 +730,7 @@ fn expanded_umbrella_produces_section_stop_per_subpage() {
         vec![
             "Account",
             "WarpAgent",
+            "CustomAIProviders",
             "AgentProfiles",
             "AgentMCPServers",
             "Knowledge",
@@ -765,8 +767,8 @@ fn collapsed_umbrella_with_filtered_subpages_uses_first_visible_subpage() {
         } => {
             assert_eq!(
                 *first_subpage,
-                SettingsSection::AgentProfiles,
-                "WarpAgent is hidden by the filter, so the first visible subpage is AgentProfiles"
+                SettingsSection::CustomAIProviders,
+                "WarpAgent is hidden by the filter, so the first visible subpage is CustomAIProviders"
             );
             assert_eq!(
                 *last_subpage,
@@ -1013,19 +1015,21 @@ fn arrow_down_across_adjacent_collapsed_umbrellas() {
 #[test]
 fn arrow_down_collapsed_umbrella_respects_search_filter() {
     let nav_items = realistic_nav_items();
-    // Search filter hides WarpAgent and AgentProfiles so the first visible AI
-    // subpage is AgentMCPServers.
+    // Search filter hides WarpAgent, CustomAIProviders, and AgentProfiles so
+    // the first visible AI subpage is AgentMCPServers.
     let is_visible = |section: SettingsSection| {
         !matches!(
             section,
-            SettingsSection::WarpAgent | SettingsSection::AgentProfiles
+            SettingsSection::WarpAgent
+                | SettingsSection::CustomAIProviders
+                | SettingsSection::AgentProfiles
         )
     };
     let stops = build_nav_stops(&nav_items, is_visible);
 
     // From Account, Down should land on AgentMCPServers (first visible
     // subpage of the still-collapsed Agents umbrella), not on WarpAgent /
-    // AgentProfiles.
+    // CustomAIProviders / AgentProfiles.
     let next = simulate_cycle(
         &nav_items,
         &stops,
