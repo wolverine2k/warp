@@ -582,7 +582,6 @@ pub struct LLMPreferences {
     ///
     /// These entries are NOT chained into `custom_llm_choices` — they only
     /// surface through `get_orchestration_llm_choices`.
-    #[allow(dead_code)] // Wired up by Phase 5a Task 5 (orchestration picker).
     byop_orchestration_llms: Vec<LLMInfo>,
 }
 
@@ -883,7 +882,6 @@ impl LLMPreferences {
     /// These entries are NOT included in `custom_llm_choices`,
     /// `get_coding_llm_choices`, or `get_cli_agent_llm_choices` — they only
     /// surface through `get_orchestration_llm_choices`.
-    #[allow(dead_code)] // Wired up by Phase 5a Task 5 (orchestration picker).
     pub fn byop_llm_choices(&mut self, app: &AppContext) -> &[LLMInfo] {
         self.rebuild_byop_orchestration_llms(app);
         &self.byop_orchestration_llms
@@ -903,7 +901,6 @@ impl LLMPreferences {
     /// First-party entries pass through unchanged. Legacy custom-endpoint entries
     /// from `custom_llm_choices` are NOT included — orchestration uses only
     /// first-party and BYOP sources.
-    #[allow(dead_code)] // Wired up by Phase 5a Task 5 (orchestration picker).
     pub fn get_orchestration_llm_choices(
         &mut self,
         app: &AppContext,
@@ -974,7 +971,6 @@ impl LLMPreferences {
     /// `byop_llm_choices` rather than on a subscription, because the
     /// orchestration picker is opened infrequently and the provider list is
     /// small.
-    #[allow(dead_code)] // Wired up by Phase 5a Task 5 (orchestration picker).
     fn rebuild_byop_orchestration_llms(&mut self, app: &AppContext) {
         self.byop_orchestration_llms = if FeatureFlag::LocalLlmProvider.is_enabled() {
             crate::ai::agent_providers::build_byop_orchestration_llm_infos(app)
