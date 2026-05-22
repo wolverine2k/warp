@@ -548,6 +548,40 @@ Unit test on the dispatcher's setting read + fallback path; unit test that `snap
 
 ---
 
+## 16. Phase 5 — BYOP in agent orchestration
+
+**Goal:** Surface BYOP-configured models in the agent orchestration model picker, route the run-wide `model_id` plus credentials through both the Native (Warp/Oz) agent loop and compatible external harness CLIs (Claude Code, Codex, OpenCode, Gemini CLI), and validate compatibility against the selected harness and execution mode. Today, orchestration's model picker is fed by `LLMPreferences::get_base_llm_choices_for_agent_mode`, which chains first-party server models with `custom_llm_choices`; the latter only returns the older "Custom Inference Endpoints" entries and never reads the BYOP `AgentProviders` registry. Phase 5 closes that gap.
+
+Split into four sub-phases:
+
+- **5a — Foundation** 🧪 code complete on `multi-local-llm`. Adds `available_for_orchestration` + `remote_secret_name` fields to `AgentProvider` (serde-default backward compatible); the `byop_orchestration_filter` module (harness-compatibility matrix + Remote-reachability heuristic); `LLMPreferences::byop_llm_choices` and `get_orchestration_llm_choices` (chains first-party + BYOP through three filter passes: opt-in, harness compat, reachability); and `validate_orchestration_model_id` submit-time guard. BYOP exposure is intentionally scoped to orchestration — `custom_llm_choices`, `get_coding_llm_choices`, and `get_cli_agent_llm_choices` stay unchanged. See [`spec-phase-5.md`](spec-phase-5.md) and [`plan-phase-5a.md`](plan-phase-5a.md).
+- **5b — Settings UI** 📋 queued. Per-provider toggle ("Available for orchestration"), "Remote managed secret" field, "Auto-create" button calling `UpdateManager::create_managed_secret`.
+- **5c — Orchestration modal + Local env injection** 📋 queued. Picker switches to `get_orchestration_llm_choices`, refilters on harness/execution-mode change, resets stale selections. New `orchestration_byop_env::byop_env_for_harness` exports `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` / `GOOGLE_API_KEY` / etc. into the child-harness env at Local launch (`child_agent.rs::Command::envs(...)`). `validate_request` calls `validate_orchestration_model_id` as a submit-time backstop.
+- **5d — Remote credential bridge + compaction inheritance** 📋 queued. Adds `byop_base_url` / `byop_api_type` / `compaction_model_provider_id` / `compaction_model_id` optional fields to `RunAgentsRequest`; submit path populates `auth_secret_name` from the provider's `remote_secret_name`; the worker host fetches the api_key from the managed secret and reconstructs the runtime config. Phase 4d's compaction setting threads through to Remote children via the new compaction fields; Local children continue to inherit settings live from `AISettings`.
+
+### 16.1 Compatibility matrix (Phase 5a)
+
+| BYOP API type | Compatible harnesses | Notes |
+|---|---|---|
+| `Anthropic` | Native, **Claude Code** | Claude Code reads `ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY` |
+| `OpenAi` | Native, **Codex**, **OpenCode** | Both honor `OPENAI_BASE_URL` + `OPENAI_API_KEY` |
+| `OpenAiResp` | Native, **Codex** | OpenCode hasn't adopted Responses API yet |
+| `DeepSeek` | Native, **Codex**, **OpenCode** | DeepSeek API is OpenAI-compatible |
+| `Gemini` | Native, **Gemini CLI** | Reads `GEMINI_API_KEY` / `GOOGLE_API_KEY` |
+| `Ollama` | **Native only** | Ollama also has an OpenAI-compat shim but routing it through Codex adds confusion |
+
+Empty/unrecognized harness strings normalize to Native (`"oz"`) — a safe default; a future harness added to the `Harness` enum but not to this matrix will be filtered as Native-compatible only, never falsely admitted to an external CLI.
+
+### 16.2 Remote-reachability heuristic (Phase 5a)
+
+When `execution_mode = Remote`, BYOP entries with a `base_url` resolving to `localhost`, `127.0.0.0/8`, `::1`, `0.0.0.0`, RFC1918 (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), `.local`, or `.localhost` are filtered out of the orchestration picker (a Warp worker can't reach a user's localhost). Best-effort string-based heuristic — false negatives are possible for hostnames that resolve to private IPs; false positives are possible for VPN/Tailscale hosts on private overlays. Documented limitations are tracked as Phase 5 follow-up.
+
+### 16.3 Verification gate (Phase 5a)
+
+Code-only sub-phase — no user-visible change yet. Verification: 28 unit tests (2 serde, 18 filter/reachability, 8 pipeline) pass; `cargo clippy --lib --tests -- -D warnings` clean; full `cargo nextest run -p warp` runs without regression; first-party pickers (coding, CLI agent) confirmed unchanged via the `byop_entries_hidden_from_other_pickers` scope-guard test. Full smoke happens when Phase 5b–5d surface the foundation.
+
+---
+
 ## Appendix A — File map (Phase 1b)
 
 New:
