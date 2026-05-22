@@ -119,6 +119,10 @@ struct ProviderCardHandles {
     /// Phase 4b. Mouse state for the "Browse catalog" footer button.
     browse_catalog_button_state: MouseStateHandle,
     api_type_chip_states: HashMap<AgentProviderApiType, MouseStateHandle>,
+    /// Phase 5b. Mouse-state for the "Available for orchestration" toggle
+    /// rendered between the API-key field and the Models section. Allocated
+    /// here so render never builds `MouseStateHandle::default()` inline.
+    orchestration_toggle_state: MouseStateHandle,
     model_rows: Vec<ModelRowHandles>,
 }
 
@@ -201,9 +205,9 @@ impl CatalogModalHandles {
         ctx.subscribe_to_view(&search_editor, move |_, editor, event, ctx| {
             if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
                 let text = editor.as_ref(ctx).buffer_text(ctx);
-                ctx.dispatch_typed_action_deferred(
-                    AISettingsPageAction::SetCatalogModalSearch { text },
-                );
+                ctx.dispatch_typed_action_deferred(AISettingsPageAction::SetCatalogModalSearch {
+                    text,
+                });
             }
         });
         Self {
@@ -409,6 +413,7 @@ impl AgentProvidersWidget {
             fetch_models_button_state: MouseStateHandle::default(),
             browse_catalog_button_state: MouseStateHandle::default(),
             api_type_chip_states,
+            orchestration_toggle_state: MouseStateHandle::default(),
             model_rows,
         }
     }
@@ -570,6 +575,56 @@ impl AgentProvidersWidget {
             .finish()
     }
 
+    /// Phase 5b. Renders the "Available for orchestration" toggle for a
+    /// provider card. Flips `AgentProvider::available_for_orchestration` via
+    /// `ToggleAgentProviderOrchestrationAvailability`.
+    ///
+    /// Gated on `FeatureFlag::LocalLlmProvider` at the call site — if the
+    /// flag is off this row is not rendered and the toggle has no effect.
+    fn render_orchestration_toggle(
+        provider: &AgentProvider,
+        provider_index: usize,
+        card: &ProviderCardHandles,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let label_text = if provider.available_for_orchestration {
+            "Available for orchestration: On"
+        } else {
+            "Available for orchestration: Off"
+        };
+
+        let helper = Container::new(
+            Text::new(
+                "When On, this provider's models appear in the orchestration model picker."
+                    .to_string(),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(appearance.theme().disabled_ui_text_color().into())
+            .soft_wrap(true)
+            .finish(),
+        )
+        .with_margin_top(2.)
+        .finish();
+
+        let toggle_button = Self::render_card_button(
+            label_text.to_string(),
+            card.orchestration_toggle_state.clone(),
+            AISettingsPageAction::ToggleAgentProviderOrchestrationAvailability { provider_index },
+            appearance,
+        );
+
+        Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(
+                Container::new(toggle_button)
+                    .with_margin_top(FIELD_LABEL_MARGIN_TOP)
+                    .finish(),
+            )
+            .with_child(helper)
+            .finish()
+    }
+
     fn render_api_type_field(
         provider: &AgentProvider,
         provider_index: usize,
@@ -718,9 +773,13 @@ impl AgentProvidersWidget {
 
             let row_element: Box<dyn Element> = if is_already {
                 Container::new(
-                    Text::new(row_label, appearance.ui_font_family(), CARD_BUTTON_FONT_SIZE)
-                        .with_color(appearance.theme().disabled_ui_text_color().into())
-                        .finish(),
+                    Text::new(
+                        row_label,
+                        appearance.ui_font_family(),
+                        CARD_BUTTON_FONT_SIZE,
+                    )
+                    .with_color(appearance.theme().disabled_ui_text_color().into())
+                    .finish(),
                 )
                 .with_uniform_padding(CARD_BUTTON_PADDING)
                 .finish()
@@ -746,11 +805,7 @@ impl AgentProvidersWidget {
                 )
             };
 
-            column = column.with_child(
-                Container::new(row_element)
-                    .with_margin_bottom(2.)
-                    .finish(),
-            );
+            column = column.with_child(Container::new(row_element).with_margin_bottom(2.).finish());
         }
 
         // Footer: [Select all] [Select none] / [Cancel] [Add N models].
@@ -794,11 +849,7 @@ impl AgentProvidersWidget {
         let right_footer = Flex::row()
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
             .with_child(cancel_button)
-            .with_child(
-                Container::new(commit_button)
-                    .with_margin_left(8.)
-                    .finish(),
-            )
+            .with_child(Container::new(commit_button).with_margin_left(8.).finish())
             .finish();
         let footer = Flex::row()
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
@@ -989,11 +1040,7 @@ impl AgentProvidersWidget {
                 )
             };
 
-            column = column.with_child(
-                Container::new(row_element)
-                    .with_margin_bottom(2.)
-                    .finish(),
-            );
+            column = column.with_child(Container::new(row_element).with_margin_bottom(2.).finish());
         }
 
         // Footer: [Cancel] [Add N models] — right-aligned.
@@ -1060,11 +1107,8 @@ impl AgentProvidersWidget {
         );
 
         // Phase 4c-1. Capability chips (image / pdf / audio).
-        let catalog_slice: &[ai::catalog::CatalogModel] = view
-            .catalog_cache
-            .as_ref()
-            .map(|c| c.all())
-            .unwrap_or(&[]);
+        let catalog_slice: &[ai::catalog::CatalogModel] =
+            view.catalog_cache.as_ref().map(|c| c.all()).unwrap_or(&[]);
 
         let resolved_image = ai::capabilities::resolve_image(
             provider_api_type,
@@ -1072,12 +1116,8 @@ impl AgentProvidersWidget {
             model.image,
             catalog_slice,
         );
-        let resolved_pdf = ai::capabilities::resolve_pdf(
-            provider_api_type,
-            &model.id,
-            model.pdf,
-            catalog_slice,
-        );
+        let resolved_pdf =
+            ai::capabilities::resolve_pdf(provider_api_type, &model.id, model.pdf, catalog_slice);
         let resolved_audio = ai::capabilities::resolve_audio(
             provider_api_type,
             &model.id,
@@ -1197,10 +1237,8 @@ impl AgentProvidersWidget {
         let Some(cache) = view.catalog_cache.as_ref() else {
             return row_element; // catalog not loaded yet
         };
-        let candidates =
-            ai::catalog::filter_models_for_api_type(provider_api_type, cache.all());
-        let suggestions: Vec<&ai::catalog::CatalogModel> =
-            candidates.into_iter().take(5).collect();
+        let candidates = ai::catalog::filter_models_for_api_type(provider_api_type, cache.all());
+        let suggestions: Vec<&ai::catalog::CatalogModel> = candidates.into_iter().take(5).collect();
         if suggestions.is_empty() {
             return row_element;
         }
@@ -1286,6 +1324,19 @@ impl AgentProvidersWidget {
             label_color,
             appearance,
         );
+
+        // ---- Orchestration opt-in (Phase 5b, gated on LocalLlmProvider) ----
+        let orchestration_toggle =
+            if warp_core::features::FeatureFlag::LocalLlmProvider.is_enabled() {
+                Some(Self::render_orchestration_toggle(
+                    provider,
+                    provider_index,
+                    card,
+                    appearance,
+                ))
+            } else {
+                None
+            };
 
         // ---- Models section ----
         let models_label = Container::new(
@@ -1466,12 +1517,17 @@ impl AgentProvidersWidget {
             .with_child(name_field)
             .with_child(api_type_field)
             .with_child(base_url_field)
-            .with_child(api_key_field)
-            .with_child(
-                Container::new(models_column.finish())
-                    .with_margin_top(8.)
-                    .finish(),
-            );
+            .with_child(api_key_field);
+
+        if let Some(toggle) = orchestration_toggle {
+            card_column.add_child(toggle);
+        }
+
+        card_column = card_column.with_child(
+            Container::new(models_column.finish())
+                .with_margin_top(8.)
+                .finish(),
+        );
 
         if let Some(banner) = warning_banner {
             card_column.add_child(banner);
@@ -1573,11 +1629,8 @@ impl SettingsWidget for AgentProvidersWidget {
         // 4a modal slot. Both can be open independently (different actions
         // open them), but in practice only one will be active at a time.
         if let Some(modal) = view.catalog_modal.as_ref() {
-            let catalog: &[ai::catalog::CatalogModel] = view
-                .catalog_cache
-                .as_ref()
-                .map(|c| c.all())
-                .unwrap_or(&[]);
+            let catalog: &[ai::catalog::CatalogModel] =
+                view.catalog_cache.as_ref().map(|c| c.all()).unwrap_or(&[]);
             column.add_child(self.render_catalog_modal(
                 modal,
                 &providers,
@@ -1659,8 +1712,7 @@ impl SettingsWidget for AgentProvidersWidget {
 
             // Inline warning when the configured model is unavailable.
             let ai_settings = AISettings::as_ref(app);
-            let configured_provider =
-                ai_settings.byop_compaction_model_provider_id.to_string();
+            let configured_provider = ai_settings.byop_compaction_model_provider_id.to_string();
             if !configured_provider.is_empty()
                 && !crate::ai::compaction_dispatcher::CompactionDispatcher::compaction_model_available(app)
             {
