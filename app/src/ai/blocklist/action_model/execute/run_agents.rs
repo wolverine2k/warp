@@ -17,7 +17,7 @@ use crate::ai::blocklist::inline_action::orchestration_controls::OrchestrationEd
 use futures::{future::BoxFuture, FutureExt};
 use warp_cli::agent::Harness;
 use warp_core::execution_mode::AppExecutionMode;
-use warpui::{Entity, ModelContext, ModelHandle};
+use warpui::{AppContext, Entity, ModelContext, ModelHandle};
 
 use super::start_agent::{StartAgentExecutor, StartAgentOutcome};
 use super::{ActionExecution, AnyActionExecution, ExecuteActionInput, PreprocessActionInput};
@@ -95,7 +95,7 @@ impl RunAgentsExecutor {
             return receiver;
         }
 
-        if let Err(error) = validate_request(&request) {
+        if let Err(error) = validate_request(&request, ctx) {
             log::warn!("RunAgentsExecutor: validation failure: {error}");
             let _ = sender.try_send(RunAgentsResult::Failure { error });
             return receiver;
@@ -342,7 +342,7 @@ fn resolve_request_from_config(request: &mut RunAgentsRequest, config: &Orchestr
 
 /// Defence-in-depth validation; mirrors the card view's
 /// `accept_disabled_reason` check.
-fn validate_request(request: &RunAgentsRequest) -> Result<(), String> {
+fn validate_request(request: &RunAgentsRequest, ctx: &AppContext) -> Result<(), String> {
     if request.agent_run_configs.is_empty() {
         return Err("orchestrate: empty agent_run_configs".to_string());
     }
@@ -360,6 +360,22 @@ fn validate_request(request: &RunAgentsRequest) -> Result<(), String> {
     {
         return Err("Remote child agents do not support the opencode harness yet.".to_string());
     }
+
+    // Phase 5b. When the run-wide model is a BYOP entry, run the full
+    // filter pipeline against the harness + execution mode to catch a
+    // stale picker selection (e.g. user picked an Anthropic BYOP model
+    // then switched harness to Codex before submitting).
+    if request.model_id.starts_with(ai::local_provider::llm_id::BYOP_PREFIX) {
+        if let Err(err) = crate::ai::agent_sdk::validate_orchestration_model_id(
+            &request.model_id,
+            &request.harness_type,
+            &request.execution_mode,
+            ctx,
+        ) {
+            return Err(err.to_string());
+        }
+    }
+
     Ok(())
 }
 
@@ -440,3 +456,7 @@ pub fn run_agents_to_start_agent_mode(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "run_agents_tests.rs"]
+mod tests;

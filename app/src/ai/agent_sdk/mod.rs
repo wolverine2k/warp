@@ -68,6 +68,7 @@ use crate::ai::skills::{
     clone_repo_for_skill, resolve_skill_spec, ResolveSkillError, ResolvedSkill,
 };
 
+pub(crate) use common::validate_orchestration_model_id;
 pub(crate) use driver::harness::{task_env_vars, validate_cli_installed, ClaudeHarness};
 pub use driver::AgentDriver;
 use telemetry::CliTelemetryEvent;

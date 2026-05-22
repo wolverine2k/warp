@@ -67,7 +67,6 @@ pub fn validate_agent_mode_base_model_id(
 ///
 /// The existing `validate_agent_mode_base_model_id` is unchanged —
 /// per-conversation BYOP validation continues to use it.
-#[allow(dead_code)] // Wired into run_agents::validate_request in Phase 5c.
 pub fn validate_orchestration_model_id(
     model_id: &str,
     harness_type: &str,
@@ -155,7 +154,6 @@ pub fn validate_orchestration_model_id(
 
 /// Returns a human-readable string listing the harnesses compatible with
 /// a given API type, for use in error messages.
-#[allow(dead_code)] // Sole caller is validate_orchestration_model_id (wired in Phase 5c).
 fn compatible_harness_names(api_type: ai::local_provider::AgentProviderApiType) -> &'static str {
     use ai::local_provider::AgentProviderApiType;
     match api_type {
