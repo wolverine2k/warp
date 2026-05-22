@@ -1526,18 +1526,7 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
                     // Phase 5b: query the same source the picker uses so the
                     // visible label tracks BYOP entries through harness/mode
                     // changes.
-                    let execution_mode = match &state.execution_mode {
-                        RunAgentsExecutionMode::Local => RunAgentsExecutionMode::Local,
-                        RunAgentsExecutionMode::Remote {
-                            environment_id,
-                            worker_host,
-                            computer_use_enabled,
-                        } => RunAgentsExecutionMode::Remote {
-                            environment_id: environment_id.clone(),
-                            worker_host: worker_host.clone(),
-                            computer_use_enabled: *computer_use_enabled,
-                        },
-                    };
+                    let execution_mode = state.execution_mode.clone();
                     LLMPreferences::handle(ctx_dropdown)
                         .update(ctx_dropdown, |llm_prefs, ctx_update| {
                             llm_prefs.get_orchestration_llm_choices(
