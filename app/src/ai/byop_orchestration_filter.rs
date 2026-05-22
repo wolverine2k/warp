@@ -90,6 +90,9 @@ pub fn base_url_reachable_from_remote(base_url: &str) -> bool {
         Err(_) => return false,
     };
 
+    // `url::Url::parse` keeps the surrounding brackets on an IPv6 host (so
+    // `host_str()` returns `"[::1]"`). Match both forms so a future caller
+    // passing an already-unwrapped host string still gets rejected.
     if host == "localhost"
         || host == "127.0.0.1"
         || host == "::1"
@@ -103,16 +106,12 @@ pub fn base_url_reachable_from_remote(base_url: &str) -> bool {
         return false;
     }
 
-    if host.starts_with("127.") {
-        if let Ok(addr) = host.parse::<std::net::Ipv4Addr>() {
-            if addr.octets()[0] == 127 {
-                return false;
-            }
-        }
-    }
-
+    // Single IPv4 parse covering loopback 127/8 and RFC1918 (10/8, 172.16/12, 192.168/16).
     if let Ok(addr) = host.parse::<std::net::Ipv4Addr>() {
         let octets = addr.octets();
+        if octets[0] == 127 {
+            return false;
+        }
         if octets[0] == 10 {
             return false;
         }

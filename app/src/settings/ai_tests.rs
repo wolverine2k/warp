@@ -820,7 +820,7 @@ fn agent_provider_round_trips_orchestration_fields() {
     let json = serde_json::to_string(&provider).expect("should serialize");
     let restored: AgentProvider = serde_json::from_str(&json).expect("should deserialize");
 
-    assert_eq!(restored.available_for_orchestration, true);
+    assert!(restored.available_for_orchestration);
     assert_eq!(restored.remote_secret_name, "byop-test-uuid-5678");
     assert_eq!(restored, provider);
 }

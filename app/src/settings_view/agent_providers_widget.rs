@@ -1028,6 +1028,7 @@ impl AgentProvidersWidget {
             .finish()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_model_row(
         provider_index: usize,
         provider_api_type: AgentProviderApiType,
