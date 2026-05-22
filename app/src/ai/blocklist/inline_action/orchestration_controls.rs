@@ -50,7 +50,7 @@ use crate::ui_components::icons::Icon;
 use crate::view_components::dropdown::{Dropdown, DropdownAction, DropdownStyle};
 use crate::view_components::FilterableDropdown;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use crate::LLMPreferences;
+use crate::ai::llms::{LLMInfo, LLMPreferences};
 
 /// Env var override for the workspace default host (developer testing).
 /// Mirrors the single-agent ambient flow.
@@ -458,17 +458,35 @@ pub fn populate_model_picker_for_harness<A: OrchestrationControlAction, V: View>
         let harness = Harness::parse_orchestration_harness(&harness_type);
         match harness {
             Some(Harness::Oz) | None => {
-                // Oz / unset: current behavior — Warp LLM catalog.
-                let llm_prefs = LLMPreferences::as_ref(ctx_dropdown);
-                let choices: Vec<_> = llm_prefs
-                    .get_base_llm_choices_for_agent_mode(ctx_dropdown)
-                    .collect();
+                // Oz / unset: Warp LLM catalog + BYOP entries opted into
+                // orchestration (Phase 5b). `get_orchestration_llm_choices`
+                // applies the per-provider toggle, harness-compatibility, and
+                // Remote-reachability filters built in Phase 5a.
+                let execution_mode = if is_local {
+                    RunAgentsExecutionMode::Local
+                } else {
+                    // Only `is_remote()` is consulted by the filter; the
+                    // Remote-mode placeholder fields don't affect output.
+                    RunAgentsExecutionMode::Remote {
+                        environment_id: String::new(),
+                        worker_host: String::new(),
+                        computer_use_enabled: false,
+                    }
+                };
+                let choices: Vec<LLMInfo> = LLMPreferences::handle(ctx_dropdown)
+                    .update(ctx_dropdown, |llm_prefs, ctx_update| {
+                        llm_prefs.get_orchestration_llm_choices(
+                            ctx_update,
+                            &harness_type,
+                            &execution_mode,
+                        )
+                    });
                 let selected_display_name = choices
                     .iter()
                     .find(|llm| llm.id.to_string() == initial_model_id)
                     .map(|llm| llm.menu_display_name());
                 let items = available_model_menu_items(
-                    choices,
+                    choices.iter().collect(),
                     move |llm| {
                         DropdownAction::SelectActionAndClose(A::model_changed(llm.id.to_string()))
                     },
