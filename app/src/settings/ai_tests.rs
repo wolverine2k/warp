@@ -812,7 +812,9 @@ fn agent_provider_round_trips_orchestration_fields() {
         kind: AgentProviderKind::default(),
         api_type: AgentProviderApiType::Anthropic,
         base_url: "https://api.anthropic.com/v1".to_owned(),
-        models: vec![AgentProviderModel::from_id("claude-sonnet-4-20250514".to_owned())],
+        models: vec![AgentProviderModel::from_id(
+            "claude-sonnet-4-20250514".to_owned(),
+        )],
         available_for_orchestration: true,
         remote_secret_name: "byop-test-uuid-5678".to_owned(),
     };
@@ -1003,4 +1005,55 @@ fn validate_orchestration_model_id_rejects_byop_with_incompatible_harness() {
     // "BYOP model 'ProviderName/ModelName' (API type Anthropic) is not
     //  compatible with harness 'codex'. Use 'oz' or 'claude', or pick
     //  a different model."
+}
+
+#[test]
+fn toggle_agent_provider_orchestration_availability_flips_the_field() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            let provider = AgentProvider {
+                id: "test-provider".to_owned(),
+                name: "Test".to_owned(),
+                kind: AgentProviderKind::default(),
+                api_type: AgentProviderApiType::OpenAi,
+                base_url: "https://api.example.com/v1".to_owned(),
+                models: vec![AgentProviderModel::from_id("m1".to_owned())],
+                available_for_orchestration: false,
+                remote_secret_name: String::new(),
+            };
+            settings
+                .agent_providers
+                .set_value(vec![provider], ctx)
+                .unwrap();
+        });
+
+        // Direct mutation mirroring what the action handler does.
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            let mut providers = settings.agent_providers.value().clone();
+            providers[0].available_for_orchestration = !providers[0].available_for_orchestration;
+            settings.agent_providers.set_value(providers, ctx).unwrap();
+        });
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(
+                settings.agent_providers.value()[0].available_for_orchestration,
+                "toggle should have flipped to true"
+            );
+        });
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            let mut providers = settings.agent_providers.value().clone();
+            providers[0].available_for_orchestration = !providers[0].available_for_orchestration;
+            settings.agent_providers.set_value(providers, ctx).unwrap();
+        });
+
+        AISettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(
+                !settings.agent_providers.value()[0].available_for_orchestration,
+                "toggle should have flipped back to false"
+            );
+        });
+    });
 }

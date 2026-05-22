@@ -434,8 +434,7 @@ pub struct AISettingsPageView {
     /// Phase 4a: open "Fetched models" modal state, or `None` when no
     /// modal is rendered. Set by the `FetchAgentProviderModels` spawn
     /// callback on a successful resolve; cleared on Commit / Cancel.
-    pub(super) fetched_models_modal:
-        Option<super::fetched_models_modal::FetchedModelsModalState>,
+    pub(super) fetched_models_modal: Option<super::fetched_models_modal::FetchedModelsModalState>,
     /// Phase 4a: provider indices for which a `fetch_models` call is
     /// currently in flight. The widget renders the button as
     /// "Fetching…" while a provider index is present.
@@ -449,8 +448,7 @@ pub struct AISettingsPageView {
     pub(super) catalog_cache: Option<ai::catalog::CatalogCache>,
     /// Phase 4b. Currently-open Browse-catalog modal; mirrors Phase 4a's
     /// fetched_models_modal pattern.
-    pub(super) catalog_modal:
-        Option<super::catalog_modal::CatalogModalState>,
+    pub(super) catalog_modal: Option<super::catalog_modal::CatalogModalState>,
     /// Phase 4b. Latest catalog-load failure (HTTP error, parse error,
     /// etc.). Rendered as a dim caption on the Browse catalog button.
     pub(super) catalog_load_failure: Option<String>,
@@ -2788,6 +2786,15 @@ pub enum AISettingsPageAction {
         api_type: crate::settings::AgentProviderApiType,
     },
 
+    /// Phase 5b. Flip the `available_for_orchestration` toggle on a provider.
+    /// When on, this provider's models appear in the orchestration picker
+    /// (subject to harness-compatibility and reachability filters from 5a).
+    /// Default off so existing BYOP configs don't surface in orchestration
+    /// until the user explicitly opts in.
+    ToggleAgentProviderOrchestrationAvailability {
+        provider_index: usize,
+    },
+
     /// Phase 2: probe the provider's endpoint and surface success/failure
     /// in the settings UI. Spawns an async probe via the selected
     /// `ProviderAdapter`'s `build_probe_request`. Result is currently logged;
@@ -3888,6 +3895,20 @@ impl TypedActionView for AISettingsPageView {
                 ctx.notify();
             }
 
+            AISettingsPageAction::ToggleAgentProviderOrchestrationAvailability {
+                provider_index,
+            } => {
+                let provider_index = *provider_index;
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        p.available_for_orchestration = !p.available_for_orchestration;
+                        report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                    }
+                });
+                ctx.notify();
+            }
+
             AISettingsPageAction::TestAgentProviderConnection { provider_index } => {
                 let provider_index = *provider_index;
                 let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
@@ -3981,9 +4002,7 @@ impl TypedActionView for AISettingsPageView {
                 let provider_index = *provider_index;
                 let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
                 let Some(provider) = providers.into_iter().nth(provider_index) else {
-                    log::warn!(
-                        "FetchAgentProviderModels: invalid provider_index {provider_index}"
-                    );
+                    log::warn!("FetchAgentProviderModels: invalid provider_index {provider_index}");
                     return;
                 };
                 // Build a LocalProviderConfig mirroring the probe handler. The
@@ -4223,8 +4242,7 @@ impl TypedActionView for AISettingsPageView {
                 };
                 let candidate_set =
                     ai::catalog::filter_models_for_api_type(provider.api_type, cache.all());
-                let Some(catalog_model) =
-                    candidate_set.iter().find(|m| m.id == catalog_model_id)
+                let Some(catalog_model) = candidate_set.iter().find(|m| m.id == catalog_model_id)
                 else {
                     log::debug!(
                         "QuickAddCatalogModel: model {catalog_model_id} not found for api_type \
@@ -4240,9 +4258,17 @@ impl TypedActionView for AISettingsPageView {
                     max_output_tokens: catalog_model.max_output_tokens.unwrap_or(0),
                     reasoning: catalog_model.reasoning,
                     tool_call: catalog_model.tool_call,
-                    image: if catalog_model.image { Some(true) } else { None },
+                    image: if catalog_model.image {
+                        Some(true)
+                    } else {
+                        None
+                    },
                     pdf: if catalog_model.pdf { Some(true) } else { None },
-                    audio: if catalog_model.audio { Some(true) } else { None },
+                    audio: if catalog_model.audio {
+                        Some(true)
+                    } else {
+                        None
+                    },
                 };
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     let mut providers = settings.agent_providers.value().clone();
@@ -4259,9 +4285,7 @@ impl TypedActionView for AISettingsPageView {
                 let provider_index = *provider_index;
                 let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
                 let Some(provider) = providers.get(provider_index) else {
-                    log::warn!(
-                        "OpenCatalogModal: invalid provider_index {provider_index}"
-                    );
+                    log::warn!("OpenCatalogModal: invalid provider_index {provider_index}");
                     return;
                 };
                 let already_added: std::collections::HashSet<String> =
@@ -4515,9 +4539,7 @@ impl TypedActionView for AISettingsPageView {
                     report_if_error!(settings
                         .byop_compaction_model_provider_id
                         .set_value(provider_id, ctx));
-                    report_if_error!(settings
-                        .byop_compaction_model_id
-                        .set_value(model_id, ctx));
+                    report_if_error!(settings.byop_compaction_model_id.set_value(model_id, ctx));
                 });
                 ctx.notify();
             }
