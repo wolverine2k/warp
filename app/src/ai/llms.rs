@@ -20,6 +20,7 @@ use crate::{
 };
 
 use ai::api_keys::{ApiKeyManager, ApiKeyManagerEvent, CustomEndpoint, CustomEndpointModel};
+use settings::Setting;
 use warp_core::features::FeatureFlag;
 
 use super::execution_profiles::profiles::AIExecutionProfilesModel;
@@ -573,6 +574,16 @@ pub struct LLMPreferences {
     /// Rebuilt from scratch on every `ApiKeyManagerEvent::KeysUpdated`, so adds, edits, and
     /// removals all immediately propagate to the picker.
     custom_llms: Vec<LLMInfo>,
+    /// Synthetic `LLMInfo` entries built from the user's `AgentProviders` for
+    /// orchestration pickers. Only includes providers with
+    /// `available_for_orchestration = true`. Rebuilt lazily on each call to
+    /// `byop_llm_choices` (the provider list is small and pickers open
+    /// infrequently, so caching is not worth the subscription complexity).
+    ///
+    /// These entries are NOT chained into `custom_llm_choices` — they only
+    /// surface through `get_orchestration_llm_choices`.
+    #[allow(dead_code)] // Wired up by Phase 5a Task 5 (orchestration picker).
+    byop_orchestration_llms: Vec<LLMInfo>,
 }
 
 impl LLMPreferences {
@@ -624,12 +635,18 @@ impl LLMPreferences {
 
         let base_llm_for_terminal_view = HashMap::new();
         let custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(ctx).keys());
+        let byop_orchestration_llms = if FeatureFlag::LocalLlmProvider.is_enabled() {
+            crate::ai::agent_providers::build_byop_orchestration_llm_infos(ctx)
+        } else {
+            Vec::new()
+        };
 
         let me = Self {
             models_by_feature,
             last_update: None,
             base_llm_for_terminal_view,
             custom_llms,
+            byop_orchestration_llms,
         };
 
         // In agent mode eval builds, eagerly kick off a fetch of the model list from the server
@@ -856,11 +873,114 @@ impl LLMPreferences {
             && UserWorkspaces::as_ref(app).is_custom_inference_enabled(app)
     }
 
+    /// Iterator over BYOP `LLMInfo` entries eligible for orchestration
+    /// pickers, gated on `FeatureFlag::LocalLlmProvider`.
+    ///
+    /// Rebuilds the cached list on every call (lazy invalidation — see
+    /// `rebuild_byop_orchestration_llms`). Returns an empty slice when
+    /// the feature flag is off.
+    ///
+    /// These entries are NOT included in `custom_llm_choices`,
+    /// `get_coding_llm_choices`, or `get_cli_agent_llm_choices` — they only
+    /// surface through `get_orchestration_llm_choices`.
+    #[allow(dead_code)] // Wired up by Phase 5a Task 5 (orchestration picker).
+    pub fn byop_llm_choices(&mut self, app: &AppContext) -> &[LLMInfo] {
+        self.rebuild_byop_orchestration_llms(app);
+        &self.byop_orchestration_llms
+    }
+
+    /// Returns the full set of LLMs available for orchestration use.
+    ///
+    /// Chains first-party server models (via `get_base_llm_choices_for_agent_mode`)
+    /// with BYOP orchestration entries (via `byop_llm_choices`), then applies
+    /// three filter passes to the BYOP entries:
+    ///
+    /// 1. **Per-provider opt-in** — `available_for_orchestration` must be true
+    ///    (already enforced by `build_byop_orchestration_llm_infos`).
+    /// 2. **Harness compatibility** — `byop_harness_compatible(api_type, harness_type)`.
+    /// 3. **Execution-mode reachability** — when Remote, reject private/loopback base URLs.
+    ///
+    /// First-party entries pass through unchanged. Legacy custom-endpoint entries
+    /// from `custom_llm_choices` are NOT included — orchestration uses only
+    /// first-party and BYOP sources.
+    #[allow(dead_code)] // Wired up by Phase 5a Task 5 (orchestration picker).
+    pub fn get_orchestration_llm_choices(
+        &mut self,
+        app: &AppContext,
+        harness_type: &str,
+        execution_mode: &ai::agent::action::RunAgentsExecutionMode,
+    ) -> Vec<LLMInfo> {
+        use crate::ai::byop_orchestration_filter::{
+            base_url_reachable_from_remote, byop_harness_compatible,
+        };
+        use ai::local_provider::llm_id;
+
+        let is_remote = execution_mode.is_remote();
+
+        // First-party entries — pass through unchanged.
+        let first_party: Vec<LLMInfo> = self
+            .get_base_llm_choices_for_agent_mode(app)
+            .cloned()
+            .collect();
+
+        // BYOP entries — apply harness + reachability filters.
+        let providers = crate::settings::AISettings::as_ref(app)
+            .agent_providers
+            .value()
+            .clone();
+
+        let byop_entries: Vec<LLMInfo> = self
+            .byop_llm_choices(app)
+            .iter()
+            .filter(|info| {
+                // Decode the LLMId to find the provider and check filters.
+                let Some((provider_id, _model_id)) = llm_id::decode(&info.id) else {
+                    return false;
+                };
+                let Some(provider) = providers.iter().find(|p| p.id == provider_id) else {
+                    return false;
+                };
+
+                // Filter 2: harness compatibility.
+                if !byop_harness_compatible(provider.api_type, harness_type) {
+                    return false;
+                }
+
+                // Filter 3: reachability (Remote mode only).
+                if is_remote && !base_url_reachable_from_remote(&provider.base_url) {
+                    return false;
+                }
+
+                true
+            })
+            .cloned()
+            .collect();
+
+        let mut result = first_party;
+        result.extend(byop_entries);
+        result
+    }
+
     /// Reads the user's current `ApiKeyManager.custom_endpoints` and replaces `custom_llms`
     /// with synthetic `LLMInfo`s. Called on every `ApiKeyManagerEvent::KeysUpdated`, so adds,
     /// edits, and removals all propagate immediately.
     fn rebuild_custom_llms(&mut self, app: &AppContext) {
         self.custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(app).keys());
+    }
+
+    /// Reads the user's current `AgentProviders` (filtered by
+    /// `available_for_orchestration`) and replaces `byop_orchestration_llms`
+    /// with freshly synthesized `LLMInfo`s. Called lazily at the start of
+    /// `byop_llm_choices` rather than on a subscription, because the
+    /// orchestration picker is opened infrequently and the provider list is
+    /// small.
+    #[allow(dead_code)] // Wired up by Phase 5a Task 5 (orchestration picker).
+    fn rebuild_byop_orchestration_llms(&mut self, app: &AppContext) {
+        self.byop_orchestration_llms = if FeatureFlag::LocalLlmProvider.is_enabled() {
+            crate::ai::agent_providers::build_byop_orchestration_llm_infos(app)
+        } else {
+            Vec::new()
+        };
     }
 
     fn sanitize_disabled_custom_model_preferences(&mut self, ctx: &mut ModelContext<Self>) {

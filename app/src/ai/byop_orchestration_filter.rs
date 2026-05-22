@@ -9,8 +9,8 @@
 //!    see the doc comment on `base_url_reachable_from_remote` for known
 //!    limitations.
 //!
-//! Note: functions here are suppressed for dead-code lint until Task 4 wires
-//! them into the orchestration model picker.
+//! Note: functions here are suppressed for dead-code lint until Task 5 wires
+//! them into the orchestration picker UI.
 #![allow(dead_code)]
 
 use ai::local_provider::AgentProviderApiType;
