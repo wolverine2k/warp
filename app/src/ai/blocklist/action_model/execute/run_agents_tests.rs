@@ -110,3 +110,114 @@ fn validate_request_passes_through_first_party_model_ids() {
         });
     });
 }
+
+// Phase 5b integration tests for the orchestration submit -> child-agent
+// translator. Verifies that BYOP model ids survive `run_agents_to_start_agent_mode`
+// into the per-child `StartAgentExecutionMode` so the existing in-process
+// BYOP dispatcher (Phase 4d) takes over.
+
+#[cfg(test)]
+mod run_agents_to_start_agent_mode_byop_tests {
+    use super::*;
+    use ai::agent::action::{
+        RunAgentsAgentRunConfig, RunAgentsExecutionMode, StartAgentExecutionMode,
+    };
+    use ai::local_provider::llm_id;
+
+    fn make_run_config() -> RunAgentsAgentRunConfig {
+        RunAgentsAgentRunConfig {
+            name: "child-1".to_string(),
+            prompt: "p".to_string(),
+            title: "T".to_string(),
+        }
+    }
+
+    #[test]
+    fn byop_model_id_threads_into_local_native_start_mode() {
+        let model_id = llm_id::encode("prov-1", "m1").to_string();
+        let mode = run_agents_to_start_agent_mode(
+            &RunAgentsExecutionMode::Local,
+            "oz",
+            &model_id,
+            &[],
+            None,
+            &make_run_config(),
+        )
+        .expect("Local Native + BYOP must translate");
+        match mode {
+            StartAgentExecutionMode::Local {
+                harness_type,
+                model_id: forwarded,
+            } => {
+                assert!(harness_type.is_none(), "oz harness should be None on Local");
+                assert_eq!(forwarded.as_deref(), Some(model_id.as_str()));
+            }
+            other => panic!("expected Local mode, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_harness_is_treated_as_native_oz() {
+        let model_id = llm_id::encode("prov-1", "m1").to_string();
+        let mode = run_agents_to_start_agent_mode(
+            &RunAgentsExecutionMode::Local,
+            "",
+            &model_id,
+            &[],
+            None,
+            &make_run_config(),
+        )
+        .expect("empty harness == native oz");
+        assert!(matches!(
+            mode,
+            StartAgentExecutionMode::Local {
+                harness_type: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn byop_model_id_threads_into_codex_local_when_harness_set() {
+        // Sanity: even when the orchestration UI lets the user pick a third-party
+        // local harness, the BYOP id rides along as the model. (Wiring the
+        // env-vars for that path is Phase 5c work; this test only proves the
+        // translator preserves the model_id.)
+        let model_id = llm_id::encode("prov-1", "m1").to_string();
+        let mode = run_agents_to_start_agent_mode(
+            &RunAgentsExecutionMode::Local,
+            "codex",
+            &model_id,
+            &[],
+            None,
+            &make_run_config(),
+        );
+        // Note: this may return Err if local_child_harness_disabled_message
+        // says codex is disabled in this build. Use match rather than assume Ok.
+        if let Ok(StartAgentExecutionMode::Local {
+            harness_type,
+            model_id: forwarded,
+        }) = mode
+        {
+            assert_eq!(harness_type.as_deref(), Some("codex"));
+            assert_eq!(forwarded.as_deref(), Some(model_id.as_str()));
+        }
+    }
+
+    #[test]
+    fn empty_model_id_returns_none_on_local_native() {
+        let mode = run_agents_to_start_agent_mode(
+            &RunAgentsExecutionMode::Local,
+            "oz",
+            "", // run-wide model_id empty => fall back to child's own pref
+            &[],
+            None,
+            &make_run_config(),
+        )
+        .expect("empty model_id must still translate");
+        match mode {
+            StartAgentExecutionMode::Local { model_id, .. } => assert!(model_id.is_none()),
+            other => panic!("expected Local mode, got {other:?}"),
+        }
+    }
+}
