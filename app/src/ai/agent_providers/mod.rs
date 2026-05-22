@@ -86,6 +86,79 @@ pub fn build_byop_llm_infos(app: &AppContext) -> Vec<LLMInfo> {
     out
 }
 
+/// Build the list of BYOP `LLMInfo`s eligible for orchestration pickers.
+///
+/// Identical to [`build_byop_llm_infos`] but additionally requires
+/// `provider.available_for_orchestration == true`. This keeps the
+/// orchestration picker scoped to providers the user has explicitly opted
+/// in, without affecting the main-conversation picker which uses
+/// `build_byop_llm_infos` directly.
+///
+/// Gated on `FeatureFlag::LocalLlmProvider` at the call site.
+pub fn build_byop_orchestration_llm_infos(app: &AppContext) -> Vec<LLMInfo> {
+    let providers = AISettings::as_ref(app).agent_providers.value().clone();
+    let secrets = AgentProviderSecrets::as_ref(app);
+    let mut out = Vec::new();
+
+    for provider in providers {
+        if !provider.available_for_orchestration {
+            continue;
+        }
+        if provider.base_url.trim().is_empty() {
+            continue;
+        }
+        if provider.models.is_empty() {
+            continue;
+        }
+        let has_key = secrets
+            .get(&provider.id)
+            .map(|k| !k.is_empty())
+            .unwrap_or(false);
+        if !has_key {
+            continue;
+        }
+
+        let provider_label = if provider.name.trim().is_empty() {
+            provider.id.clone()
+        } else {
+            provider.name.clone()
+        };
+
+        for model in &provider.models {
+            if model.id.trim().is_empty() {
+                continue;
+            }
+            let display_name = if model.name.trim().is_empty() {
+                model.id.clone()
+            } else {
+                model.name.clone()
+            };
+            out.push(LLMInfo {
+                display_name: format!("{provider_label} / {display_name}"),
+                base_model_name: format!("{provider_label} / {display_name}"),
+                id: llm_id::encode(&provider.id, &model.id),
+                reasoning_level: None,
+                usage_metadata: LLMUsageMetadata {
+                    request_multiplier: 1,
+                    credit_multiplier: None,
+                },
+                description: None,
+                disable_reason: None,
+                // Phase 4c will resolve the per-model multimodal capability
+                // (image/pdf/audio) here. Phase 1b-2 ships text-only.
+                vision_supported: false,
+                spec: None,
+                provider: LLMProvider::Unknown,
+                host_configs: HashMap::new(),
+                discount_percentage: None,
+                context_window: LLMContextWindow::default(),
+            });
+        }
+    }
+
+    out
+}
+
 /// Placeholder picker entry shown when no valid BYOP provider is configured.
 /// `AvailableLLMs::new` rejects an empty choices list, so we always need at
 /// least one entry; this one is greyed out and prompts the user to add a
