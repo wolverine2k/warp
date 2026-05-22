@@ -567,9 +567,24 @@ pub fn is_model_in_filtered_choices<V: View>(
     let harness = Harness::parse_orchestration_harness(harness_type);
     match harness {
         Some(Harness::Oz) | None => {
-            let llm_prefs = LLMPreferences::as_ref(ctx);
-            llm_prefs
-                .get_base_llm_choices_for_agent_mode(ctx)
+            let execution_mode = if is_local {
+                RunAgentsExecutionMode::Local
+            } else {
+                RunAgentsExecutionMode::Remote {
+                    environment_id: String::new(),
+                    worker_host: String::new(),
+                    computer_use_enabled: false,
+                }
+            };
+            LLMPreferences::handle(ctx)
+                .update(ctx, |llm_prefs, ctx_update| {
+                    llm_prefs.get_orchestration_llm_choices(
+                        ctx_update,
+                        harness_type,
+                        &execution_mode,
+                    )
+                })
+                .iter()
                 .any(|llm| llm.id.to_string() == model_id)
         }
         Some(Harness::Codex) if is_local => model_id.is_empty(),
@@ -588,8 +603,14 @@ pub fn is_model_in_filtered_choices<V: View>(
 
 /// Returns the default model_id for the given harness.
 ///
-/// For Oz this is the first Warp LLM; for non-Oz harnesses it is an empty
-/// string (the "Default model" entry).
+/// For Oz this is the first **first-party** Warp LLM — BYOP entries are
+/// reachable via the picker but are never the picker's default selection
+/// (Phase 5b decision: a user who has zero BYOP providers opted in should
+/// see a familiar Warp model in the empty state, and users who have many
+/// should still default to a familiar Warp model rather than an
+/// alphabetically-first BYOP entry).
+///
+/// For non-Oz harnesses, it is an empty string (the "Default model" entry).
 pub fn first_filtered_model_id<V: View>(
     harness_type: &str,
     ctx: &mut ViewContext<V>,
@@ -1502,9 +1523,30 @@ pub fn sync_picker_selections<A: OrchestrationControlAction, V: View>(
             let harness = Harness::parse_orchestration_harness(&harness_type);
             let display_name = match harness {
                 Some(Harness::Oz) | None => {
-                    let llm_prefs = LLMPreferences::as_ref(ctx_dropdown);
-                    llm_prefs
-                        .get_base_llm_choices_for_agent_mode(ctx_dropdown)
+                    // Phase 5b: query the same source the picker uses so the
+                    // visible label tracks BYOP entries through harness/mode
+                    // changes.
+                    let execution_mode = match &state.execution_mode {
+                        RunAgentsExecutionMode::Local => RunAgentsExecutionMode::Local,
+                        RunAgentsExecutionMode::Remote {
+                            environment_id,
+                            worker_host,
+                            computer_use_enabled,
+                        } => RunAgentsExecutionMode::Remote {
+                            environment_id: environment_id.clone(),
+                            worker_host: worker_host.clone(),
+                            computer_use_enabled: *computer_use_enabled,
+                        },
+                    };
+                    LLMPreferences::handle(ctx_dropdown)
+                        .update(ctx_dropdown, |llm_prefs, ctx_update| {
+                            llm_prefs.get_orchestration_llm_choices(
+                                ctx_update,
+                                &harness_type,
+                                &execution_mode,
+                            )
+                        })
+                        .into_iter()
                         .find(|llm| llm.id.to_string() == target_model_id)
                         .map(|llm| llm.menu_display_name())
                 }
