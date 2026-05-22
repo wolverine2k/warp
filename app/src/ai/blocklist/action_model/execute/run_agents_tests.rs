@@ -116,7 +116,6 @@ fn validate_request_passes_through_first_party_model_ids() {
 // into the per-child `StartAgentExecutionMode` so the existing in-process
 // BYOP dispatcher (Phase 4d) takes over.
 
-#[cfg(test)]
 mod run_agents_to_start_agent_mode_byop_tests {
     use super::*;
     use ai::agent::action::{
@@ -192,15 +191,26 @@ mod run_agents_to_start_agent_mode_byop_tests {
             None,
             &make_run_config(),
         );
-        // Note: this may return Err if local_child_harness_disabled_message
-        // says codex is disabled in this build. Use match rather than assume Ok.
-        if let Ok(StartAgentExecutionMode::Local {
-            harness_type,
-            model_id: forwarded,
-        }) = mode
-        {
-            assert_eq!(harness_type.as_deref(), Some("codex"));
-            assert_eq!(forwarded.as_deref(), Some(model_id.as_str()));
+        // Two acceptable outcomes depending on the build's
+        // `LocalClaudeCodexChildHarnesses` feature flag state:
+        //   - flag on  -> Ok(Local { harness_type: Some("codex"), model_id: Some(byop_id) })
+        //   - flag off -> Err containing the disabled-harness sentinel from
+        //     local_child_harness_disabled_message.
+        // Asserting one of those (not silently passing on anything) keeps the
+        // test useful in either configuration.
+        match mode {
+            Ok(StartAgentExecutionMode::Local {
+                harness_type,
+                model_id: forwarded,
+            }) => {
+                assert_eq!(harness_type.as_deref(), Some("codex"));
+                assert_eq!(forwarded.as_deref(), Some(model_id.as_str()));
+            }
+            Ok(other) => panic!("expected Local mode, got {other:?}"),
+            Err(message) => assert!(
+                message.contains("Local Codex child agents are temporarily disabled"),
+                "unexpected error from codex harness path: {message}"
+            ),
         }
     }
 
