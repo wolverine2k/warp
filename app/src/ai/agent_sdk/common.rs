@@ -55,6 +55,116 @@ pub fn validate_agent_mode_base_model_id(
     }
 }
 
+/// Validates a model ID for orchestration use, checking it against the
+/// filtered set of models available for the given harness + execution mode.
+///
+/// For first-party (non-BYOP) model IDs, delegates to the standard
+/// `validate_agent_mode_base_model_id` check. For BYOP model IDs (prefixed
+/// with `byop:`), runs the full filter pipeline including harness
+/// compatibility and Remote reachability, producing structured error
+/// messages explaining the specific incompatibility.
+///
+/// The existing `validate_agent_mode_base_model_id` is unchanged —
+/// per-conversation BYOP validation continues to use it.
+pub fn validate_orchestration_model_id(
+    model_id: &str,
+    harness_type: &str,
+    execution_mode: &ai::agent::action::RunAgentsExecutionMode,
+    ctx: &AppContext,
+) -> anyhow::Result<LLMId> {
+    use crate::ai::byop_orchestration_filter::{
+        base_url_reachable_from_remote, byop_harness_compatible,
+    };
+    use ai::local_provider::llm_id;
+
+    let llm_id: LLMId = model_id.into();
+
+    // For non-BYOP IDs, delegate to the existing validator.
+    if !llm_id::is_byop(&llm_id) {
+        return validate_agent_mode_base_model_id(model_id, ctx);
+    }
+
+    // Decode the BYOP ID to get provider_id and model_id.
+    let (provider_id, byop_model_id) = llm_id::decode(&llm_id).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Malformed BYOP model ID '{model_id}'. Expected format: byop:<provider_id>:<model_id>"
+        )
+    })?;
+
+    // Look up the provider.
+    let providers = crate::settings::AISettings::as_ref(ctx)
+        .agent_providers
+        .value()
+        .clone();
+    let provider = providers
+        .iter()
+        .find(|p| p.id == provider_id)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "BYOP provider '{provider_id}' not found. \
+                 The provider may have been deleted since the model was selected."
+            )
+        })?;
+
+    // Find the model display name for error messages.
+    let model_display = provider
+        .models
+        .iter()
+        .find(|m| m.id == byop_model_id)
+        .map(|m| m.name.as_str())
+        .unwrap_or(&byop_model_id);
+    let provider_display = if provider.name.is_empty() {
+        &provider.id
+    } else {
+        &provider.name
+    };
+
+    // Check orchestration opt-in.
+    if !provider.available_for_orchestration {
+        return Err(anyhow::anyhow!(
+            "BYOP model '{provider_display}/{model_display}' is not enabled for orchestration. \
+             Enable 'Available for orchestration' in Settings -> AI for this provider."
+        ));
+    }
+
+    // Check harness compatibility.
+    if !byop_harness_compatible(provider.api_type, harness_type) {
+        let compatible_harnesses = compatible_harness_names(provider.api_type);
+        let api_type = provider.api_type;
+        return Err(anyhow::anyhow!(
+            "BYOP model '{provider_display}/{model_display}' (API type {api_type:?}) \
+             is not compatible with harness '{harness_type}'. \
+             Use {compatible_harnesses}, or pick a different model."
+        ));
+    }
+
+    // Check reachability for Remote mode.
+    if execution_mode.is_remote() && !base_url_reachable_from_remote(&provider.base_url) {
+        let base_url = &provider.base_url;
+        return Err(anyhow::anyhow!(
+            "BYOP model '{provider_display}/{model_display}' base URL '{base_url}' \
+             is not reachable from Remote execution. \
+             Pick Local mode or a publicly-accessible provider."
+        ));
+    }
+
+    Ok(llm_id)
+}
+
+/// Returns a human-readable string listing the harnesses compatible with
+/// a given API type, for use in error messages.
+fn compatible_harness_names(api_type: ai::local_provider::AgentProviderApiType) -> &'static str {
+    use ai::local_provider::AgentProviderApiType;
+    match api_type {
+        AgentProviderApiType::Anthropic => "'oz' or 'claude'",
+        AgentProviderApiType::OpenAi => "'oz', 'codex', or 'opencode'",
+        AgentProviderApiType::OpenAiResp => "'oz' or 'codex'",
+        AgentProviderApiType::DeepSeek => "'oz', 'codex', or 'opencode'",
+        AgentProviderApiType::Gemini => "'oz' or 'gemini'",
+        AgentProviderApiType::Ollama => "'oz'",
+    }
+}
+
 pub(super) fn parse_ambient_task_id(
     run_id: &str,
     error_prefix: &str,
