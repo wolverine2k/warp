@@ -1895,10 +1895,10 @@ fn launch_local_harness_child(
                     harness,
                 )
             }
-            None => std::collections::HashMap::new(),
+            None => HashMap::new(),
         }
     } else {
-        std::collections::HashMap::new()
+        HashMap::new()
     };
 
     let _ = ctx.spawn(
