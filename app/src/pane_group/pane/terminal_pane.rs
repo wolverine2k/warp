@@ -1887,6 +1887,7 @@ fn launch_local_harness_child(
                 shell_type,
                 startup_directory,
                 ai_client,
+                std::collections::HashMap::new(),
             )
             .await
         },

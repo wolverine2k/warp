@@ -98,6 +98,7 @@ pub(super) async fn prepare_local_harness_child_launch(
     shell_type: Option<ShellType>,
     startup_directory: Option<PathBuf>,
     ai_client: Arc<dyn AIClient>,
+    byop_env: HashMap<OsString, OsString>,
 ) -> Result<PreparedLocalHarnessLaunch, String> {
     let harness_model_config =
         model_id
@@ -204,6 +205,12 @@ pub(super) async fn prepare_local_harness_child_launch(
         harness,
         harness_model_config.as_ref(),
     ));
+    // Phase 5c: merge BYOP env vars (ANTHROPIC_BASE_URL / OPENAI_BASE_URL /
+    // etc) on top of the harness-model env vars. Caller resolves the bag
+    // from the AppContext via resolve_byop_for_local_child +
+    // byop_env_for_harness. Empty when the run-wide model id isn't a BYOP
+    // entry.
+    env_vars.extend(byop_env);
 
     Ok(PreparedLocalHarnessLaunch {
         command,
