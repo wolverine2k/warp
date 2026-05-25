@@ -123,6 +123,12 @@ struct ProviderCardHandles {
     /// rendered between the API-key field and the Models section. Allocated
     /// here so render never builds `MouseStateHandle::default()` inline.
     orchestration_toggle_state: MouseStateHandle,
+    /// Phase 5d. EditorView for the "Remote managed secret" field.
+    /// Visible only when available_for_orchestration is on AND the
+    /// provider's base_url is publicly reachable.
+    remote_secret_name_editor: ViewHandle<EditorView>,
+    /// Phase 5d. Mouse-state for the "Auto-create" button.
+    auto_create_secret_button_state: MouseStateHandle,
     model_rows: Vec<ModelRowHandles>,
 }
 
@@ -403,6 +409,30 @@ impl AgentProvidersWidget {
             })
             .collect();
 
+        // Remote managed secret editor (Phase 5d)
+        let initial_remote_secret_name = provider.remote_secret_name.clone();
+        let remote_secret_name_editor = ctx.add_typed_action_view(move |ctx| {
+            let appearance = Appearance::handle(ctx).as_ref(ctx);
+            let options = single_line_editor_options(appearance, false);
+            let mut editor = EditorView::single_line(options, ctx);
+            editor.set_placeholder_text("e.g. my-provider-api-key", ctx);
+            if !initial_remote_secret_name.is_empty() {
+                editor.set_buffer_text(&initial_remote_secret_name, ctx);
+            }
+            editor
+        });
+        ctx.subscribe_to_view(&remote_secret_name_editor, move |_, editor, event, ctx| {
+            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                let buffer_text = editor.as_ref(ctx).buffer_text(ctx);
+                ctx.dispatch_typed_action_deferred(
+                    AISettingsPageAction::SetAgentProviderRemoteSecretName {
+                        provider_index,
+                        name: buffer_text,
+                    },
+                );
+            }
+        });
+
         ProviderCardHandles {
             name_editor,
             base_url_editor,
@@ -414,6 +444,8 @@ impl AgentProvidersWidget {
             browse_catalog_button_state: MouseStateHandle::default(),
             api_type_chip_states,
             orchestration_toggle_state: MouseStateHandle::default(),
+            remote_secret_name_editor,
+            auto_create_secret_button_state: MouseStateHandle::default(),
             model_rows,
         }
     }
@@ -619,6 +651,55 @@ impl AgentProvidersWidget {
             .with_child(
                 Container::new(toggle_button)
                     .with_margin_top(FIELD_LABEL_MARGIN_TOP)
+                    .finish(),
+            )
+            .with_child(helper)
+            .finish()
+    }
+
+    /// Phase 5d. Renders the "Remote managed secret" field + Auto-create
+    /// button. Visibility is gated by:
+    ///   - FeatureFlag::LocalLlmProvider (delegated to call site).
+    ///   - provider.available_for_orchestration == true (Phase 5b toggle).
+    ///   - base_url_reachable_from_remote(&provider.base_url) — providers on
+    ///     localhost / RFC1918 / `.local` are Local-only by reachability.
+    fn render_remote_secret_field(
+        _provider: &AgentProvider,
+        provider_index: usize,
+        card: &ProviderCardHandles,
+        label_color: warp_core::ui::theme::Fill,
+        appearance: &Appearance,
+    ) -> Box<dyn Element> {
+        let editor_view = ChildView::new(&card.remote_secret_name_editor).finish();
+        let field = field_block("Remote managed secret", editor_view, label_color, appearance);
+
+        let auto_create_button = Self::render_card_button(
+            "Auto-create".to_string(),
+            card.auto_create_secret_button_state.clone(),
+            AISettingsPageAction::AutoCreateAgentProviderManagedSecret { provider_index },
+            appearance,
+        );
+
+        let helper = Container::new(
+            Text::new(
+                "Required for Remote orchestration. Skip if this provider is only used for Local."
+                    .to_string(),
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )
+            .with_color(appearance.theme().disabled_ui_text_color().into())
+            .soft_wrap(true)
+            .finish(),
+        )
+        .with_margin_top(2.)
+        .finish();
+
+        Flex::column()
+            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+            .with_child(field)
+            .with_child(
+                Container::new(auto_create_button)
+                    .with_margin_top(4.)
                     .finish(),
             )
             .with_child(helper)
@@ -1521,6 +1602,28 @@ impl AgentProvidersWidget {
 
         if let Some(toggle) = orchestration_toggle {
             card_column.add_child(toggle);
+        }
+
+        // ---- Remote managed secret (Phase 5d, gated on toggle + reachability) ----
+        let remote_secret_field = if warp_core::features::FeatureFlag::LocalLlmProvider.is_enabled()
+            && provider.available_for_orchestration
+            && crate::ai::byop_orchestration_filter::base_url_reachable_from_remote(
+                &provider.base_url,
+            )
+        {
+            Some(Self::render_remote_secret_field(
+                provider,
+                provider_index,
+                card,
+                label_color,
+                appearance,
+            ))
+        } else {
+            None
+        };
+
+        if let Some(field) = remote_secret_field {
+            card_column.add_child(field);
         }
 
         card_column = card_column.with_child(
