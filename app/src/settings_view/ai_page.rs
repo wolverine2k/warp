@@ -3986,12 +3986,11 @@ impl TypedActionView for AISettingsPageView {
                 );
                 let _ = ctx.spawn(create_future, move |_this, result, ctx| match result {
                     Ok(secret) => {
+                        let returned_name = secret.name.clone();
                         log::info!(
                             "AutoCreateAgentProviderManagedSecret [{provider_id}]: \
-                             created secret '{}'",
-                            secret.name
+                             created secret '{returned_name}'"
                         );
-                        let returned_name = secret.name.clone();
                         // Stale-resolve guard: re-fetch by index and verify the id
                         // hasn't changed (user may have removed/reordered providers
                         // while the async call was in flight).
@@ -4005,11 +4004,11 @@ impl TypedActionView for AISettingsPageView {
                             ctx.notify();
                             return;
                         };
-                        if current_provider.id != provider_id {
+                        let current_id = &current_provider.id;
+                        if current_id != &provider_id {
                             log::debug!(
                                 "AutoCreateAgentProviderManagedSecret: provider_id changed \
-                                 (was {provider_id}, now {}), dropping resolve",
-                                current_provider.id
+                                 (was {provider_id}, now {current_id}), dropping resolve"
                             );
                             ctx.notify();
                             return;
