@@ -115,6 +115,10 @@ impl IntegrationCommandRunner {
                     // TODO(REMOTE-1134): Support harness selection for integrations.
                     harness: None,
                     harness_auth_secrets: None,
+                    byop_base_url: None,
+                    byop_api_type: None,
+                    compaction_model_provider_id: None,
+                    compaction_model_id: None,
                 },
             );
 
@@ -427,6 +431,10 @@ impl IntegrationCommandRunner {
                     // TODO(REMOTE-1134): Support harness selection for integrations.
                     harness: None,
                     harness_auth_secrets: None,
+                    byop_base_url: None,
+                    byop_api_type: None,
+                    compaction_model_provider_id: None,
+                    compaction_model_id: None,
                 },
             );
 

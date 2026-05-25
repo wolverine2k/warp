@@ -1,8 +1,8 @@
 use chrono::Utc;
 
 use super::{
-    AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskState, TaskStatusErrorCode,
-    TaskStatusMessage,
+    AgentConfigSnapshot, AmbientAgentTask, AmbientAgentTaskState, HarnessAuthSecretsConfig,
+    TaskStatusErrorCode, TaskStatusMessage,
 };
 
 fn make_task(snapshot_name: Option<&str>, title: &str) -> AmbientAgentTask {
@@ -110,4 +110,64 @@ fn task_status_error_code_deserializes_unknown_codes() {
 
     assert_eq!(message.error_code, Some(TaskStatusErrorCode::Unknown));
     assert!(!message.is_environment_setup_failure());
+}
+
+#[test]
+fn agent_config_snapshot_deserializes_pre_5d_payload() {
+    // Simulates a payload from a pre-5d server / client without the
+    // BYOP and compaction fields.
+    let json = r#"{
+        "name": "child-1",
+        "model_id": "claude-sonnet-4",
+        "harness": {"type": "claude"}
+    }"#;
+    let snapshot: AgentConfigSnapshot =
+        serde_json::from_str(json).expect("should deserialize without 5d fields");
+    assert_eq!(snapshot.name.as_deref(), Some("child-1"));
+    assert!(snapshot.byop_base_url.is_none());
+    assert!(snapshot.byop_api_type.is_none());
+    assert!(snapshot.compaction_model_provider_id.is_none());
+    assert!(snapshot.compaction_model_id.is_none());
+}
+
+#[test]
+fn agent_config_snapshot_round_trips_byop_fields() {
+    let snapshot = AgentConfigSnapshot {
+        model_id: Some("byop:prov:claude-sonnet".to_owned()),
+        byop_base_url: Some("https://api.anthropic.example/v1".to_owned()),
+        byop_api_type: Some("anthropic".to_owned()),
+        compaction_model_provider_id: Some("prov-compact".to_owned()),
+        compaction_model_id: Some("haiku".to_owned()),
+        harness_auth_secrets: Some(HarnessAuthSecretsConfig {
+            byop_auth_secret_name: Some("byop-prov".to_owned()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&snapshot).unwrap();
+    let restored: AgentConfigSnapshot = serde_json::from_str(&json).unwrap();
+    assert_eq!(
+        restored.byop_base_url.as_deref(),
+        Some("https://api.anthropic.example/v1")
+    );
+    assert_eq!(restored.byop_api_type.as_deref(), Some("anthropic"));
+    assert_eq!(
+        restored.compaction_model_provider_id.as_deref(),
+        Some("prov-compact")
+    );
+    assert_eq!(restored.compaction_model_id.as_deref(), Some("haiku"));
+    assert_eq!(
+        restored
+            .harness_auth_secrets
+            .unwrap()
+            .byop_auth_secret_name
+            .as_deref(),
+        Some("byop-prov")
+    );
+}
+
+#[test]
+fn agent_config_snapshot_is_empty_remains_true_with_default_5d_fields() {
+    let snapshot = AgentConfigSnapshot::default();
+    assert!(snapshot.is_empty());
 }

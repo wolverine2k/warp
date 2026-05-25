@@ -167,6 +167,10 @@ pub fn merge_with_precedence(
         computer_use_enabled,
         harness: cli.harness,
         harness_auth_secrets: cli.harness_auth_secrets,
+        byop_base_url: None,
+        byop_api_type: None,
+        compaction_model_provider_id: None,
+        compaction_model_id: None,
     }
 }
 

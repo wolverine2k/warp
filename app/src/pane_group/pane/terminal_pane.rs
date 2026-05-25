@@ -2171,10 +2171,12 @@ fn launch_remote_child(
             Harness::Claude => Some(crate::ai::ambient_agents::task::HarnessAuthSecretsConfig {
                 claude_auth_secret_name: Some(name.clone()),
                 codex_auth_secret_name: None,
+                byop_auth_secret_name: None,
             }),
             Harness::Codex => Some(crate::ai::ambient_agents::task::HarnessAuthSecretsConfig {
                 claude_auth_secret_name: None,
                 codex_auth_secret_name: Some(name.clone()),
+                byop_auth_secret_name: None,
             }),
             Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Unknown => None,
         });

@@ -53,6 +53,10 @@ impl AgentConfig {
             computer_use_enabled: None,
             harness: None,
             harness_auth_secrets: None,
+            byop_base_url: None,
+            byop_api_type: None,
+            compaction_model_provider_id: None,
+            compaction_model_id: None,
         }
     }
 }

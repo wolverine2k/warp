@@ -424,6 +424,7 @@ impl AmbientAgentRunner {
                 crate::ai::ambient_agents::task::HarnessAuthSecretsConfig {
                     claude_auth_secret_name: Some(name),
                     codex_auth_secret_name: None,
+                    byop_auth_secret_name: None,
                 }
             });
 
@@ -441,6 +442,10 @@ impl AmbientAgentRunner {
                     computer_use_enabled: args.computer_use.computer_use_override(),
                     harness: harness_override,
                     harness_auth_secrets,
+                    byop_base_url: None,
+                    byop_api_type: None,
+                    compaction_model_provider_id: None,
+                    compaction_model_id: None,
                 },
             );
 

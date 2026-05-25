@@ -64,6 +64,26 @@ pub struct AgentConfigSnapshot {
     /// Authentication secrets for third-party harnesses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_auth_secrets: Option<HarnessAuthSecretsConfig>,
+    /// Phase 5d. BYOP endpoint URL forwarded to the Remote worker so it can
+    /// route the child agent's LLM calls. Populated only when the run-wide
+    /// model_id starts with `byop:` and execution_mode is Remote. Server
+    /// implementations that don't yet honor this field ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byop_base_url: Option<String>,
+    /// Phase 5d. BYOP API type (the wire protocol the endpoint speaks).
+    /// One of `"open_ai"`, `"open_ai_resp"`, `"anthropic"`, `"gemini"`,
+    /// `"ollama"`, `"deep_seek"` — the canonical names from
+    /// `AgentProviderApiType`. Populated alongside `byop_base_url`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byop_api_type: Option<String>,
+    /// Phase 5d. Forwarded `byop_compaction_model_provider_id` from Phase 4d
+    /// settings, so Remote workers can route conversation compaction to a
+    /// distinct provider. Populated when the user has Phase 4d configured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction_model_provider_id: Option<String>,
+    /// Phase 5d. Forwarded `byop_compaction_model_id` from Phase 4d settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction_model_id: Option<String>,
 }
 
 /// Configuration for a third-party execution harness.
@@ -142,7 +162,7 @@ fn deserialize_harness<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Har
 }
 
 /// Authentication secrets for third-party harnesses.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct HarnessAuthSecretsConfig {
     /// Name of a managed secret for Claude Code harness authentication.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -150,6 +170,12 @@ pub struct HarnessAuthSecretsConfig {
     /// Name of a managed secret for Codex harness authentication.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_auth_secret_name: Option<String>,
+    /// Phase 5d. Name of a managed secret containing the BYOP provider's
+    /// api_key, for Remote BYOP orchestration. Populated from
+    /// `AgentProvider.remote_secret_name` when the run-wide model_id is a
+    /// `byop:` entry and execution_mode is Remote.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub byop_auth_secret_name: Option<String>,
 }
 
 impl AgentConfigSnapshot {
@@ -167,6 +193,10 @@ impl AgentConfigSnapshot {
             computer_use_enabled,
             harness,
             harness_auth_secrets,
+            byop_base_url,
+            byop_api_type,
+            compaction_model_provider_id,
+            compaction_model_id,
         } = self;
 
         name.is_none()
@@ -180,6 +210,10 @@ impl AgentConfigSnapshot {
             && computer_use_enabled.is_none()
             && harness.is_none()
             && harness_auth_secrets.is_none()
+            && byop_base_url.is_none()
+            && byop_api_type.is_none()
+            && compaction_model_provider_id.is_none()
+            && compaction_model_id.is_none()
     }
 }
 

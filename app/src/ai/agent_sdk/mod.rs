@@ -385,6 +385,10 @@ fn build_merged_config_and_task(
             .or(file_merged.computer_use_enabled),
         harness: harness_override,
         harness_auth_secrets: None,
+        byop_base_url: None,
+        byop_api_type: None,
+        compaction_model_provider_id: None,
+        compaction_model_id: None,
     };
 
     let runtime_mcp_specs = match merged_config.mcp_servers.as_ref() {
@@ -480,6 +484,10 @@ fn build_server_side_task(
         computer_use_enabled: args.computer_use.computer_use_override(),
         harness: harness_override,
         harness_auth_secrets: None,
+        byop_base_url: None,
+        byop_api_type: None,
+        compaction_model_provider_id: None,
+        compaction_model_id: None,
     };
 
     let skill = resolved_skill.as_ref().map(|s| s.parsed_skill.clone());
