@@ -116,7 +116,7 @@ Returns the env-var bag a Local child harness needs to talk to the BYOP endpoint
 | `claude-code` | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` |
 | `codex` | `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `OPENAI_MODEL` |
 | `opencode` | `OPENAI_BASE_URL`, `OPENAI_API_KEY` |
-| `gemini` | `GOOGLE_GENAI_USE_VERTEXAI=false`, `GOOGLE_API_KEY` |
+| `gemini` | **None** — Phase 5e injects api_key + base_url via `~/.gemini/settings.json` (`security.auth.apiKey` + `endpoint`); `byop_env_for_harness` returns an empty bag for `Harness::Gemini` |
 | `oz` / empty (Native) | none — Native uses the existing in-process BYOP dispatcher |
 
 Unsupported combinations (e.g., Ollama + Codex) return an empty vec — the validator will already have rejected at submit, so this is defence-in-depth.
