@@ -48,6 +48,8 @@ pub fn byop_env_for_harness(
 ) -> HashMap<OsString, OsString> {
     let mut env = HashMap::new();
     let base_url = provider.base_url.trim();
+    let api_key = api_key.trim();
+    let model_id = model_id.trim();
     if base_url.is_empty() || api_key.is_empty() {
         return env;
     }

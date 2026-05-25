@@ -183,3 +183,36 @@ fn codex_with_empty_model_id_skips_model_env_var() {
     // No OPENAI_MODEL when the user-side model_id is empty.
     assert!(!env.contains_key(&OsString::from("OPENAI_MODEL")));
 }
+
+#[test]
+fn whitespace_only_api_key_is_rejected() {
+    // A user who pasted whitespace into the API key field should NOT see
+    // a header like `Authorization: Bearer    ` go out — the env-var bag
+    // must come back empty so the CLI falls back to its default (likely
+    // failing fast at the next auth call instead of leaking a malformed
+    // header).
+    let provider = provider_with(AgentProviderApiType::Anthropic, "https://api.anthropic.example/v1");
+    let env = byop_env_for_harness(&provider, "   ", "claude", Harness::Claude);
+    assert!(env.is_empty());
+}
+
+#[test]
+fn whitespace_padded_inputs_are_trimmed_before_insertion() {
+    // base_url, api_key, and model_id all get a `.trim()` defensively so
+    // a copy/pasted credential with surrounding whitespace works as the
+    // user expected.
+    let provider = provider_with(AgentProviderApiType::OpenAi, "  https://api.openai.example/v1  ");
+    let env = byop_env_for_harness(&provider, "  sk-test  ", "  gpt-4o  ", Harness::Codex);
+    assert_eq!(
+        env.get(&OsString::from("OPENAI_BASE_URL")),
+        Some(&OsString::from("https://api.openai.example/v1"))
+    );
+    assert_eq!(
+        env.get(&OsString::from("OPENAI_API_KEY")),
+        Some(&OsString::from("sk-test"))
+    );
+    assert_eq!(
+        env.get(&OsString::from("OPENAI_MODEL")),
+        Some(&OsString::from("gpt-4o"))
+    );
+}
