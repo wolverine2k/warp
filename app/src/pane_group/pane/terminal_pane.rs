@@ -2159,12 +2159,22 @@ fn launch_remote_child(
     };
     let computer_use_enabled =
         (orchestration_harness == Harness::Oz).then_some(computer_use_enabled);
+    // Phase 5d. If the run-wide model_id is a BYOP entry, resolve the
+    // provider + api_type + remote_secret_name from settings so we can
+    // populate the new AgentConfigSnapshot fields. Returns all-None for
+    // non-BYOP ids — non-BYOP launches are unchanged.
+    let (byop_base_url, byop_api_type, byop_secret_name) =
+        crate::ai::agent_providers::resolve_byop_for_remote_child(ctx, &model_id);
     // Map the run-wide auth secret name into the harness-specific
     // config variant. For unsupported harnesses (Oz, OpenCode, Gemini,
     // Unknown), the secret is silently ignored — those harnesses either
     // use Warp's built-in auth (Oz) or don't currently support managed
     // secrets via this flow.
-    let harness_auth_secrets = auth_secret_name
+    //
+    // Phase 5d: also forward the BYOP managed-secret name when a BYOP
+    // resolution succeeded. The two channels coexist (a harness can
+    // have both its own auth_secret and a BYOP credential channel).
+    let mut harness_auth_secrets = auth_secret_name
         .as_ref()
         .filter(|name| !name.trim().is_empty())
         .and_then(|name| match orchestration_harness {
@@ -2180,6 +2190,30 @@ fn launch_remote_child(
             }),
             Harness::Oz | Harness::OpenCode | Harness::Gemini | Harness::Unknown => None,
         });
+    if let Some(byop_secret) = byop_secret_name.as_ref() {
+        harness_auth_secrets = match harness_auth_secrets {
+            Some(mut existing) => {
+                existing.byop_auth_secret_name = Some(byop_secret.clone());
+                Some(existing)
+            }
+            None => Some(crate::ai::ambient_agents::task::HarnessAuthSecretsConfig {
+                claude_auth_secret_name: None,
+                codex_auth_secret_name: None,
+                byop_auth_secret_name: Some(byop_secret.clone()),
+            }),
+        };
+    }
+    // Phase 5d. Forward Phase 4d compaction settings so a Remote worker
+    // can route conversation compaction to a distinct provider/model.
+    // Empty strings → None so the server picks its own default.
+    let (compaction_model_provider_id, compaction_model_id) = {
+        let settings = crate::settings::AISettings::as_ref(ctx);
+        let pid = settings.byop_compaction_model_provider_id.to_string();
+        let mid = settings.byop_compaction_model_id.to_string();
+        let pid_opt = if pid.is_empty() { None } else { Some(pid) };
+        let mid_opt = if mid.is_empty() { None } else { Some(mid) };
+        (pid_opt, mid_opt)
+    };
     let spawn_request = SpawnAgentRequest {
         prompt: request.prompt,
         mode: UserQueryMode::Normal,
@@ -2191,6 +2225,10 @@ fn launch_remote_child(
             computer_use_enabled,
             harness: harness_override,
             harness_auth_secrets,
+            byop_base_url,
+            byop_api_type,
+            compaction_model_provider_id,
+            compaction_model_id,
             ..Default::default()
         }),
         title: (!title.is_empty()).then_some(title),
