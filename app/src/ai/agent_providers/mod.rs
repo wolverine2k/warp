@@ -268,6 +268,43 @@ pub fn resolve_byop_for_local_child(
     resolve_byop_inner(app, &llm_id)
 }
 
+/// Phase 5d. Wraps `resolve_byop_inner` + `AgentProviderApiType` → wire-string
+/// conversion + `remote_secret_name` extraction in the form the orchestration
+/// Remote submit path consumes. Returns a triple of
+/// `(base_url, api_type, secret_name)`, each `Option<String>`. All three are
+/// `None` for non-BYOP ids; `secret_name` is `None` for BYOP entries whose
+/// provider has an empty `remote_secret_name`.
+pub fn resolve_byop_for_remote_child(
+    app: &AppContext,
+    model_id: &str,
+) -> (Option<String>, Option<String>, Option<String>) {
+    use ai::local_provider::AgentProviderApiType;
+
+    let Some((provider, _api_key, _byop_model_id)) = resolve_byop_inner(app, &(model_id.into()))
+    else {
+        return (None, None, None);
+    };
+
+    let api_type_str = match provider.api_type {
+        AgentProviderApiType::OpenAi => "open_ai",
+        AgentProviderApiType::OpenAiResp => "open_ai_resp",
+        AgentProviderApiType::Anthropic => "anthropic",
+        AgentProviderApiType::Gemini => "gemini",
+        AgentProviderApiType::Ollama => "ollama",
+        AgentProviderApiType::DeepSeek => "deep_seek",
+    };
+    let secret_name = if provider.remote_secret_name.trim().is_empty() {
+        None
+    } else {
+        Some(provider.remote_secret_name.clone())
+    };
+    (
+        Some(provider.base_url.clone()),
+        Some(api_type_str.to_owned()),
+        secret_name,
+    )
+}
+
 #[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
