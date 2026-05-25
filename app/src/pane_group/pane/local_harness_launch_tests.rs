@@ -331,13 +331,6 @@ async fn prepare_local_claude_child_no_anthropic_model_when_empty() {
         .contains_key(&OsString::from("ANTHROPIC_MODEL")));
 }
 
-fn stub_ai_client() -> Arc<dyn crate::server::server_api::ai::AIClient> {
-    let mut mock = MockAIClient::new();
-    mock.expect_create_agent_task()
-        .returning(|_, _, _, _| Ok("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()));
-    Arc::new(mock)
-}
-
 #[tokio::test]
 async fn prepare_local_harness_child_launch_rejects_disabled_claude_before_shell_validation() {
     let ai_client = Arc::new(MockAIClient::new());
@@ -364,11 +357,29 @@ async fn prepare_local_harness_child_launch_rejects_disabled_claude_before_shell
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn prepare_local_harness_child_launch_merges_byop_env_into_env_vars() {
     // Caller passes an explicit BYOP env-var bag; the prepared launch
     // surfaces it in env_vars alongside the existing task_env_vars +
-    // harness_model_env_vars output.
-    let ai_client = stub_ai_client();
+    // harness_model_env_vars output. Run with the local-harness feature
+    // flag enabled + a fake `claude` binary on PATH so the function
+    // actually reaches the env-var assembly step.
+    let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
+    let fake_home = TempDir::new().unwrap();
+    let fake_bin_dir = TempDir::new().unwrap();
+    let working_dir = fake_home.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    write_fake_cli(fake_bin_dir.path(), "claude");
+
+    let _home = EnvVarGuard::set("HOME", fake_home.path().as_os_str().to_os_string());
+    let _path = EnvVarGuard::set("PATH", fake_bin_dir.path().as_os_str().to_os_string());
+
+    let mut ai_client = MockAIClient::new();
+    ai_client
+        .expect_create_agent_task()
+        .times(1)
+        .returning(|_, _, _, _| Ok("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()));
+
     let mut byop = HashMap::new();
     byop.insert(
         OsString::from("ANTHROPIC_BASE_URL"),
@@ -385,24 +396,13 @@ async fn prepare_local_harness_child_launch_merges_byop_env_into_env_vars() {
         Some("byop:prov:claude-sonnet".to_string()),
         Some("parent-run-1".to_string()),
         Some("agent-a".to_string()),
-        Some(ShellType::Bash),
-        Some(std::env::temp_dir()),
-        ai_client,
+        Some(ShellType::Zsh),
+        Some(working_dir),
+        Arc::new(ai_client),
         byop,
     )
-    .await;
-
-    let prepared = match prepared {
-        Ok(p) => p,
-        Err(error) => {
-            // If Claude isn't installed in the test environment, prepare
-            // bails before assembling env_vars. Accept that as a skip.
-            if error.contains("Claude") || error.contains("claude") {
-                return;
-            }
-            panic!("unexpected error: {error}");
-        }
-    };
+    .await
+    .unwrap();
 
     assert_eq!(
         prepared
@@ -417,23 +417,52 @@ async fn prepare_local_harness_child_launch_merges_byop_env_into_env_vars() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn prepare_local_harness_child_launch_with_empty_byop_env_is_unchanged() {
-    // Sanity: an empty BYOP env doesn't disturb the existing env-var
-    // assembly. (Smoke test that the new parameter is backward-compatible.)
-    let ai_client = stub_ai_client();
+    // Sanity check: an empty BYOP env doesn't disturb the existing env-var
+    // assembly. The prepared launch should still contain the task_env_vars
+    // baseline (notably WARP_AGENT_TASK_ID) and no BYOP-prefixed keys.
+    let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
+    let fake_home = TempDir::new().unwrap();
+    let fake_bin_dir = TempDir::new().unwrap();
+    let working_dir = fake_home.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    write_fake_cli(fake_bin_dir.path(), "codex");
+
+    let _home = EnvVarGuard::set("HOME", fake_home.path().as_os_str().to_os_string());
+    let _path = EnvVarGuard::set("PATH", fake_bin_dir.path().as_os_str().to_os_string());
+
+    let mut ai_client = MockAIClient::new();
+    ai_client
+        .expect_create_agent_task()
+        .times(1)
+        .returning(|_, _, _, _| Ok("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()));
+
     let prepared = prepare_local_harness_child_launch(
         "go".to_string(),
         "codex".to_string(),
-        Some("gpt-4o".to_string()),
+        None,
         Some("parent-run-1".to_string()),
         Some("agent-a".to_string()),
-        Some(ShellType::Bash),
-        Some(std::env::temp_dir()),
-        ai_client,
+        Some(ShellType::Zsh),
+        Some(working_dir),
+        Arc::new(ai_client),
         HashMap::new(),
     )
-    .await;
-    // Same env-bail-out tolerance as the prior test — Codex may not be
-    // installed in the runner.
-    let _ = prepared;
+    .await
+    .unwrap();
+
+    // BYOP keys never appear when the bag was empty.
+    assert!(!prepared
+        .env_vars
+        .contains_key(&OsString::from("ANTHROPIC_BASE_URL")));
+    assert!(!prepared
+        .env_vars
+        .contains_key(&OsString::from("OPENAI_BASE_URL")));
+    assert!(!prepared
+        .env_vars
+        .contains_key(&OsString::from("ANTHROPIC_API_KEY")));
+    assert!(!prepared
+        .env_vars
+        .contains_key(&OsString::from("OPENAI_API_KEY")));
 }
