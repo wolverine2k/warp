@@ -2795,6 +2795,22 @@ pub enum AISettingsPageAction {
         provider_index: usize,
     },
 
+    /// Phase 5d. Set or clear the BYOP provider's remote managed-secret name.
+    /// Empty string means "not configured for Remote orchestration"; the
+    /// provider stays Local-only.
+    SetAgentProviderRemoteSecretName {
+        provider_index: usize,
+        name: String,
+    },
+
+    /// Phase 5d. Auto-create a personal-owner managed secret named
+    /// `byop-{provider_id}` with the provider's current api_key as the value,
+    /// and write the returned secret name into the provider's
+    /// `remote_secret_name`. Asynchronous; surfaces a toast on success/error.
+    AutoCreateAgentProviderManagedSecret {
+        provider_index: usize,
+    },
+
     /// Phase 2: probe the provider's endpoint and surface success/failure
     /// in the settings UI. Spawns an async probe via the selected
     /// `ProviderAdapter`'s `build_probe_request`. Result is currently logged;
@@ -3904,6 +3920,109 @@ impl TypedActionView for AISettingsPageView {
                     if let Some(p) = providers.get_mut(provider_index) {
                         p.available_for_orchestration = !p.available_for_orchestration;
                         report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                    }
+                });
+                ctx.notify();
+            }
+
+            AISettingsPageAction::SetAgentProviderRemoteSecretName {
+                provider_index,
+                name,
+            } => {
+                let provider_index = *provider_index;
+                let name = name.clone();
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let mut providers = settings.agent_providers.value().clone();
+                    if let Some(p) = providers.get_mut(provider_index) {
+                        p.remote_secret_name = name;
+                        report_if_error!(settings.agent_providers.set_value(providers, ctx));
+                    }
+                });
+                ctx.notify();
+            }
+
+            AISettingsPageAction::AutoCreateAgentProviderManagedSecret { provider_index } => {
+                let provider_index = *provider_index;
+                let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
+                let Some(provider) = providers.get(provider_index) else {
+                    log::warn!(
+                        "AutoCreateAgentProviderManagedSecret: invalid provider_index {provider_index}"
+                    );
+                    return;
+                };
+                let provider_id = provider.id.clone();
+                let secret_name = format!("byop-{provider_id}");
+                let api_key = ::ai::local_provider::AgentProviderSecrets::as_ref(ctx)
+                    .get(&provider.id)
+                    .map(str::to_owned)
+                    .unwrap_or_default();
+                let base_url = provider.base_url.clone();
+                log::info!(
+                    "AutoCreateAgentProviderManagedSecret: creating secret {secret_name} \
+                     for provider {provider_id}"
+                );
+                let secret_value = warp_managed_secrets::ManagedSecretValue::openai_api_key(
+                    api_key,
+                    if base_url.is_empty() {
+                        None
+                    } else {
+                        Some(base_url)
+                    },
+                );
+                let manager = warp_managed_secrets::ManagedSecretManager::handle(ctx);
+                let create_future = manager.as_ref(ctx).create_secret(
+                    warp_managed_secrets::client::SecretOwner::CurrentUser,
+                    secret_name,
+                    secret_value,
+                    None,
+                );
+                let _ = ctx.spawn(create_future, move |this, result, ctx| match result {
+                    Ok(secret) => {
+                        log::info!(
+                            "AutoCreateAgentProviderManagedSecret [{provider_id}]: \
+                             created secret '{}'",
+                            secret.name
+                        );
+                        let returned_name = secret.name.clone();
+                        // Stale-resolve guard: re-fetch by index and verify the id
+                        // hasn't changed (user may have removed/reordered providers
+                        // while the async call was in flight).
+                        let providers =
+                            AISettings::as_ref(ctx).agent_providers.value().clone();
+                        let Some(current_provider) = providers.get(provider_index) else {
+                            log::debug!(
+                                "AutoCreateAgentProviderManagedSecret: provider_index \
+                                 {provider_index} no longer exists, dropping resolve"
+                            );
+                            ctx.notify();
+                            return;
+                        };
+                        if current_provider.id != provider_id {
+                            log::debug!(
+                                "AutoCreateAgentProviderManagedSecret: provider_id changed \
+                                 (was {provider_id}, now {}), dropping resolve",
+                                current_provider.id
+                            );
+                            ctx.notify();
+                            return;
+                        }
+                        AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                            let mut providers = settings.agent_providers.value().clone();
+                            if let Some(p) = providers.get_mut(provider_index) {
+                                p.remote_secret_name = returned_name;
+                                report_if_error!(
+                                    settings.agent_providers.set_value(providers, ctx)
+                                );
+                            }
+                        });
+                        ctx.notify();
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "AutoCreateAgentProviderManagedSecret [{provider_id}]: \
+                             failed — {e}"
+                        );
+                        ctx.notify();
                     }
                 });
                 ctx.notify();
