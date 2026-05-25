@@ -243,9 +243,8 @@ pub fn resolve_byop_for_local_child(
     model_id: &str,
 ) -> Option<(AgentProvider, String, String)> {
     let llm_id: ai::LLMId = model_id.into();
-    if !llm_id::is_byop(&llm_id) {
-        return None;
-    }
+    // `llm_id::decode` already returns `None` for non-BYOP ids via its
+    // `strip_prefix(BYOP_PREFIX)` guard, so no separate `is_byop` check.
     let (provider_id, byop_model_id) = llm_id::decode(&llm_id)?;
 
     let providers = AISettings::as_ref(app).agent_providers.value().clone();

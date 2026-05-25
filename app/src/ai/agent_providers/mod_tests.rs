@@ -97,3 +97,38 @@ fn resolve_byop_for_local_child_returns_none_when_api_key_missing() {
         assert!(resolved.is_none());
     });
 }
+
+#[test]
+fn resolve_byop_for_local_child_returns_none_when_api_key_is_empty_string() {
+    // Distinct from the "missing-key" path: a secret entry exists but its
+    // value is the empty string. The function must reject this so the
+    // caller doesn't forward `Authorization: Bearer ` to the upstream.
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(AgentProviderSecrets::new);
+
+        AISettings::handle(&app).update(&mut app, |settings, ctx| {
+            let provider = AgentProvider {
+                id: "prov-empty-key".to_owned(),
+                name: "P".to_owned(),
+                kind: AgentProviderKind::default(),
+                api_type: AgentProviderApiType::OpenAi,
+                base_url: "https://api.example.com/v1".to_owned(),
+                models: vec![AgentProviderModel::from_id("m1".to_owned())],
+                available_for_orchestration: true,
+                remote_secret_name: String::new(),
+            };
+            settings
+                .agent_providers
+                .set_value(vec![provider], ctx)
+                .unwrap();
+        });
+        AgentProviderSecrets::handle(&app).update(&mut app, |secrets, ctx| {
+            secrets.set("prov-empty-key", String::new(), ctx);
+        });
+
+        let encoded_id = llm_id::encode("prov-empty-key", "m1").to_string();
+        let resolved = app.read(|ctx| resolve_byop_for_local_child(ctx, &encoded_id));
+        assert!(resolved.is_none());
+    });
+}
