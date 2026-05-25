@@ -5,8 +5,9 @@ use crate::ai::{
     agent_sdk::{
         driver::{
             harness::{
-                claude_code::prepare_claude_environment_config, harness_kind,
-                harness_model_env_vars, HarnessKind,
+                claude_code::prepare_claude_environment_config,
+                gemini::{prepare_gemini_environment_config, GeminiByopConfig},
+                harness_kind, harness_model_env_vars, HarnessKind,
             },
             AgentDriverError,
         },
@@ -69,6 +70,16 @@ pub(super) fn build_local_codex_child_command(prompt: &str) -> String {
     format!("codex --dangerously-bypass-approvals-and-sandbox {quoted_prompt}")
 }
 
+pub(super) fn build_local_gemini_child_command(prompt: &str) -> String {
+    let quoted_prompt = shell_quote(prompt);
+    // `--yolo` auto-approves tool calls so the off-screen child pane can run
+    // unattended. `-i` seeds the initial prompt and continues into the
+    // interactive TUI mode. Mirrors the standalone GeminiHarnessRunner's
+    // command shape, simplified for the local-child case where the prompt
+    // is shell-quoted inline rather than threaded through a tempfile.
+    format!("gemini --yolo -i {quoted_prompt}")
+}
+
 pub(super) fn local_child_task_config(
     harness: Harness,
     agent_name: Option<String>,
@@ -99,6 +110,7 @@ pub(super) async fn prepare_local_harness_child_launch(
     startup_directory: Option<PathBuf>,
     ai_client: Arc<dyn AIClient>,
     byop_env: HashMap<OsString, OsString>,
+    byop_config_for_gemini: Option<GeminiByopConfig>,
 ) -> Result<PreparedLocalHarnessLaunch, String> {
     let harness_model_config =
         model_id
@@ -179,7 +191,42 @@ pub(super) async fn prepare_local_harness_child_launch(
                 .map_err(|error: AgentDriverError| error.to_string())?;
             build_local_opencode_child_command(&prompt)
         }
-        Harness::Gemini => unreachable!("normalize_local_child_harness filters out Gemini"),
+        Harness::Gemini => {
+            let working_dir = startup_directory
+                .or_else(|| std::env::current_dir().ok())
+                .ok_or_else(|| {
+                    format!(
+                        "Could not resolve a working directory for the local {} child.",
+                        harness.display_name()
+                    )
+                })?;
+            let HarnessKind::ThirdParty(third_party_harness) =
+                harness_kind(harness).map_err(|error: AgentDriverError| error.to_string())?
+            else {
+                unreachable!("Gemini resolves to a third-party harness")
+            };
+            third_party_harness
+                .validate()
+                .map_err(|error: AgentDriverError| error.to_string())?;
+            // Phase 5e: Gemini BYOP routing goes through ~/.gemini/settings.json
+            // (security.auth.apiKey + security.auth.endpoint), not env vars.
+            // `byop_config_for_gemini` is populated by the caller when the
+            // run-wide model_id is a BYOP-Gemini entry; otherwise None clears
+            // any stale BYOP fields from a prior session.
+            prepare_gemini_environment_config(
+                &working_dir,
+                None,
+                byop_config_for_gemini.as_ref(),
+            )
+            .map_err(|error| error.to_string())?;
+            if let Some(manager) = plugin_manager_for(third_party_harness.cli_agent()) {
+                if let Err(error) = manager.install().await {
+                    log::warn!("Gemini plugin installation failed for child harness: {error}");
+                }
+            }
+
+            build_local_gemini_child_command(&prompt)
+        }
     };
 
     let task_id = ai_client

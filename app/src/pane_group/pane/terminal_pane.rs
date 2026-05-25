@@ -1877,28 +1877,42 @@ fn launch_local_harness_child(
     let model_id_for_harness_env = model_id.clone();
     let agent_name_for_task = agent_name.clone();
 
-    // Phase 5c: when the run-wide model_id is a BYOP entry, resolve the
-    // provider + api_key from settings and assemble the env-var bag the
-    // third-party CLI needs to route at the user's endpoint. Empty when
-    // not BYOP — `prepare_local_harness_child_launch` treats an empty
-    // bag as a no-op.
-    let byop_env = if let Some(model) = model_id.as_deref() {
+    // Phase 5c/5e: when the run-wide model_id is a BYOP entry, resolve the
+    // provider + api_key from settings. For Claude/Codex/OpenCode (Phase
+    // 5c) the result is an env-var bag the third-party CLI consumes; for
+    // Gemini (Phase 5e) the result is a GeminiByopConfig that is written
+    // into ~/.gemini/settings.json by `prepare_gemini_environment_config`.
+    // Both paths fall back to no-op (empty bag / None) when not BYOP.
+    let (byop_env, byop_config_for_gemini) = if let Some(model) = model_id.as_deref() {
         let resolved = crate::ai::agent_providers::resolve_byop_for_local_child(ctx, model);
         let harness =
             Harness::parse_local_child_harness(&harness_type).unwrap_or(Harness::Unknown);
         match resolved {
             Some((provider, api_key, byop_model_id)) => {
-                crate::ai::orchestration_byop_env::byop_env_for_harness(
+                let env = crate::ai::orchestration_byop_env::byop_env_for_harness(
                     &provider,
                     &api_key,
                     &byop_model_id,
                     harness,
-                )
+                );
+                let gemini_config = if matches!(harness, Harness::Gemini)
+                    && matches!(
+                        provider.api_type,
+                        ::ai::local_provider::AgentProviderApiType::Gemini
+                    ) {
+                    Some(crate::ai::agent_sdk::driver::harness::gemini::GeminiByopConfig {
+                        api_key: api_key.clone(),
+                        base_url: provider.base_url.clone(),
+                    })
+                } else {
+                    None
+                };
+                (env, gemini_config)
             }
-            None => HashMap::new(),
+            None => (HashMap::new(), None),
         }
     } else {
-        HashMap::new()
+        (HashMap::new(), None)
     };
 
     let _ = ctx.spawn(
@@ -1913,6 +1927,7 @@ fn launch_local_harness_child(
                 startup_directory,
                 ai_client,
                 byop_env,
+                byop_config_for_gemini,
             )
             .await
         },

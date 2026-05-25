@@ -246,6 +246,7 @@ async fn prepare_local_codex_child_launch_does_not_rewrite_global_codex_state() 
         Some(working_dir),
         Arc::new(ai_client),
         HashMap::new(),
+        None,
     )
     .await
     .unwrap();
@@ -286,6 +287,7 @@ async fn prepare_local_claude_child_merges_anthropic_model_env_var() {
         Some(working_dir),
         Arc::new(ai_client),
         HashMap::new(),
+        None,
     )
     .await
     .unwrap();
@@ -325,6 +327,7 @@ async fn prepare_local_claude_child_no_anthropic_model_when_empty() {
         Some(working_dir),
         Arc::new(ai_client),
         HashMap::new(),
+        None,
     )
     .await
     .unwrap();
@@ -347,6 +350,7 @@ async fn prepare_local_harness_child_launch_rejects_disabled_claude_before_shell
         None,
         ai_client,
         HashMap::new(),
+        None,
     )
     .await;
 
@@ -403,6 +407,7 @@ async fn prepare_local_harness_child_launch_merges_byop_env_into_env_vars() {
         Some(working_dir),
         Arc::new(ai_client),
         byop,
+        None,
     )
     .await
     .unwrap();
@@ -451,6 +456,7 @@ async fn prepare_local_harness_child_launch_with_empty_byop_env_is_unchanged() {
         Some(working_dir),
         Arc::new(ai_client),
         HashMap::new(),
+        None,
     )
     .await
     .unwrap();
