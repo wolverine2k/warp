@@ -210,41 +210,20 @@ pub fn build_byop_models_by_feature(app: &AppContext) -> ModelsByFeature {
     }
 }
 
-/// Resolve a `byop:<provider_id>:<model_id>` `LLMId` to its
-/// `(provider, api_key, model_id)` triple. Returns `None` if the LLMId is
-/// not BYOP-encoded, the provider has been deleted, or no API key is
-/// configured. Callers should map `None` to a structured "provider
-/// unavailable" error so the conversation pane can surface a recoverable
-/// banner instead of a hard crash.
-pub fn lookup_byop(app: &AppContext, id: &ai::LLMId) -> Option<(AgentProvider, String, String)> {
-    let (provider_id, model_id) = llm_id::decode(id)?;
-    let providers = AISettings::as_ref(app).agent_providers.value().clone();
-    let provider = providers.into_iter().find(|p| p.id == provider_id)?;
-    let api_key = AgentProviderSecrets::as_ref(app)
-        .get(&provider_id)
-        .map(str::to_owned)?;
-    Some((provider, api_key, model_id))
-}
-
-/// Phase 5c. Resolves a `byop:<provider_id>:<model_id>` LLMId to the
-/// `(provider, api_key, model_id)` triple a local child-harness spawn site
-/// needs to assemble its env-var bag. Returns `None` for:
-/// - Non-BYOP model IDs (caller should treat this as "no env vars to inject").
-/// - BYOP IDs that don't decode (malformed).
-/// - Provider IDs that aren't in settings.
-/// - Providers missing an API key in `AgentProviderSecrets`.
+/// Shared BYOP resolution: decode → look up provider → fetch + validate
+/// api_key. Returns `None` for non-BYOP ids, malformed ids, missing
+/// providers, missing keys, or empty keys.
 ///
-/// The model_id returned is the user-side model id (the part after the
-/// `byop:<provider_id>:` prefix), suitable for passing as `OPENAI_MODEL` /
-/// `ANTHROPIC_MODEL` to the harness CLI.
-pub fn resolve_byop_for_local_child(
+/// Both `lookup_byop` and `resolve_byop_for_local_child` delegate to this
+/// helper. The only difference between the two public entry points is the
+/// input type — `lookup_byop` accepts `&ai::LLMId` (already-decoded type)
+/// while `resolve_byop_for_local_child` accepts `&str` (raw model_id from
+/// the orchestration submit path).
+fn resolve_byop_inner(
     app: &AppContext,
-    model_id: &str,
+    llm_id: &ai::LLMId,
 ) -> Option<(AgentProvider, String, String)> {
-    let llm_id: ai::LLMId = model_id.into();
-    // `llm_id::decode` already returns `None` for non-BYOP ids via its
-    // `strip_prefix(BYOP_PREFIX)` guard, so no separate `is_byop` check.
-    let (provider_id, byop_model_id) = llm_id::decode(&llm_id)?;
+    let (provider_id, model_id) = llm_id::decode(llm_id)?;
 
     let providers = AISettings::as_ref(app).agent_providers.value().clone();
     let provider = providers.into_iter().find(|p| p.id == provider_id)?;
@@ -256,7 +235,37 @@ pub fn resolve_byop_for_local_child(
         return None;
     }
 
-    Some((provider, api_key, byop_model_id))
+    Some((provider, api_key, model_id))
+}
+
+/// Resolve a `byop:<provider_id>:<model_id>` `LLMId` to its
+/// `(provider, api_key, model_id)` triple. Returns `None` if the LLMId is
+/// not BYOP-encoded, the provider has been deleted, no API key is
+/// configured, or the API key is empty. Callers should map `None` to a
+/// structured "provider unavailable" error so the conversation pane can
+/// surface a recoverable banner instead of a hard crash.
+pub fn lookup_byop(app: &AppContext, id: &ai::LLMId) -> Option<(AgentProvider, String, String)> {
+    resolve_byop_inner(app, id)
+}
+
+/// Phase 5c. Resolves a `byop:<provider_id>:<model_id>` LLMId to the
+/// `(provider, api_key, model_id)` triple a local child-harness spawn site
+/// needs to assemble its env-var bag. Returns `None` for:
+/// - Non-BYOP model IDs (caller should treat this as "no env vars to inject").
+/// - BYOP IDs that don't decode (malformed).
+/// - Provider IDs that aren't in settings.
+/// - Providers missing an API key in `AgentProviderSecrets`.
+/// - Providers with an empty API key in `AgentProviderSecrets`.
+///
+/// The model_id returned is the user-side model id (the part after the
+/// `byop:<provider_id>:` prefix), suitable for passing as `OPENAI_MODEL` /
+/// `ANTHROPIC_MODEL` to the harness CLI.
+pub fn resolve_byop_for_local_child(
+    app: &AppContext,
+    model_id: &str,
+) -> Option<(AgentProvider, String, String)> {
+    let llm_id: ai::LLMId = model_id.into();
+    resolve_byop_inner(app, &llm_id)
 }
 
 #[cfg(test)]
