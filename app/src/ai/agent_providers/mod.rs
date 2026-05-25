@@ -237,7 +237,6 @@ pub fn lookup_byop(app: &AppContext, id: &ai::LLMId) -> Option<(AgentProvider, S
 /// The model_id returned is the user-side model id (the part after the
 /// `byop:<provider_id>:` prefix), suitable for passing as `OPENAI_MODEL` /
 /// `ANTHROPIC_MODEL` to the harness CLI.
-#[allow(dead_code)] // Wired up by Phase 5c Task 4 (launch_local_harness_child).
 pub fn resolve_byop_for_local_child(
     app: &AppContext,
     model_id: &str,

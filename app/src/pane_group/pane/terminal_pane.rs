@@ -1876,6 +1876,31 @@ fn launch_local_harness_child(
 
     let model_id_for_harness_env = model_id.clone();
     let agent_name_for_task = agent_name.clone();
+
+    // Phase 5c: when the run-wide model_id is a BYOP entry, resolve the
+    // provider + api_key from settings and assemble the env-var bag the
+    // third-party CLI needs to route at the user's endpoint. Empty when
+    // not BYOP — `prepare_local_harness_child_launch` treats an empty
+    // bag as a no-op.
+    let byop_env = if let Some(model) = model_id.as_deref() {
+        let resolved = crate::ai::agent_providers::resolve_byop_for_local_child(ctx, model);
+        let harness =
+            Harness::parse_local_child_harness(&harness_type).unwrap_or(Harness::Unknown);
+        match resolved {
+            Some((provider, api_key, byop_model_id)) => {
+                crate::ai::orchestration_byop_env::byop_env_for_harness(
+                    &provider,
+                    &api_key,
+                    &byop_model_id,
+                    harness,
+                )
+            }
+            None => std::collections::HashMap::new(),
+        }
+    } else {
+        std::collections::HashMap::new()
+    };
+
     let _ = ctx.spawn(
         async move {
             prepare_local_harness_child_launch(
@@ -1887,7 +1912,7 @@ fn launch_local_harness_child(
                 shell_type,
                 startup_directory,
                 ai_client,
-                std::collections::HashMap::new(),
+                byop_env,
             )
             .await
         },

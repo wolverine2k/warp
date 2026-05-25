@@ -23,7 +23,6 @@
 //! The `ANTHROPIC_MODEL` env var is intentionally **not** set here — it's
 //! already set by `harness_model_env_vars` in `agent_sdk/driver/harness/mod.rs`
 //! for the Claude harness, and the caller merges that bag with ours.
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::ffi::OsString;
