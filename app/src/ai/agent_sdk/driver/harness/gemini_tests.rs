@@ -10,7 +10,7 @@ fn prepare_gemini_settings_creates_file_with_api_key_auth() {
     let tmp = TempDir::new().unwrap();
     let settings_path = tmp.path().join("settings.json");
 
-    prepare_gemini_settings(&settings_path, false).unwrap();
+    prepare_gemini_settings(&settings_path, false, None).unwrap();
 
     let settings: Value = serde_json::from_slice(&fs::read(settings_path).unwrap()).unwrap();
     assert_eq!(
@@ -35,7 +35,7 @@ fn prepare_gemini_settings_preserves_unrelated_keys() {
     )
     .unwrap();
 
-    prepare_gemini_settings(&settings_path, false).unwrap();
+    prepare_gemini_settings(&settings_path, false, None).unwrap();
 
     let settings: Value = serde_json::from_slice(&fs::read(settings_path).unwrap()).unwrap();
     assert_eq!(settings["ui"]["theme"], "dark");
@@ -60,7 +60,7 @@ fn prepare_gemini_settings_surfaces_malformed_json_as_error() {
     )
     .unwrap();
 
-    assert!(prepare_gemini_settings(&settings_path, false).is_err());
+    assert!(prepare_gemini_settings(&settings_path, false, None).is_err());
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn prepare_gemini_settings_adds_context_file_name_when_system_prompt_present() {
     let tmp = TempDir::new().unwrap();
     let settings_path = tmp.path().join("settings.json");
 
-    prepare_gemini_settings(&settings_path, true).unwrap();
+    prepare_gemini_settings(&settings_path, true, None).unwrap();
 
     let settings: Value = serde_json::from_slice(&fs::read(settings_path).unwrap()).unwrap();
     assert_eq!(
@@ -120,7 +120,7 @@ fn prepare_gemini_settings_appends_to_existing_context_file_name() {
     )
     .unwrap();
 
-    prepare_gemini_settings(&settings_path, true).unwrap();
+    prepare_gemini_settings(&settings_path, true, None).unwrap();
 
     let settings: Value = serde_json::from_slice(&fs::read(settings_path).unwrap()).unwrap();
     let file_names: Vec<String> = settings["context"]["fileName"]
@@ -142,7 +142,7 @@ fn prepare_gemini_settings_does_not_duplicate_system_prompt_file_name() {
     )
     .unwrap();
 
-    prepare_gemini_settings(&settings_path, true).unwrap();
+    prepare_gemini_settings(&settings_path, true, None).unwrap();
 
     let settings: Value = serde_json::from_slice(&fs::read(settings_path).unwrap()).unwrap();
     let file_names: Vec<String> = settings["context"]["fileName"]
@@ -159,8 +159,73 @@ fn prepare_gemini_settings_omits_context_when_no_system_prompt() {
     let tmp = TempDir::new().unwrap();
     let settings_path = tmp.path().join("settings.json");
 
-    prepare_gemini_settings(&settings_path, false).unwrap();
+    prepare_gemini_settings(&settings_path, false, None).unwrap();
 
     let settings: Value = serde_json::from_slice(&fs::read(settings_path).unwrap()).unwrap();
     assert!(settings.get("context").is_none());
+}
+
+#[test]
+fn prepare_gemini_settings_writes_byop_api_key_and_endpoint() {
+    let tmp = TempDir::new().unwrap();
+    let settings_path = tmp.path().join("settings.json");
+    let byop = GeminiByopConfig {
+        api_key: "AIza-byop-test".to_owned(),
+        base_url: "https://my-gemini-proxy.example.com/v1beta".to_owned(),
+    };
+
+    prepare_gemini_settings(&settings_path, false, Some(&byop)).unwrap();
+
+    let settings: Value = serde_json::from_slice(&fs::read(settings_path).unwrap()).unwrap();
+    assert_eq!(
+        settings["security"]["auth"]["selectedType"],
+        Value::String("gemini-api-key".to_owned()),
+    );
+    assert_eq!(
+        settings["security"]["auth"]["apiKey"],
+        Value::String("AIza-byop-test".to_owned()),
+    );
+    assert_eq!(
+        settings["security"]["auth"]["endpoint"],
+        Value::String("https://my-gemini-proxy.example.com/v1beta".to_owned()),
+    );
+}
+
+#[test]
+fn prepare_gemini_settings_clears_byop_fields_when_none() {
+    let tmp = TempDir::new().unwrap();
+    let settings_path = tmp.path().join("settings.json");
+    let byop = GeminiByopConfig {
+        api_key: "leak".to_owned(),
+        base_url: "https://leak.example".to_owned(),
+    };
+
+    prepare_gemini_settings(&settings_path, false, Some(&byop)).unwrap();
+    prepare_gemini_settings(&settings_path, false, None).unwrap();
+
+    let settings: Value = serde_json::from_slice(&fs::read(settings_path).unwrap()).unwrap();
+    assert!(
+        settings["security"]["auth"].get("apiKey").is_none(),
+        "apiKey must be cleared on non-BYOP run",
+    );
+    assert!(
+        settings["security"]["auth"].get("endpoint").is_none(),
+        "endpoint must be cleared on non-BYOP run",
+    );
+}
+
+#[test]
+fn prepare_gemini_settings_treats_empty_trim_as_none() {
+    let tmp = TempDir::new().unwrap();
+    let settings_path = tmp.path().join("settings.json");
+    let byop = GeminiByopConfig {
+        api_key: "   ".to_owned(),
+        base_url: "\t\n".to_owned(),
+    };
+
+    prepare_gemini_settings(&settings_path, false, Some(&byop)).unwrap();
+
+    let settings: Value = serde_json::from_slice(&fs::read(settings_path).unwrap()).unwrap();
+    assert!(settings["security"]["auth"].get("apiKey").is_none());
+    assert!(settings["security"]["auth"].get("endpoint").is_none());
 }

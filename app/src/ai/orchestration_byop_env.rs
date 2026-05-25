@@ -13,7 +13,7 @@
 //! | claude     | Anthropic           | ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY       |
 //! | codex      | OpenAi / OpenAiResp / DeepSeek | OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_MODEL |
 //! | opencode   | OpenAi / DeepSeek   | OPENAI_BASE_URL, OPENAI_API_KEY             |
-//! | gemini     | (deferred — Gemini CLI is not enabled as a local child harness today) |
+//! | gemini     | (settings.json injection — Gemini CLI BYOP via ~/.gemini/settings.json; see `gemini.rs::prepare_gemini_environment_config`) |
 //! | oz / empty | (Native — uses the in-process BYOP dispatcher from Phase 4d) |
 //!
 //! Mismatched combinations return an empty bag. The Phase 5a submit-time

@@ -67,7 +67,7 @@ impl ThirdPartyHarness for GeminiHarness {
         _third_party_harness_model_config: Option<&HarnessModelConfig>,
     ) -> Result<Box<dyn HarnessRunner>, AgentDriverError> {
         // Prepare the environment config files.
-        prepare_gemini_environment_config(working_dir, system_prompt).map_err(|error| {
+        prepare_gemini_environment_config(working_dir, system_prompt, None).map_err(|error| {
             AgentDriverError::HarnessConfigSetupFailed {
                 harness: self.cli_agent().command_prefix().to_owned(),
                 error,
@@ -240,9 +240,21 @@ impl HarnessRunner for GeminiHarnessRunner {
     }
 }
 
-fn prepare_gemini_environment_config(
+/// Phase 5e. BYOP overrides written into `security.auth` of
+/// `~/.gemini/settings.json` when the user has picked a BYOP-Gemini provider
+/// + Gemini-CLI child harness. `base_url` is written as `endpoint`; the api
+/// key is written as `api_key`. Empty-after-trim values are treated as
+/// "no override" by the writer.
+#[derive(Clone, Debug)]
+pub(crate) struct GeminiByopConfig {
+    pub api_key: String,
+    pub base_url: String,
+}
+
+pub(crate) fn prepare_gemini_environment_config(
     working_dir: &Path,
     system_prompt: Option<&str>,
+    byop_config: Option<&GeminiByopConfig>,
 ) -> Result<()> {
     let home_dir =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("could not determine home directory"))?;
@@ -250,6 +262,7 @@ fn prepare_gemini_environment_config(
     prepare_gemini_settings(
         &gemini_dir.join(GEMINI_SETTINGS_FILE_NAME),
         system_prompt.is_some(),
+        byop_config,
     )?;
     prepare_gemini_trusted_folders(
         &gemini_dir.join(GEMINI_TRUSTED_FOLDERS_FILE_NAME),
@@ -267,14 +280,28 @@ fn prepare_gemini_environment_config(
     Ok(())
 }
 
-fn prepare_gemini_settings(settings_path: &Path, has_system_prompt: bool) -> Result<()> {
+fn prepare_gemini_settings(
+    settings_path: &Path,
+    has_system_prompt: bool,
+    byop_config: Option<&GeminiByopConfig>,
+) -> Result<()> {
     let mut settings: GeminiSettings = read_json_file_or_default(settings_path)?;
-    settings
+    let auth = settings
         .security
         .get_or_insert_with(GeminiSecurity::default)
         .auth
-        .get_or_insert_with(GeminiAuth::default)
-        .selected_type = Some(GEMINI_API_KEY_AUTH_TYPE.to_owned());
+        .get_or_insert_with(GeminiAuth::default);
+    auth.selected_type = Some(GEMINI_API_KEY_AUTH_TYPE.to_owned());
+
+    if let Some(byop) = byop_config {
+        let trimmed_key = byop.api_key.trim();
+        let trimmed_url = byop.base_url.trim();
+        auth.api_key = (!trimmed_key.is_empty()).then(|| trimmed_key.to_owned());
+        auth.endpoint = (!trimmed_url.is_empty()).then(|| trimmed_url.to_owned());
+    } else {
+        auth.api_key = None;
+        auth.endpoint = None;
+    }
 
     if has_system_prompt {
         let context = settings.context.get_or_insert_with(GeminiContext::default);
@@ -340,6 +367,16 @@ struct GeminiSecurity {
 struct GeminiAuth {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     selected_type: Option<String>,
+    /// Phase 5e. BYOP api_key written to `security.auth.apiKey` when the
+    /// user has configured a BYOP-Gemini provider for local-child
+    /// orchestration. Cleared when byop_config is `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api_key: Option<String>,
+    /// Phase 5e. BYOP base-URL written to `security.auth.endpoint`. When
+    /// set, Gemini CLI routes traffic here instead of the default
+    /// `generativelanguage.googleapis.com`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    endpoint: Option<String>,
     #[serde(flatten)]
     extra: Map<String, Value>,
 }

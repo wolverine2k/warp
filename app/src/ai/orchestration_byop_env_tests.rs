@@ -128,13 +128,16 @@ fn ollama_with_any_third_party_harness_returns_empty() {
 }
 
 #[test]
-fn gemini_harness_returns_empty_today() {
-    // Gemini CLI as a local child harness is not enabled. If it ever
-    // becomes enabled, add the GOOGLE_GENAI_USE_VERTEXAI / GOOGLE_API_KEY
-    // arm and update this test.
+fn gemini_harness_uses_settings_json_not_env_vars() {
+    // Phase 5e: Gemini CLI BYOP routing goes through ~/.gemini/settings.json
+    // (security.auth.apiKey + security.auth.endpoint), not env vars.
+    // byop_env_for_harness intentionally returns an empty bag for any
+    // (provider, Harness::Gemini) combination. The settings.json write
+    // happens in app/src/ai/agent_sdk/driver/harness/gemini.rs via
+    // prepare_gemini_environment_config(..., byop_config).
     let provider = provider_with(AgentProviderApiType::Gemini, "https://generativelanguage.example/v1beta");
     let env = byop_env_for_harness(&provider, "sk-test", "gemini-1.5", Harness::Gemini);
-    assert!(env.is_empty());
+    assert!(env.is_empty(), "Gemini uses settings.json — env bag must stay empty");
 }
 
 #[test]
