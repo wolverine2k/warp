@@ -225,3 +225,42 @@ pub fn lookup_byop(app: &AppContext, id: &ai::LLMId) -> Option<(AgentProvider, S
         .map(str::to_owned)?;
     Some((provider, api_key, model_id))
 }
+
+/// Phase 5c. Resolves a `byop:<provider_id>:<model_id>` LLMId to the
+/// `(provider, api_key, model_id)` triple a local child-harness spawn site
+/// needs to assemble its env-var bag. Returns `None` for:
+/// - Non-BYOP model IDs (caller should treat this as "no env vars to inject").
+/// - BYOP IDs that don't decode (malformed).
+/// - Provider IDs that aren't in settings.
+/// - Providers missing an API key in `AgentProviderSecrets`.
+///
+/// The model_id returned is the user-side model id (the part after the
+/// `byop:<provider_id>:` prefix), suitable for passing as `OPENAI_MODEL` /
+/// `ANTHROPIC_MODEL` to the harness CLI.
+#[allow(dead_code)] // Wired up by Phase 5c Task 4 (launch_local_harness_child).
+pub fn resolve_byop_for_local_child(
+    app: &AppContext,
+    model_id: &str,
+) -> Option<(AgentProvider, String, String)> {
+    let llm_id: ai::LLMId = model_id.into();
+    if !llm_id::is_byop(&llm_id) {
+        return None;
+    }
+    let (provider_id, byop_model_id) = llm_id::decode(&llm_id)?;
+
+    let providers = AISettings::as_ref(app).agent_providers.value().clone();
+    let provider = providers.into_iter().find(|p| p.id == provider_id)?;
+
+    let api_key = AgentProviderSecrets::as_ref(app)
+        .get(&provider.id)?
+        .to_string();
+    if api_key.is_empty() {
+        return None;
+    }
+
+    Some((provider, api_key, byop_model_id))
+}
+
+#[cfg(test)]
+#[path = "mod_tests.rs"]
+mod tests;
