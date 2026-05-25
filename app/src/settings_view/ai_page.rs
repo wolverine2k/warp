@@ -3976,7 +3976,7 @@ impl TypedActionView for AISettingsPageView {
                     secret_value,
                     None,
                 );
-                let _ = ctx.spawn(create_future, move |this, result, ctx| match result {
+                let _ = ctx.spawn(create_future, move |_this, result, ctx| match result {
                     Ok(secret) => {
                         log::info!(
                             "AutoCreateAgentProviderManagedSecret [{provider_id}]: \
