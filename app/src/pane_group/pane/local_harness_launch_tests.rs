@@ -8,6 +8,7 @@ use super::{
     build_local_opencode_child_command, local_child_task_config, normalize_local_child_harness,
     prepare_local_harness_child_launch, validate_local_harness_shell,
 };
+use crate::ai::agent_sdk::driver::harness::gemini::GeminiByopConfig;
 use crate::ai::ambient_agents::task::{normalize_orchestrator_agent_name, HarnessConfig};
 use crate::server::server_api::ai::MockAIClient;
 use crate::terminal::shell::ShellType;
@@ -474,4 +475,85 @@ async fn prepare_local_harness_child_launch_with_empty_byop_env_is_unchanged() {
     assert!(!prepared
         .env_vars
         .contains_key(&OsString::from("OPENAI_API_KEY")));
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn prepare_local_gemini_child_writes_byop_to_settings_json() {
+    // Phase 5e: Gemini CLI BYOP routing uses ~/.gemini/settings.json
+    // (security.auth.apiKey + security.auth.endpoint) — NOT env vars.
+    // The env-var bag (Phase 5c plumbing) stays empty for Gemini; the
+    // GeminiByopConfig sibling parameter carries the api_key + base_url
+    // into prepare_gemini_environment_config which writes settings.json.
+    let _local_harnesses = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
+    let fake_home = TempDir::new().unwrap();
+    let fake_bin_dir = TempDir::new().unwrap();
+    let working_dir = fake_home.path().join("workspace");
+    fs::create_dir_all(&working_dir).unwrap();
+    write_fake_cli(fake_bin_dir.path(), "gemini");
+
+    let _home = EnvVarGuard::set("HOME", fake_home.path().as_os_str().to_os_string());
+    let _path = EnvVarGuard::set("PATH", fake_bin_dir.path().as_os_str().to_os_string());
+
+    let mut ai_client = MockAIClient::new();
+    ai_client
+        .expect_create_agent_task()
+        .times(1)
+        .returning(|_, _, _, _| Ok("550e8400-e29b-41d4-a716-446655440000".parse().unwrap()));
+
+    let byop_config = GeminiByopConfig {
+        api_key: "AIza-byop-test".to_string(),
+        base_url: "https://my-gemini-proxy.example.com/v1beta".to_string(),
+    };
+
+    let prepared = prepare_local_harness_child_launch(
+        "go".to_string(),
+        "gemini".to_string(),
+        Some("byop:prov:gemini-2.5-pro".to_string()),
+        Some("parent-run-1".to_string()),
+        Some("agent-a".to_string()),
+        Some(ShellType::Zsh),
+        Some(working_dir),
+        Arc::new(ai_client),
+        HashMap::new(),
+        Some(byop_config),
+    )
+    .await
+    .unwrap();
+
+    // env_vars must NOT contain a Gemini API-key env var — settings.json
+    // is the injection point for this harness.
+    assert!(
+        !prepared.env_vars.contains_key(&OsString::from("GEMINI_API_KEY")),
+        "Gemini env bag must stay empty; settings.json carries BYOP"
+    );
+
+    // settings.json was written under HOME with BYOP fields under security.auth.
+    let settings_path = fake_home.path().join(".gemini").join("settings.json");
+    assert!(
+        settings_path.exists(),
+        "expected settings.json at {}",
+        settings_path.display()
+    );
+    let settings: serde_json::Value =
+        serde_json::from_slice(&fs::read(&settings_path).unwrap()).unwrap();
+    assert_eq!(
+        settings["security"]["auth"]["selectedType"],
+        serde_json::Value::String("gemini-api-key".to_string()),
+    );
+    assert_eq!(
+        settings["security"]["auth"]["apiKey"],
+        serde_json::Value::String("AIza-byop-test".to_string()),
+    );
+    assert_eq!(
+        settings["security"]["auth"]["endpoint"],
+        serde_json::Value::String("https://my-gemini-proxy.example.com/v1beta".to_string()),
+    );
+
+    // Command starts with "gemini".
+    assert!(
+        prepared.command.starts_with("gemini "),
+        "expected gemini command, got: {}",
+        prepared.command
+    );
 }
