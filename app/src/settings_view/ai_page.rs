@@ -3956,6 +3956,14 @@ impl TypedActionView for AISettingsPageView {
                     .get(&provider.id)
                     .map(str::to_owned)
                     .unwrap_or_default();
+                if api_key.trim().is_empty() {
+                    log::warn!(
+                        "AutoCreateAgentProviderManagedSecret: skipping secret \
+                         {secret_name} for provider {provider_id} — no api_key \
+                         configured. Set an API key on the provider first."
+                    );
+                    return;
+                }
                 let base_url = provider.base_url.clone();
                 log::info!(
                     "AutoCreateAgentProviderManagedSecret: creating secret {secret_name} \
