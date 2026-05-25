@@ -664,7 +664,6 @@ impl AgentProvidersWidget {
     ///   - base_url_reachable_from_remote(&provider.base_url) — providers on
     ///     localhost / RFC1918 / `.local` are Local-only by reachability.
     fn render_remote_secret_field(
-        _provider: &AgentProvider,
         provider_index: usize,
         card: &ProviderCardHandles,
         label_color: warp_core::ui::theme::Fill,
@@ -1612,7 +1611,6 @@ impl AgentProvidersWidget {
             )
         {
             Some(Self::render_remote_secret_field(
-                provider,
                 provider_index,
                 card,
                 label_color,
