@@ -89,7 +89,7 @@ jobs:
     steps:
       - name: Create or update GitHub release
         if: ${{ needs.resolve.outputs.create_release == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.resolve.outputs.tag }}
           name: ${{ needs.resolve.outputs.tag }}
@@ -146,7 +146,7 @@ jobs:
 
       - name: Attach Linux packages to GitHub release
         if: ${{ needs.resolve.outputs.create_release == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.resolve.outputs.tag }}
           files: ${{ steps.bundle.outputs.packages_dir }}/*
@@ -201,7 +201,7 @@ jobs:
 
       - name: Attach macOS package to GitHub release
         if: ${{ needs.resolve.outputs.create_release == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.resolve.outputs.tag }}
           files: ${{ steps.bundle.outputs.dmg_path }}
@@ -265,7 +265,7 @@ jobs:
 
       - name: Attach Windows package to GitHub release
         if: ${{ needs.resolve.outputs.create_release == 'true' }}
-        uses: softprops/action-gh-release@da05d552573ad5aba039eaac05058a918a7bf631 # v2.2.2
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: ${{ needs.resolve.outputs.tag }}
           files: ${{ steps.bundle.outputs.installer_path }}
