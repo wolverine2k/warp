@@ -123,14 +123,12 @@ jobs:
 
           if [[ -n "$previous_tag" ]]; then
             commit_range="$previous_tag..$TAG"
-            changelog_url="https://github.com/${GITHUB_REPOSITORY}/compare/${previous_tag}...${TAG}"
           else
             if git rev-parse --verify --quiet "${TAG}^" >/dev/null; then
               commit_range="${TAG}^..${TAG}"
             else
               commit_range="$TAG"
             fi
-            changelog_url="https://github.com/${GITHUB_REPOSITORY}/commits/${TAG}"
           fi
 
           changelog_section=""
@@ -200,11 +198,6 @@ jobs:
               done
             fi
           fi
-
-          {
-            echo
-            echo "**Full Changelog**: ${changelog_url}"
-          } >> release-notes.md
 
       - name: Create or update GitHub release
         if: ${{ needs.resolve.outputs.create_release == 'true' }}
