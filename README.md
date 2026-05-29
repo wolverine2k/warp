@@ -35,6 +35,11 @@
 
 ## Bring Your Own Provider (BYOP)
 
+<a href="https://www.naresh.se">
+    <img width="1024" alt="Multi-Local LLM Support" src="images/multiLocal.jpg" />
+</a>
+&nbsp;
+
 Warp's Agent Mode supports **custom AI providers** alongside the built-in Warp cloud models. Configure multiple providers simultaneously and pick a specific provider and model per conversation — all from **Settings > AI > Custom AI Providers**.
 
 ### Supported Providers
