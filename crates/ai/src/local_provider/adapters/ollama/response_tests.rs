@@ -82,12 +82,12 @@ fn skip_create_task_suppresses_create_task_action() {
     );
     // Init + BeginTransaction only.
     assert_eq!(out.len(), 2);
-    assert!(!out
-        .iter()
-        .any(|ev| matches!(ev.r#type, Some(api::response_event::Type::ClientActions(ref ca))
-            if matches!(ca.actions[0].action,
-                Some(api::client_action::Action::CreateTask(_))
-            ))));
+    assert!(!out.iter().any(
+        |ev| matches!(ev.r#type, Some(api::response_event::Type::ClientActions(ref ca))
+        if matches!(ca.actions[0].action,
+            Some(api::client_action::Action::CreateTask(_))
+        ))
+    ));
 }
 
 #[test]
@@ -233,16 +233,18 @@ fn multiple_tool_calls_in_one_chunk_emit_separate_events() {
     let tool_calls: Vec<_> = out
         .iter()
         .filter_map(|e| match &e.r#type {
-            Some(api::response_event::Type::ClientActions(ca)) => ca.actions.first().and_then(|a| {
-                if let Some(api::client_action::Action::AddMessagesToTask(amt)) = &a.action {
-                    amt.messages.first().and_then(|m| match m.message.as_ref() {
-                        Some(api::message::Message::ToolCall(tc)) => Some(tc),
-                        _ => None,
-                    })
-                } else {
-                    None
-                }
-            }),
+            Some(api::response_event::Type::ClientActions(ca)) => {
+                ca.actions.first().and_then(|a| {
+                    if let Some(api::client_action::Action::AddMessagesToTask(amt)) = &a.action {
+                        amt.messages.first().and_then(|m| match m.message.as_ref() {
+                            Some(api::message::Message::ToolCall(tc)) => Some(tc),
+                            _ => None,
+                        })
+                    } else {
+                        None
+                    }
+                })
+            }
             _ => None,
         })
         .collect();
@@ -293,7 +295,9 @@ fn done_reason_length_maps_to_max_token_limit() {
     let finished = drive_to_done_reason("length");
     assert!(matches!(
         finished.reason,
-        Some(api::response_event::stream_finished::Reason::MaxTokenLimit(_))
+        Some(api::response_event::stream_finished::Reason::MaxTokenLimit(
+            _
+        ))
     ));
 }
 
@@ -373,7 +377,10 @@ fn premature_eof_produces_rollback_internal_error() {
 #[test]
 fn record_upstream_error_surfaces_when_no_done_reason() {
     let mut d = decoder();
-    feed(&mut d, r#"{"message":{"role":"assistant","content":""},"done":false}"#);
+    feed(
+        &mut d,
+        r#"{"message":{"role":"assistant","content":""},"done":false}"#,
+    );
     d.record_upstream_error("HTTP 503: model loading".into());
     let closing = d.finish();
     let finished = extract_finished(closing.last().unwrap());
@@ -390,8 +397,14 @@ fn record_upstream_error_surfaces_when_no_done_reason() {
 #[test]
 fn usage_from_done_chunk_merged_into_token_usage() {
     let mut d = decoder();
-    feed(&mut d, r#"{"model":"llama3.1","message":{"role":"assistant","content":"hi"},"done":false}"#);
-    feed(&mut d, r#"{"model":"llama3.1","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":50,"eval_count":120}"#);
+    feed(
+        &mut d,
+        r#"{"model":"llama3.1","message":{"role":"assistant","content":"hi"},"done":false}"#,
+    );
+    feed(
+        &mut d,
+        r#"{"model":"llama3.1","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":50,"eval_count":120}"#,
+    );
     let closing = d.finish();
     let finished = extract_finished(closing.last().unwrap());
     assert_eq!(finished.token_usage.len(), 1);
@@ -406,7 +419,10 @@ fn usage_from_done_chunk_merged_into_token_usage() {
 #[test]
 fn token_usage_model_defaults_to_ollama_when_chunk_omits_model() {
     let mut d = decoder();
-    feed(&mut d, r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":5,"eval_count":10}"#);
+    feed(
+        &mut d,
+        r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":5,"eval_count":10}"#,
+    );
     let closing = d.finish();
     let finished = extract_finished(closing.last().unwrap());
     assert_eq!(finished.token_usage[0].model_id, "ollama");
@@ -415,7 +431,10 @@ fn token_usage_model_defaults_to_ollama_when_chunk_omits_model() {
 #[test]
 fn token_usage_omitted_when_no_eval_counts() {
     let mut d = decoder();
-    feed(&mut d, r#"{"message":{"role":"assistant","content":"hi"},"done":true,"done_reason":"stop"}"#);
+    feed(
+        &mut d,
+        r#"{"message":{"role":"assistant","content":"hi"},"done":true,"done_reason":"stop"}"#,
+    );
     let closing = d.finish();
     let finished = extract_finished(closing.last().unwrap());
     // No usage when counts are zero (or absent).
@@ -427,9 +446,15 @@ fn token_usage_omitted_when_no_eval_counts() {
 #[test]
 fn post_done_feeds_are_no_ops() {
     let mut d = decoder();
-    feed(&mut d, r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}"#);
+    feed(
+        &mut d,
+        r#"{"message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}"#,
+    );
     assert!(d.is_terminal());
-    let stray = feed(&mut d, r#"{"message":{"role":"assistant","content":"ignored"},"done":false}"#);
+    let stray = feed(
+        &mut d,
+        r#"{"message":{"role":"assistant","content":"ignored"},"done":false}"#,
+    );
     assert_eq!(stray.len(), 0);
 }
 
@@ -439,6 +464,9 @@ fn empty_data_lines_silently_skipped() {
     let out_empty = feed(&mut d, "   ");
     assert!(out_empty.is_empty());
     // Followed by a real chunk, prelude still emits.
-    let out_chunk = feed(&mut d, r#"{"message":{"role":"assistant","content":""},"done":false}"#);
+    let out_chunk = feed(
+        &mut d,
+        r#"{"message":{"role":"assistant","content":""},"done":false}"#,
+    );
     assert_eq!(out_chunk.len(), 3); // just the prelude
 }

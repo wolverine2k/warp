@@ -47,9 +47,7 @@ pub fn resolve(
     // 2. Catalog lookup. Non-Ollama uses the api_type → catalog_provider
     //    map; Ollama is a union of open-weights entries across providers.
     let catalog_match = match api_type {
-        AgentProviderApiType::Ollama => {
-            catalog.iter().find(|m| m.open_weights && m.id == model_id)
-        }
+        AgentProviderApiType::Ollama => catalog.iter().find(|m| m.open_weights && m.id == model_id),
         other => {
             let catalog_provider = lookup_catalog_provider(other);
             match catalog_provider {
@@ -163,9 +161,7 @@ fn heuristic_pdf(api_type: AgentProviderApiType, model_id: &str) -> bool {
                 || id.starts_with("claude-sonnet-5")
         }
         // Gemini 1.5+ accepts PDFs.
-        AgentProviderApiType::Gemini => {
-            id.starts_with("gemini-1.5") || id.starts_with("gemini-2")
-        }
+        AgentProviderApiType::Gemini => id.starts_with("gemini-1.5") || id.starts_with("gemini-2"),
         // Ollama doesn't have a native PDF input shape (no document field).
         AgentProviderApiType::Ollama => false,
         AgentProviderApiType::DeepSeek => false,
@@ -182,9 +178,7 @@ fn heuristic_audio(api_type: AgentProviderApiType, model_id: &str) -> bool {
         // Anthropic does not natively accept audio inputs as of this writing.
         AgentProviderApiType::Anthropic => false,
         // Gemini 1.5+ accepts audio.
-        AgentProviderApiType::Gemini => {
-            id.starts_with("gemini-1.5") || id.starts_with("gemini-2")
-        }
+        AgentProviderApiType::Gemini => id.starts_with("gemini-1.5") || id.starts_with("gemini-2"),
         // Ollama has no native audio shape.
         AgentProviderApiType::Ollama => false,
         AgentProviderApiType::DeepSeek => false,

@@ -137,11 +137,7 @@ impl DeepSeekSseDecoder {
 
     /// Feed one SSE data line. `event_name` is ignored — DeepSeek's SSE
     /// stream uses anonymous `data:` chunks identical to OpenAI's framing.
-    pub fn feed_event(
-        &mut self,
-        _event_name: Option<&str>,
-        data: &str,
-    ) -> Vec<api::ResponseEvent> {
+    pub fn feed_event(&mut self, _event_name: Option<&str>, data: &str) -> Vec<api::ResponseEvent> {
         if matches!(self.state, State::Done | State::Errored) {
             return vec![];
         }
@@ -186,10 +182,8 @@ impl DeepSeekSseDecoder {
         }
 
         if let Some(usage) = chunk.usage {
-            self.captured_input_tokens =
-                usage.prompt_tokens.max(self.captured_input_tokens);
-            self.captured_output_tokens =
-                usage.completion_tokens.max(self.captured_output_tokens);
+            self.captured_input_tokens = usage.prompt_tokens.max(self.captured_input_tokens);
+            self.captured_output_tokens = usage.completion_tokens.max(self.captured_output_tokens);
         }
 
         if let Some(choice) = chunk.choices.into_iter().next() {
@@ -449,11 +443,7 @@ impl DeepSeekSseDecoder {
 // ---- StreamDecoder trait impl ----
 
 impl crate::local_provider::adapters::StreamDecoder for DeepSeekSseDecoder {
-    fn feed_event(
-        &mut self,
-        event_name: Option<&str>,
-        data: &str,
-    ) -> Vec<api::ResponseEvent> {
+    fn feed_event(&mut self, event_name: Option<&str>, data: &str) -> Vec<api::ResponseEvent> {
         Self::feed_event(self, event_name, data)
     }
     fn finish(&mut self) -> Vec<api::ResponseEvent> {

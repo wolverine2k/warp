@@ -247,8 +247,7 @@ impl View for AttachmentChip {
                 .with_child(icon_and_label);
             chip_content.add_child(ChildView::new(&remove_button).finish());
 
-            let border =
-                Border::all(CHIP_BORDER_WIDTH).with_border_color(border_color);
+            let border = Border::all(CHIP_BORDER_WIDTH).with_border_color(border_color);
             let mut chip = chip_container(chip_content.finish(), Some(border), appearance);
             if state.is_hovered() {
                 chip = chip.with_background(theme.surface_2());
@@ -257,8 +256,11 @@ impl View for AttachmentChip {
 
             if state.is_hovered() {
                 if let Some(ref text) = tooltip_text {
-                    let tooltip_el =
-                        appearance.ui_builder().tool_tip(text.clone()).build().finish();
+                    let tooltip_el = appearance
+                        .ui_builder()
+                        .tool_tip(text.clone())
+                        .build()
+                        .finish();
                     let mut stack = Stack::new().with_child(chip_el);
                     stack.add_positioned_overlay_child(tooltip_el, chip_tooltip_positioning());
                     return stack.finish();

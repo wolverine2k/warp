@@ -127,11 +127,7 @@ impl OllamaDecoder {
     /// Feed one NDJSON line. `event_name` is ignored — Ollama's stream
     /// has no SSE event-name framing; the discriminator is the body
     /// itself.
-    pub fn feed_event(
-        &mut self,
-        _event_name: Option<&str>,
-        data: &str,
-    ) -> Vec<api::ResponseEvent> {
+    pub fn feed_event(&mut self, _event_name: Option<&str>, data: &str) -> Vec<api::ResponseEvent> {
         if matches!(self.state, State::Done | State::Errored) {
             return vec![];
         }
@@ -200,10 +196,7 @@ impl OllamaDecoder {
         };
         out.push(build_client_action_event(closing));
 
-        let reason = match (
-            self.captured_done_reason.take(),
-            self.upstream_error.take(),
-        ) {
+        let reason = match (self.captured_done_reason.take(), self.upstream_error.take()) {
             (Some(r), _) => map_ollama_done_reason(&r),
             (None, Some(msg)) => internal_error_reason(&msg),
             (None, None) => internal_error_reason("stream ended without done:true"),
@@ -309,11 +302,7 @@ impl OllamaDecoder {
     }
 }
 
-fn emit_tool_call(
-    task_id: &str,
-    tc: &OllamaInboundToolCall,
-    out: &mut Vec<api::ResponseEvent>,
-) {
+fn emit_tool_call(task_id: &str, tc: &OllamaInboundToolCall, out: &mut Vec<api::ResponseEvent>) {
     // Ollama doesn't send tool_call ids; synthesize one. The controller
     // keys `action_results` by this id; the translator (request.rs) will
     // omit the id on the way back out per Ollama's native shape.
@@ -340,11 +329,7 @@ fn map_ollama_done_reason(reason: &str) -> api::response_event::stream_finished:
 // ---- StreamDecoder trait impl ----
 
 impl crate::local_provider::adapters::StreamDecoder for OllamaDecoder {
-    fn feed_event(
-        &mut self,
-        event_name: Option<&str>,
-        data: &str,
-    ) -> Vec<api::ResponseEvent> {
+    fn feed_event(&mut self, event_name: Option<&str>, data: &str) -> Vec<api::ResponseEvent> {
         Self::feed_event(self, event_name, data)
     }
     fn finish(&mut self) -> Vec<api::ResponseEvent> {

@@ -60,7 +60,10 @@ pub fn byop_env_for_harness(
             if !matches!(provider.api_type, AgentProviderApiType::Anthropic) {
                 return env;
             }
-            env.insert(OsString::from("ANTHROPIC_BASE_URL"), OsString::from(base_url));
+            env.insert(
+                OsString::from("ANTHROPIC_BASE_URL"),
+                OsString::from(base_url),
+            );
             env.insert(OsString::from("ANTHROPIC_API_KEY"), OsString::from(api_key));
         }
         // Codex + OpenAi-family — set base_url, key, and model id.

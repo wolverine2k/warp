@@ -196,11 +196,7 @@ impl AnthropicSseDecoder {
     /// provides the variant discriminator regardless. Anthropic sets both
     /// in lockstep; we deserialize via the `type` tag and ignore
     /// `event_name` as a redundancy check.
-    pub fn feed_event(
-        &mut self,
-        _event_name: Option<&str>,
-        data: &str,
-    ) -> Vec<api::ResponseEvent> {
+    pub fn feed_event(&mut self, _event_name: Option<&str>, data: &str) -> Vec<api::ResponseEvent> {
         if matches!(self.state, State::Done | State::Errored) {
             return vec![];
         }
@@ -265,10 +261,7 @@ impl AnthropicSseDecoder {
         };
         out.extend(self.build_action(closing));
 
-        let reason = match (
-            self.captured_stop_reason.take(),
-            self.upstream_error.take(),
-        ) {
+        let reason = match (self.captured_stop_reason.take(), self.upstream_error.take()) {
             (Some(stop), _) => map_anthropic_stop_reason(&stop),
             (None, Some(msg)) => internal_error_reason(&msg),
             (None, None) => internal_error_reason("stream ended without finish_reason"),
@@ -350,13 +343,14 @@ impl AnthropicSseDecoder {
                         text,
                     }
                 }
-                (
-                    BlockKind::Thinking,
-                    StreamContentDelta::ThinkingDelta { thinking },
-                ) if !thinking.is_empty() => DeltaAction::AppendText {
-                    kind: MessageKind::AgentReasoning,
-                    text: thinking,
-                },
+                (BlockKind::Thinking, StreamContentDelta::ThinkingDelta { thinking })
+                    if !thinking.is_empty() =>
+                {
+                    DeltaAction::AppendText {
+                        kind: MessageKind::AgentReasoning,
+                        text: thinking,
+                    }
+                }
                 (
                     BlockKind::ToolUse { args_acc, .. },
                     StreamContentDelta::InputJsonDelta { partial_json },
@@ -407,11 +401,7 @@ impl AnthropicSseDecoder {
         }
     }
 
-    fn on_message_delta(
-        &mut self,
-        delta: MessageDeltaPayload,
-        usage: Option<MessageDeltaUsage>,
-    ) {
+    fn on_message_delta(&mut self, delta: MessageDeltaPayload, usage: Option<MessageDeltaUsage>) {
         if let Some(reason) = delta.stop_reason {
             if self.captured_stop_reason.is_none() {
                 self.captured_stop_reason = Some(reason);
@@ -552,11 +542,7 @@ impl AnthropicSseDecoder {
 // ---------- trait impl ----------
 
 impl crate::local_provider::adapters::StreamDecoder for AnthropicSseDecoder {
-    fn feed_event(
-        &mut self,
-        event_name: Option<&str>,
-        data: &str,
-    ) -> Vec<api::ResponseEvent> {
+    fn feed_event(&mut self, event_name: Option<&str>, data: &str) -> Vec<api::ResponseEvent> {
         Self::feed_event(self, event_name, data)
     }
     fn finish(&mut self) -> Vec<api::ResponseEvent> {
@@ -655,8 +641,8 @@ fn build_tool_call_event(
             Ok(tc) => tc,
             Err(e) => {
                 let body = format!(
-                    "I tried to call `{name}` but its arguments were unusable: {e}\n\nRaw args: {args}"
-                );
+                "I tried to call `{name}` but its arguments were unusable: {e}\n\nRaw args: {args}"
+            );
                 let err_message = api::Message {
                     id: Uuid::new_v4().to_string(),
                     message: Some(api::message::Message::AgentOutput(

@@ -52,9 +52,7 @@ pub fn filter_models_for_api_type(
     models: &[CatalogModel],
 ) -> Vec<&CatalogModel> {
     match api_type {
-        AgentProviderApiType::Ollama => {
-            models.iter().filter(|m| m.open_weights).collect()
-        }
+        AgentProviderApiType::Ollama => models.iter().filter(|m| m.open_weights).collect(),
         AgentProviderApiType::OpenAiResp => Vec::new(),
         other => match lookup_catalog_provider(other) {
             Some(provider) => models

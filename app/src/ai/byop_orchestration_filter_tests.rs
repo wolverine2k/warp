@@ -84,7 +84,9 @@ fn reachability_rejects_localhost() {
 fn reachability_rejects_loopback_ipv4() {
     assert!(!base_url_reachable_from_remote("http://127.0.0.1:8080/v1"));
     assert!(!base_url_reachable_from_remote("http://127.0.0.2:8080"));
-    assert!(!base_url_reachable_from_remote("http://127.255.255.255:1234"));
+    assert!(!base_url_reachable_from_remote(
+        "http://127.255.255.255:1234"
+    ));
 }
 
 #[test]
@@ -109,7 +111,9 @@ fn reachability_rejects_rfc1918_172_range() {
 #[test]
 fn reachability_rejects_rfc1918_192_168_range() {
     assert!(!base_url_reachable_from_remote("http://192.168.0.1:8080"));
-    assert!(!base_url_reachable_from_remote("http://192.168.255.255:443"));
+    assert!(!base_url_reachable_from_remote(
+        "http://192.168.255.255:443"
+    ));
     assert!(base_url_reachable_from_remote("http://192.169.0.1:8080"));
 }
 
@@ -121,14 +125,22 @@ fn reachability_rejects_local_tld() {
 
 #[test]
 fn reachability_accepts_public_hostname() {
-    assert!(base_url_reachable_from_remote("https://api.deepseek.com/v1"));
-    assert!(base_url_reachable_from_remote("https://my-llm.example.com:8443"));
-    assert!(base_url_reachable_from_remote("https://api.anthropic.com/v1"));
+    assert!(base_url_reachable_from_remote(
+        "https://api.deepseek.com/v1"
+    ));
+    assert!(base_url_reachable_from_remote(
+        "https://my-llm.example.com:8443"
+    ));
+    assert!(base_url_reachable_from_remote(
+        "https://api.anthropic.com/v1"
+    ));
 }
 
 #[test]
 fn reachability_accepts_public_ip() {
-    assert!(base_url_reachable_from_remote("http://203.0.113.50:8080/v1"));
+    assert!(base_url_reachable_from_remote(
+        "http://203.0.113.50:8080/v1"
+    ));
     assert!(base_url_reachable_from_remote("http://8.8.8.8:443"));
 }
 
@@ -155,13 +167,28 @@ fn harness_normalize_treats_empty_as_native() {
 
 #[test]
 fn harness_normalize_case_insensitive() {
-    assert!(byop_harness_compatible(AgentProviderApiType::Anthropic, "Claude"));
-    assert!(byop_harness_compatible(AgentProviderApiType::Anthropic, "CLAUDE"));
-    assert!(byop_harness_compatible(AgentProviderApiType::OpenAi, "Codex"));
+    assert!(byop_harness_compatible(
+        AgentProviderApiType::Anthropic,
+        "Claude"
+    ));
+    assert!(byop_harness_compatible(
+        AgentProviderApiType::Anthropic,
+        "CLAUDE"
+    ));
+    assert!(byop_harness_compatible(
+        AgentProviderApiType::OpenAi,
+        "Codex"
+    ));
 }
 
 #[test]
 fn harness_unknown_string_treated_as_native() {
-    assert!(byop_harness_compatible(AgentProviderApiType::Ollama, "future-harness"));
-    assert!(byop_harness_compatible(AgentProviderApiType::Anthropic, "xyzzy"));
+    assert!(byop_harness_compatible(
+        AgentProviderApiType::Ollama,
+        "future-harness"
+    ));
+    assert!(byop_harness_compatible(
+        AgentProviderApiType::Anthropic,
+        "xyzzy"
+    ));
 }

@@ -670,7 +670,12 @@ impl AgentProvidersWidget {
         appearance: &Appearance,
     ) -> Box<dyn Element> {
         let editor_view = ChildView::new(&card.remote_secret_name_editor).finish();
-        let field = field_block("Remote managed secret", editor_view, label_color, appearance);
+        let field = field_block(
+            "Remote managed secret",
+            editor_view,
+            label_color,
+            appearance,
+        );
 
         let auto_create_button = Self::render_card_button(
             "Auto-create".to_string(),
@@ -1608,8 +1613,7 @@ impl AgentProvidersWidget {
             && provider.available_for_orchestration
             && crate::ai::byop_orchestration_filter::base_url_reachable_from_remote(
                 &provider.base_url,
-            )
-        {
+            ) {
             Some(Self::render_remote_secret_field(
                 provider_index,
                 card,

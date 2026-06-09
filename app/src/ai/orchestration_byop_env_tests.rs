@@ -22,7 +22,10 @@ fn provider_with(api_type: AgentProviderApiType, base_url: &str) -> AgentProvide
 
 #[test]
 fn claude_anthropic_sets_base_url_and_api_key() {
-    let provider = provider_with(AgentProviderApiType::Anthropic, "https://api.anthropic.example/v1");
+    let provider = provider_with(
+        AgentProviderApiType::Anthropic,
+        "https://api.anthropic.example/v1",
+    );
     let env = byop_env_for_harness(&provider, "sk-test", "claude-sonnet", Harness::Claude);
 
     assert_eq!(
@@ -39,7 +42,10 @@ fn claude_anthropic_sets_base_url_and_api_key() {
 
 #[test]
 fn codex_openai_sets_three_env_vars() {
-    let provider = provider_with(AgentProviderApiType::OpenAi, "https://api.openai.example/v1");
+    let provider = provider_with(
+        AgentProviderApiType::OpenAi,
+        "https://api.openai.example/v1",
+    );
     let env = byop_env_for_harness(&provider, "sk-openai", "gpt-4o", Harness::Codex);
 
     assert_eq!(
@@ -58,7 +64,10 @@ fn codex_openai_sets_three_env_vars() {
 
 #[test]
 fn codex_openai_resp_works() {
-    let provider = provider_with(AgentProviderApiType::OpenAiResp, "https://my-llm.example/v1");
+    let provider = provider_with(
+        AgentProviderApiType::OpenAiResp,
+        "https://my-llm.example/v1",
+    );
     let env = byop_env_for_harness(&provider, "sk-resp", "gpt-4o-mini", Harness::Codex);
 
     assert!(env.contains_key(&OsString::from("OPENAI_BASE_URL")));
@@ -68,7 +77,10 @@ fn codex_openai_resp_works() {
 
 #[test]
 fn codex_deepseek_works() {
-    let provider = provider_with(AgentProviderApiType::DeepSeek, "https://api.deepseek.example/v1");
+    let provider = provider_with(
+        AgentProviderApiType::DeepSeek,
+        "https://api.deepseek.example/v1",
+    );
     let env = byop_env_for_harness(&provider, "sk-deepseek", "deepseek-coder", Harness::Codex);
 
     assert!(env.contains_key(&OsString::from("OPENAI_BASE_URL")));
@@ -81,7 +93,10 @@ fn codex_deepseek_works() {
 
 #[test]
 fn opencode_openai_omits_model_env_var() {
-    let provider = provider_with(AgentProviderApiType::OpenAi, "https://api.openai.example/v1");
+    let provider = provider_with(
+        AgentProviderApiType::OpenAi,
+        "https://api.openai.example/v1",
+    );
     let env = byop_env_for_harness(&provider, "sk-openai", "gpt-4o", Harness::OpenCode);
 
     assert!(env.contains_key(&OsString::from("OPENAI_BASE_URL")));
@@ -92,8 +107,16 @@ fn opencode_openai_omits_model_env_var() {
 
 #[test]
 fn opencode_deepseek_works() {
-    let provider = provider_with(AgentProviderApiType::DeepSeek, "https://api.deepseek.example/v1");
-    let env = byop_env_for_harness(&provider, "sk-deepseek", "deepseek-coder", Harness::OpenCode);
+    let provider = provider_with(
+        AgentProviderApiType::DeepSeek,
+        "https://api.deepseek.example/v1",
+    );
+    let env = byop_env_for_harness(
+        &provider,
+        "sk-deepseek",
+        "deepseek-coder",
+        Harness::OpenCode,
+    );
 
     assert!(env.contains_key(&OsString::from("OPENAI_BASE_URL")));
     assert!(env.contains_key(&OsString::from("OPENAI_API_KEY")));
@@ -110,7 +133,10 @@ fn claude_with_openai_api_returns_empty() {
 
 #[test]
 fn codex_with_anthropic_api_returns_empty() {
-    let provider = provider_with(AgentProviderApiType::Anthropic, "https://api.anthropic.example/v1");
+    let provider = provider_with(
+        AgentProviderApiType::Anthropic,
+        "https://api.anthropic.example/v1",
+    );
     let env = byop_env_for_harness(&provider, "sk-test", "claude-sonnet", Harness::Codex);
     assert!(env.is_empty());
 }
@@ -135,9 +161,15 @@ fn gemini_harness_uses_settings_json_not_env_vars() {
     // (provider, Harness::Gemini) combination. The settings.json write
     // happens in app/src/ai/agent_sdk/driver/harness/gemini.rs via
     // prepare_gemini_environment_config(..., byop_config).
-    let provider = provider_with(AgentProviderApiType::Gemini, "https://generativelanguage.example/v1beta");
+    let provider = provider_with(
+        AgentProviderApiType::Gemini,
+        "https://generativelanguage.example/v1beta",
+    );
     let env = byop_env_for_harness(&provider, "sk-test", "gemini-1.5", Harness::Gemini);
-    assert!(env.is_empty(), "Gemini uses settings.json — env bag must stay empty");
+    assert!(
+        env.is_empty(),
+        "Gemini uses settings.json — env bag must stay empty"
+    );
 }
 
 #[test]
@@ -152,7 +184,10 @@ fn oz_harness_returns_empty_for_all_api_types() {
     ] {
         let provider = provider_with(api_type, "https://api.example.com/v1");
         let env = byop_env_for_harness(&provider, "sk-test", "m", Harness::Oz);
-        assert!(env.is_empty(), "Oz harness should return empty for {api_type:?}");
+        assert!(
+            env.is_empty(),
+            "Oz harness should return empty for {api_type:?}"
+        );
     }
 }
 
@@ -172,14 +207,20 @@ fn empty_base_url_returns_empty() {
 
 #[test]
 fn empty_api_key_returns_empty() {
-    let provider = provider_with(AgentProviderApiType::Anthropic, "https://api.anthropic.example/v1");
+    let provider = provider_with(
+        AgentProviderApiType::Anthropic,
+        "https://api.anthropic.example/v1",
+    );
     let env = byop_env_for_harness(&provider, "", "claude", Harness::Claude);
     assert!(env.is_empty());
 }
 
 #[test]
 fn codex_with_empty_model_id_skips_model_env_var() {
-    let provider = provider_with(AgentProviderApiType::OpenAi, "https://api.openai.example/v1");
+    let provider = provider_with(
+        AgentProviderApiType::OpenAi,
+        "https://api.openai.example/v1",
+    );
     let env = byop_env_for_harness(&provider, "sk-test", "", Harness::Codex);
     assert!(env.contains_key(&OsString::from("OPENAI_BASE_URL")));
     assert!(env.contains_key(&OsString::from("OPENAI_API_KEY")));
@@ -194,7 +235,10 @@ fn whitespace_only_api_key_is_rejected() {
     // must come back empty so the CLI falls back to its default (likely
     // failing fast at the next auth call instead of leaking a malformed
     // header).
-    let provider = provider_with(AgentProviderApiType::Anthropic, "https://api.anthropic.example/v1");
+    let provider = provider_with(
+        AgentProviderApiType::Anthropic,
+        "https://api.anthropic.example/v1",
+    );
     let env = byop_env_for_harness(&provider, "   ", "claude", Harness::Claude);
     assert!(env.is_empty());
 }
@@ -204,7 +248,10 @@ fn whitespace_padded_inputs_are_trimmed_before_insertion() {
     // base_url, api_key, and model_id all get a `.trim()` defensively so
     // a copy/pasted credential with surrounding whitespace works as the
     // user expected.
-    let provider = provider_with(AgentProviderApiType::OpenAi, "  https://api.openai.example/v1  ");
+    let provider = provider_with(
+        AgentProviderApiType::OpenAi,
+        "  https://api.openai.example/v1  ",
+    );
     let env = byop_env_for_harness(&provider, "  sk-test  ", "  gpt-4o  ", Harness::Codex);
     assert_eq!(
         env.get(&OsString::from("OPENAI_BASE_URL")),

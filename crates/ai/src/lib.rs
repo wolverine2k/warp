@@ -3,8 +3,8 @@ pub mod api_keys;
 pub mod attachments;
 pub mod aws_credentials;
 pub mod capabilities;
-pub mod llm_id;
 pub mod catalog;
+pub mod llm_id;
 pub mod local_provider;
 
 pub use llm_id::LLMId;

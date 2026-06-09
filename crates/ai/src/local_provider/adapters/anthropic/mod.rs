@@ -19,18 +19,19 @@ pub mod response;
 pub mod wire;
 
 #[cfg(test)]
+#[path = "list_models_response_tests.rs"]
+mod list_models_tests;
+#[cfg(test)]
 #[path = "request_tests.rs"]
 mod request_tests;
 #[cfg(test)]
 #[path = "response_tests.rs"]
 mod response_tests;
-#[cfg(test)]
-#[path = "list_models_response_tests.rs"]
-mod list_models_tests;
 
 use super::{
     AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
-    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError, SummarizerInput,
+    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError,
+    SummarizerInput,
 };
 
 use request::{compose_anthropic_messages_request, resolve_max_tokens};
@@ -155,7 +156,10 @@ impl ProviderAdapter for AnthropicAdapter {
     ) -> Result<reqwest::RequestBuilder, AdapterError> {
         cfg.validate()?;
         let url = cfg.anthropic_models_url()?;
-        Ok(apply_anthropic_headers(http.get(url), cfg.api_key.as_deref()))
+        Ok(apply_anthropic_headers(
+            http.get(url),
+            cfg.api_key.as_deref(),
+        ))
     }
 
     fn build_list_models_request(
@@ -176,17 +180,21 @@ impl ProviderAdapter for AnthropicAdapter {
                 q.append_pair("after_id", c);
             }
         }
-        Ok(apply_anthropic_headers(http.get(url), cfg.api_key.as_deref()))
+        Ok(apply_anthropic_headers(
+            http.get(url),
+            cfg.api_key.as_deref(),
+        ))
     }
 
-    fn parse_list_models_response(
-        &self,
-        body: &str,
-    ) -> Result<ListModelsPage, AdapterError> {
+    fn parse_list_models_response(&self, body: &str) -> Result<ListModelsPage, AdapterError> {
         let parsed: AnthropicModelsListResponse = serde_json::from_str(body)?;
         // `next_cursor` is `Some(last_id)` IFF `has_more: true`. Anthropic
         // emits `last_id` on the final page too — we must ignore it there.
-        let next_cursor = if parsed.has_more { parsed.last_id } else { None };
+        let next_cursor = if parsed.has_more {
+            parsed.last_id
+        } else {
+            None
+        };
         let models = parsed
             .data
             .into_iter()
@@ -197,7 +205,10 @@ impl ProviderAdapter for AnthropicAdapter {
                 max_output_tokens: None,
             })
             .collect();
-        Ok(ListModelsPage { models, next_cursor })
+        Ok(ListModelsPage {
+            models,
+            next_cursor,
+        })
     }
 }
 
@@ -275,4 +286,3 @@ fn build_summarizer_body(
         stream: false,
     }
 }
-

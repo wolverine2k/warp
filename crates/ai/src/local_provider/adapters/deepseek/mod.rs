@@ -20,18 +20,19 @@ pub mod response;
 pub mod wire;
 
 #[cfg(test)]
+#[path = "list_models_response_tests.rs"]
+mod list_models_tests;
+#[cfg(test)]
 #[path = "request_tests.rs"]
 mod request_tests;
 #[cfg(test)]
 #[path = "response_tests.rs"]
 mod response_tests;
-#[cfg(test)]
-#[path = "list_models_response_tests.rs"]
-mod list_models_tests;
 
 use super::{
     AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
-    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError, SummarizerInput,
+    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError,
+    SummarizerInput,
 };
 
 use request::compose_deepseek_chat_request;
@@ -119,7 +120,11 @@ impl ProviderAdapter for DeepSeekAdapter {
             ))
         })?;
         if let Some(err) = parsed.error {
-            let kind = if err.kind.is_empty() { "error".to_string() } else { err.kind };
+            let kind = if err.kind.is_empty() {
+                "error".to_string()
+            } else {
+                err.kind
+            };
             return Err(SummarizerError::UpstreamErrorEnvelope(format!(
                 "{}: {}",
                 kind, err.message
@@ -147,7 +152,10 @@ impl ProviderAdapter for DeepSeekAdapter {
     ) -> Result<reqwest::RequestBuilder, AdapterError> {
         cfg.validate()?;
         let url = cfg.models_list_url()?;
-        Ok(apply_deepseek_headers(http.get(url), cfg.api_key.as_deref()))
+        Ok(apply_deepseek_headers(
+            http.get(url),
+            cfg.api_key.as_deref(),
+        ))
     }
 
     fn build_list_models_request(
@@ -158,13 +166,13 @@ impl ProviderAdapter for DeepSeekAdapter {
     ) -> Result<reqwest::RequestBuilder, AdapterError> {
         cfg.validate()?;
         let url = cfg.models_list_url()?;
-        Ok(apply_deepseek_headers(http.get(url), cfg.api_key.as_deref()))
+        Ok(apply_deepseek_headers(
+            http.get(url),
+            cfg.api_key.as_deref(),
+        ))
     }
 
-    fn parse_list_models_response(
-        &self,
-        body: &str,
-    ) -> Result<ListModelsPage, AdapterError> {
+    fn parse_list_models_response(&self, body: &str) -> Result<ListModelsPage, AdapterError> {
         let parsed: wire::DeepSeekModelsListResponse = serde_json::from_str(body)?;
         let models = parsed
             .data
@@ -176,7 +184,10 @@ impl ProviderAdapter for DeepSeekAdapter {
                 max_output_tokens: None,
             })
             .collect();
-        Ok(ListModelsPage { models, next_cursor: None })
+        Ok(ListModelsPage {
+            models,
+            next_cursor: None,
+        })
     }
 }
 

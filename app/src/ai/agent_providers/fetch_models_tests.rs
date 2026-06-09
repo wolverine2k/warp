@@ -375,11 +375,7 @@ fn enrich_fills_missing_display_name() {
         max_output_tokens: None,
     };
     let catalog = vec![catalog_entry("anthropic", "claude-sonnet-4-6")];
-    let enriched = enrich_with_catalog(
-        vec![d.clone()],
-        AgentProviderApiType::Anthropic,
-        &catalog,
-    );
+    let enriched = enrich_with_catalog(vec![d.clone()], AgentProviderApiType::Anthropic, &catalog);
     assert_eq!(
         enriched[0].display_name.as_deref(),
         Some("Display claude-sonnet-4-6")
@@ -397,8 +393,7 @@ fn enrich_does_not_overwrite_existing_values() {
         max_output_tokens: Some(11),
     };
     let catalog = vec![catalog_entry("anthropic", "claude-sonnet-4-6")];
-    let enriched =
-        enrich_with_catalog(vec![d], AgentProviderApiType::Anthropic, &catalog);
+    let enriched = enrich_with_catalog(vec![d], AgentProviderApiType::Anthropic, &catalog);
     assert_eq!(enriched[0].display_name.as_deref(), Some("User-set name"));
     assert_eq!(enriched[0].context_window, Some(99));
     assert_eq!(enriched[0].max_output_tokens, Some(11));
@@ -412,7 +407,6 @@ fn enrich_with_empty_catalog_is_noop() {
         context_window: None,
         max_output_tokens: None,
     };
-    let enriched =
-        enrich_with_catalog(vec![d.clone()], AgentProviderApiType::Anthropic, &[]);
+    let enriched = enrich_with_catalog(vec![d.clone()], AgentProviderApiType::Anthropic, &[]);
     assert_eq!(enriched[0].display_name, None);
 }

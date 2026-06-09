@@ -18,7 +18,8 @@ fn tiny_png() -> Vec<u8> {
     // workspace dep).
     use image::{ImageBuffer, ImageFormat, Rgba};
     use std::io::Cursor;
-    let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_pixel(1, 1, Rgba([255, 255, 255, 255]));
+    let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+        ImageBuffer::from_pixel(1, 1, Rgba([255, 255, 255, 255]));
     let mut buf = Vec::new();
     img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Png)
         .expect("1x1 PNG encode must succeed");
@@ -71,8 +72,8 @@ fn image_chip_with_thumbnail_renders_thumbnail() {
     assert!(!decoded.is_empty(), "decoded thumbnail must have bytes");
 
     // Re-decode the output to confirm it is a valid PNG.
-    let round_tripped = image::load_from_memory(&decoded)
-        .expect("thumbnail output must be a valid image");
+    let round_tripped =
+        image::load_from_memory(&decoded).expect("thumbnail output must be a valid image");
     assert!(
         round_tripped.width() <= THUMBNAIL_DIM,
         "thumbnail width must be ≤ THUMBNAIL_DIM"
@@ -187,6 +188,10 @@ fn decode_thumbnail_resizes_to_fit() {
         THUMBNAIL_DIM
     );
     // The 200×100 image (ratio 2:1) resized to fit 128×128 should have width=128, height=64.
-    assert_eq!(out.width(), 128, "width should be exactly 128 for 2:1 source");
+    assert_eq!(
+        out.width(),
+        128,
+        "width should be exactly 128 for 2:1 source"
+    );
     assert_eq!(out.height(), 64, "height should be 64 for 2:1 source");
 }

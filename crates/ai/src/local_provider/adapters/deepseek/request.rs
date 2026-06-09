@@ -144,8 +144,7 @@ pub fn compose_deepseek_chat_request(
         });
     }
 
-    let messages: Vec<DeepSeekChatMessage> =
-        staged.into_iter().map(|s| s.finalize()).collect();
+    let messages: Vec<DeepSeekChatMessage> = staged.into_iter().map(|s| s.finalize()).collect();
 
     DeepSeekChatRequest {
         model: cfg.model_id.clone(),
@@ -267,8 +266,7 @@ fn push_proto_message(out: &mut Vec<StagedMessage>, proto_msg: &api::Message) {
                 // Stringify args — DeepSeek expects function.arguments as
                 // a JSON STRING, matching OpenAI's convention (not Ollama's
                 // or Gemini's object form).
-                let args_string =
-                    serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string());
+                let args_string = serde_json::to_string(&args).unwrap_or_else(|_| "{}".to_string());
                 out.push(StagedMessage {
                     role: DeepSeekRole::Assistant,
                     content: None,

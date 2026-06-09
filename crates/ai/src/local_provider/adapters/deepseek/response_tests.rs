@@ -192,8 +192,7 @@ fn reasoning_streaming_emits_agent_reasoning_message() {
     // First reasoning chunk: AddMessagesToTask with AgentReasoning.
     let first_reasoning_ev = events.iter().find_map(|ev| match &ev.r#type {
         Some(api::response_event::Type::ClientActions(ca)) => {
-            if let Some(api::client_action::Action::AddMessagesToTask(amt)) =
-                &ca.actions[0].action
+            if let Some(api::client_action::Action::AddMessagesToTask(amt)) = &ca.actions[0].action
             {
                 amt.messages.first().and_then(|m| match m.message.as_ref() {
                     Some(api::message::Message::AgentReasoning(ar)) => Some(ar.reasoning.clone()),
@@ -262,12 +261,18 @@ fn reasoning_then_content_emits_distinct_messages() {
 
     // Must have two distinct AddMessages events: one AgentReasoning, one AgentOutput.
     assert_eq!(add_messages.len(), 2, "expected two distinct message opens");
-    let has_reasoning = add_messages
-        .iter()
-        .any(|m| matches!(m.message.as_ref(), Some(api::message::Message::AgentReasoning(_))));
-    let has_output = add_messages
-        .iter()
-        .any(|m| matches!(m.message.as_ref(), Some(api::message::Message::AgentOutput(_))));
+    let has_reasoning = add_messages.iter().any(|m| {
+        matches!(
+            m.message.as_ref(),
+            Some(api::message::Message::AgentReasoning(_))
+        )
+    });
+    let has_output = add_messages.iter().any(|m| {
+        matches!(
+            m.message.as_ref(),
+            Some(api::message::Message::AgentOutput(_))
+        )
+    });
     assert!(has_reasoning, "expected an AgentReasoning message");
     assert!(has_output, "expected an AgentOutput message");
 
@@ -276,12 +281,22 @@ fn reasoning_then_content_emits_distinct_messages() {
     // two slots into a single message_id field, this test would catch it.
     let reasoning_id = &add_messages
         .iter()
-        .find(|m| matches!(m.message.as_ref(), Some(api::message::Message::AgentReasoning(_))))
+        .find(|m| {
+            matches!(
+                m.message.as_ref(),
+                Some(api::message::Message::AgentReasoning(_))
+            )
+        })
         .unwrap()
         .id;
     let output_id = &add_messages
         .iter()
-        .find(|m| matches!(m.message.as_ref(), Some(api::message::Message::AgentOutput(_))))
+        .find(|m| {
+            matches!(
+                m.message.as_ref(),
+                Some(api::message::Message::AgentOutput(_))
+            )
+        })
         .unwrap()
         .id;
     assert_ne!(
@@ -317,7 +332,10 @@ fn interleaved_reasoning_and_content_still_dispatches_correctly() {
         .collect();
 
     assert_eq!(add_msgs.len(), 2);
-    assert!(matches!(add_msgs[0], api::message::Message::AgentReasoning(_)));
+    assert!(matches!(
+        add_msgs[0],
+        api::message::Message::AgentReasoning(_)
+    ));
     assert!(matches!(add_msgs[1], api::message::Message::AgentOutput(_)));
 }
 
@@ -331,11 +349,13 @@ fn empty_reasoning_content_silently_skipped() {
     assert_eq!(out.len(), 3, "expected only prelude, got {out:#?}");
     let has_reasoning = out.iter().any(|ev| match &ev.r#type {
         Some(api::response_event::Type::ClientActions(ca)) => {
-            if let Some(api::client_action::Action::AddMessagesToTask(amt)) =
-                &ca.actions[0].action
+            if let Some(api::client_action::Action::AddMessagesToTask(amt)) = &ca.actions[0].action
             {
                 amt.messages.first().is_some_and(|m| {
-                    matches!(m.message.as_ref(), Some(api::message::Message::AgentReasoning(_)))
+                    matches!(
+                        m.message.as_ref(),
+                        Some(api::message::Message::AgentReasoning(_))
+                    )
                 })
             } else {
                 false
@@ -378,8 +398,7 @@ fn tool_call_fragments_accumulate_and_emit_on_completion() {
     // Find the ToolCall message in the finish output.
     let tool_call = closing.iter().find_map(|ev| match &ev.r#type {
         Some(api::response_event::Type::ClientActions(ca)) => {
-            if let Some(api::client_action::Action::AddMessagesToTask(amt)) =
-                &ca.actions[0].action
+            if let Some(api::client_action::Action::AddMessagesToTask(amt)) = &ca.actions[0].action
             {
                 amt.messages.first().and_then(|m| match m.message.as_ref() {
                     Some(api::message::Message::ToolCall(tc)) => Some(tc.clone()),
@@ -468,7 +487,9 @@ fn finish_reason_length_maps_to_max_token_limit() {
     let finished = drive_to_done("length");
     assert!(matches!(
         finished.reason,
-        Some(api::response_event::stream_finished::Reason::MaxTokenLimit(_))
+        Some(api::response_event::stream_finished::Reason::MaxTokenLimit(
+            _
+        ))
     ));
 }
 
@@ -607,7 +628,10 @@ fn usage_with_reasoning_tokens_still_folds_into_completion_tokens() {
     assert_eq!(finished.token_usage.len(), 1);
     let usage = &finished.token_usage[0];
     assert_eq!(usage.total_input, 100);
-    assert_eq!(usage.output, 200, "output_tokens should be completion_tokens=200, not reasoning split");
+    assert_eq!(
+        usage.output, 200,
+        "output_tokens should be completion_tokens=200, not reasoning split"
+    );
     assert_eq!(usage.model_id, "deepseek-reasoner");
 }
 

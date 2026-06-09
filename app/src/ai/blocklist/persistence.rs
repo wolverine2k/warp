@@ -1,27 +1,24 @@
 //! Manages how we serialize blocklist AI data for persistence.
 #![cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 
-use std::{collections::HashMap, sync::Arc};
-use uuid::Uuid;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::anyhow;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
-
-use crate::{
-    ai::{
-        agent::{
-            conversation::AIConversationId, AIAgentActionType, AIAgentAttachment, AIAgentContext,
-            AIAgentExchangeId, AIAgentInput, AIAgentPtyWriteMode, AskUserQuestionItem,
-            FileLocations, PassiveSuggestionResultType, ReadFilesRequest,
-            RequestComputerUseRequest, SearchCodebaseRequest, UseComputerRequest, UserQueryMode,
-        },
-        llms::LLMId,
-    },
-    terminal::model::block::{BlockId, SerializedBlock},
-};
+use uuid::Uuid;
 
 use super::AIQueryHistoryOutputStatus;
+use crate::ai::agent::conversation::AIConversationId;
+use crate::ai::agent::{
+    AIAgentActionType, AIAgentAttachment, AIAgentContext, AIAgentExchangeId, AIAgentInput,
+    AIAgentPtyWriteMode, AskUserQuestionItem, FileLocations, PassiveSuggestionResultType,
+    ReadFilesRequest, RequestComputerUseRequest, SearchCodebaseRequest, UseComputerRequest,
+    UserQueryMode,
+};
+use crate::ai::llms::LLMId;
+use crate::terminal::model::block::{BlockId, SerializedBlock};
 /// Data we persist for each [`AIAgentExchange`] for use in history. Does not contain output data.
 #[derive(Debug, Deserialize, Clone)]
 pub struct PersistedAIInput {
@@ -519,14 +516,13 @@ mod tests {
     /// `std::mem::take`).
     #[test]
     fn submit_drains_pending_attachments_into_request() {
-        let mut pending: Vec<ai::attachments::AgentAttachment> = vec![
-            ai::attachments::AgentAttachment {
+        let mut pending: Vec<ai::attachments::AgentAttachment> =
+            vec![ai::attachments::AgentAttachment {
                 mime: "image/png".to_owned(),
                 bytes: vec![1, 2, 3],
                 display_name: Some("photo.png".to_owned()),
                 thumbnail_bytes: None,
-            },
-        ];
+            }];
         let drained = std::mem::take(&mut pending);
         // Post-drain: caller receives the attachment.
         assert_eq!(drained.len(), 1);
@@ -538,14 +534,13 @@ mod tests {
     /// Test 2: after drain, a second drain returns empty — idempotent.
     #[test]
     fn submit_clears_pending_attachments_after_dispatch() {
-        let mut pending: Vec<ai::attachments::AgentAttachment> = vec![
-            ai::attachments::AgentAttachment {
+        let mut pending: Vec<ai::attachments::AgentAttachment> =
+            vec![ai::attachments::AgentAttachment {
                 mime: "application/pdf".to_owned(),
                 bytes: vec![0xff],
                 display_name: Some("doc.pdf".to_owned()),
                 thumbnail_bytes: None,
-            },
-        ];
+            }];
         let _ = std::mem::take(&mut pending);
         // Second drain must be empty.
         let second_drain = std::mem::take(&mut pending);

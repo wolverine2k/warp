@@ -22,11 +22,11 @@ use std::collections::HashMap;
 use warp_multi_agent_api as api;
 
 use super::wire::{
-    GeminiContent, GeminiGenerateRequest, GeminiGenerationConfig, GeminiInlineData,
-    GeminiInlineDataPart, GeminiOutboundFunctionCall, GeminiOutboundFunctionCallPart,
-    GeminiOutboundFunctionResponse, GeminiOutboundFunctionResponsePart, GeminiOutboundPart,
-    GeminiRole, GeminiSystemInstruction, GeminiTextPart, GeminiToolEnvelope,
-    GeminiFunctionDeclaration,
+    GeminiContent, GeminiFunctionDeclaration, GeminiGenerateRequest, GeminiGenerationConfig,
+    GeminiInlineData, GeminiInlineDataPart, GeminiOutboundFunctionCall,
+    GeminiOutboundFunctionCallPart, GeminiOutboundFunctionResponse,
+    GeminiOutboundFunctionResponsePart, GeminiOutboundPart, GeminiRole, GeminiSystemInstruction,
+    GeminiTextPart, GeminiToolEnvelope,
 };
 use crate::local_provider::{
     compaction,

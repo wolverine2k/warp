@@ -33,10 +33,7 @@ pub struct GeminiGenerateRequest {
     /// Top-level system prompt. Gemini does NOT accept system messages in
     /// the `contents` array; the translator lifts the synthesized prompt
     /// here. Omitted when empty.
-    #[serde(
-        rename = "systemInstruction",
-        skip_serializing_if = "Option::is_none"
-    )]
+    #[serde(rename = "systemInstruction", skip_serializing_if = "Option::is_none")]
     pub system_instruction: Option<GeminiSystemInstruction>,
     pub contents: Vec<GeminiContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -429,7 +426,10 @@ mod tests {
         let v = serde_json::to_value(&part).unwrap();
         assert!(v.get("functionResponse").is_some());
         assert_eq!(v["functionResponse"]["name"], "read_files");
-        assert_eq!(v["functionResponse"]["response"]["content"], "rendered tool result");
+        assert_eq!(
+            v["functionResponse"]["response"]["content"],
+            "rendered tool result"
+        );
     }
 
     #[test]
@@ -447,7 +447,10 @@ mod tests {
             generation_config: GeminiGenerationConfig::default(),
         };
         let v = serde_json::to_value(&req).unwrap();
-        assert_eq!(v["tools"][0]["functionDeclarations"][0]["name"], "read_files");
+        assert_eq!(
+            v["tools"][0]["functionDeclarations"][0]["name"],
+            "read_files"
+        );
         assert_eq!(
             v["tools"][0]["functionDeclarations"][0]["description"],
             "Read files."
@@ -516,10 +519,7 @@ mod tests {
             }
         }"#;
         let chunk: GeminiStreamChunk = serde_json::from_str(s).unwrap();
-        assert_eq!(
-            chunk.candidates[0].finish_reason.as_deref(),
-            Some("STOP")
-        );
+        assert_eq!(chunk.candidates[0].finish_reason.as_deref(), Some("STOP"));
         let usage = chunk.usage_metadata.unwrap();
         assert_eq!(usage.prompt_token_count, 50);
         assert_eq!(usage.candidates_token_count, 120);
@@ -532,10 +532,7 @@ mod tests {
         // Final chunk may have no content/parts, just finishReason.
         let s = r#"{"candidates":[{"finishReason":"STOP"}]}"#;
         let chunk: GeminiStreamChunk = serde_json::from_str(s).unwrap();
-        assert_eq!(
-            chunk.candidates[0].finish_reason.as_deref(),
-            Some("STOP")
-        );
+        assert_eq!(chunk.candidates[0].finish_reason.as_deref(), Some("STOP"));
         assert!(chunk.candidates[0].content.is_none());
     }
 
@@ -552,7 +549,8 @@ mod tests {
 
     #[test]
     fn deserializes_error_envelope() {
-        let s = r#"{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT"}}"#;
+        let s =
+            r#"{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT"}}"#;
         let chunk: GeminiStreamChunk = serde_json::from_str(s).unwrap();
         let err = chunk.error.unwrap();
         assert_eq!(err.code, 400);
@@ -565,7 +563,10 @@ mod tests {
         let s = r#"{"name":"read_files"}"#;
         let parsed: GeminiInboundFunctionCall = serde_json::from_str(s).unwrap();
         assert_eq!(parsed.name, "read_files");
-        assert!(parsed.args.is_object(), "args should default to an object, not null");
+        assert!(
+            parsed.args.is_object(),
+            "args should default to an object, not null"
+        );
         assert_eq!(parsed.args.as_object().unwrap().len(), 0);
     }
 }

@@ -1,46 +1,44 @@
+use std::path::Path;
+
 use settings::{Setting as _, SettingsManager};
 use warp_core::features::FeatureFlag;
-use warpui::{rendering::GPUPowerPreference, AppContext, SingletonEntity};
+use warp_core::semantic_selection::SemanticSelection;
+use warpui::rendering::GPUPowerPreference;
+use warpui::{AppContext, SingletonEntity};
 use warpui_extras::user_preferences;
 
-use crate::{
-    ai::cloud_agent_settings::CloudAgentSettings,
-    appearance,
-    banner::BannerState,
-    drive::settings::WarpDriveSettings,
-    report_if_error,
-    resource_center::TipsCompleted,
-    search::command_search::settings::CommandSearchSettings,
-    terminal::{
-        alt_screen_reporting::AltScreenReporting,
-        general_settings::GeneralSettings,
-        keys_settings::KeysSettings,
-        ligature_settings::LigatureSettings,
-        safe_mode_settings::SafeModeSettings,
-        session_settings::{SessionSettings, SessionSettingsChangedEvent},
-        settings::TerminalSettings,
-        shared_session::settings::SharedSessionSettings,
-        warpify::settings::WarpifySettings,
-        BlockListSettings,
-    },
-    undo_close::UndoCloseSettings,
-    window_settings::WindowSettings,
-    workflows::aliases::WorkflowAliases,
-    workspace::tab_settings::TabSettings,
-};
-
-use warp_core::semantic_selection::SemanticSelection;
-
+use super::app_icon::AppIconSettings;
+use super::app_installation_detection::UserAppInstallDetectionSettings;
+use super::cloud_preferences::CloudPreferencesSettings;
+use super::initializer::SettingsInitializer;
+use super::native_preference::NativePreferenceSettings;
 use super::{
-    app_icon::AppIconSettings, app_installation_detection::UserAppInstallDetectionSettings,
-    cloud_preferences::CloudPreferencesSettings, initializer::SettingsInitializer,
-    native_preference::NativePreferenceSettings, AISettings, AccessibilitySettings,
-    AliasExpansionSettings, AppEditorSettings, BlockVisibilitySettings, ChangelogSettings,
-    CodeSettings, DebugSettings, EmacsBindingsSettings, FontSettings, FontSettingsChangedEvent,
-    GPUSettings, InputBoxType, InputModeSettings, InputSettings, PaneSettings,
-    SameLinePromptBlockSettings, ScrollSettings, SelectionSettings, SshSettings, ThemeSettings,
-    VimBannerSettings, WarpDrivePrivacySettings,
+    AISettings, AccessibilitySettings, AliasExpansionSettings, AppEditorSettings,
+    BlockVisibilitySettings, ChangelogSettings, CodeSettings, DebugSettings, EmacsBindingsSettings,
+    FontSettings, FontSettingsChangedEvent, GPUSettings, InputBoxType, InputModeSettings,
+    InputSettings, LocalControlSettings, PaneSettings, SameLinePromptBlockSettings, ScrollSettings,
+    SelectionSettings, SshSettings, ThemeSettings, VimBannerSettings, WarpDrivePrivacySettings,
 };
+use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::banner::BannerState;
+use crate::drive::settings::WarpDriveSettings;
+use crate::resource_center::TipsCompleted;
+use crate::search::command_search::settings::CommandSearchSettings;
+use crate::terminal::alt_screen_reporting::AltScreenReporting;
+use crate::terminal::general_settings::GeneralSettings;
+use crate::terminal::keys_settings::KeysSettings;
+use crate::terminal::ligature_settings::LigatureSettings;
+use crate::terminal::safe_mode_settings::SafeModeSettings;
+use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
+use crate::terminal::settings::TerminalSettings;
+use crate::terminal::shared_session::settings::SharedSessionSettings;
+use crate::terminal::warpify::settings::WarpifySettings;
+use crate::terminal::BlockListSettings;
+use crate::undo_close::UndoCloseSettings;
+use crate::window_settings::WindowSettings;
+use crate::workflows::aliases::WorkflowAliases;
+use crate::workspace::tab_settings::TabSettings;
+use crate::{appearance, report_if_error};
 
 pub struct UserDefaultsOnStartup {
     pub should_restore_session: bool,
@@ -98,6 +96,9 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     EmacsBindingsSettings::register(ctx);
     SameLinePromptBlockSettings::register(ctx);
     SemanticSelection::register(ctx);
+    if FeatureFlag::WarpControlCli.is_enabled() {
+        LocalControlSettings::register(ctx);
+    }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     super::LinuxAppConfiguration::register(ctx);
@@ -122,8 +123,7 @@ pub fn init(
     // One-time migration: copy public settings from the platform-native store
     // into the TOML file so existing users don't lose their customizations
     // when the settings file feature is first enabled.
-    let toml_path = super::user_preferences_toml_file_path();
-    if needs_settings_file_migration(ctx, &toml_path) {
+    if needs_settings_file_migration(ctx) {
         migrate_native_settings_to_settings_file(ctx);
     }
 
@@ -331,21 +331,18 @@ pub fn init_public_user_preferences() -> (user_preferences::Model, Option<user_p
 ///
 /// Migration is needed when all of the following are true:
 /// 1. The `SettingsFile` feature flag is enabled.
-/// 2. The `settings.toml` file does not yet exist on disk at `toml_path`.
+/// 2. The `settings.toml` file does not yet exist on disk.
 /// 3. The migration-complete marker is absent from the native store
 ///    (handles the case where a user deletes `settings.toml` to reset).
-///
-/// `toml_path` is the resolved settings-file path; the production caller
-/// passes `super::user_preferences_toml_file_path()`. Taking it as an
-/// explicit parameter lets unit tests substitute a tempdir path that's
-/// guaranteed not to exist (avoiding the developer's real ~/.warp/settings.toml
-/// short-circuiting the check via condition #2).
-fn needs_settings_file_migration(ctx: &AppContext, toml_path: &std::path::Path) -> bool {
+fn needs_settings_file_migration(ctx: &AppContext) -> bool {
+    needs_settings_file_migration_for_path(ctx, &super::user_preferences_toml_file_path())
+}
+
+fn needs_settings_file_migration_for_path(ctx: &AppContext, settings_file_path: &Path) -> bool {
     if !FeatureFlag::SettingsFile.is_enabled() {
         return false;
     }
-
-    if toml_path.exists() {
+    if settings_file_path.exists() {
         return false;
     }
 

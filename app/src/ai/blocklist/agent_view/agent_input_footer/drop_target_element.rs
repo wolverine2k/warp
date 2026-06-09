@@ -91,9 +91,9 @@ impl Element for AttachmentDropTargetElement {
                         if self.mouse_position_is_in_bounds(*location) && !paths.is_empty() {
                             let paths_owned: Vec<std::path::PathBuf> =
                                 paths.iter().map(std::path::PathBuf::from).collect();
-                            ctx.dispatch_typed_action(
-                                AgentInputFooterAction::DragAndDropFiles(paths_owned),
-                            );
+                            ctx.dispatch_typed_action(AgentInputFooterAction::DragAndDropFiles(
+                                paths_owned,
+                            ));
                         }
                         return true;
                     }

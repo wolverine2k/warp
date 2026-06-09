@@ -14,10 +14,8 @@ use pathfinder_geometry::{
 };
 use std::any::Any;
 use warpui::{
-    elements::Point,
-    event::DispatchedEvent,
-    AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext,
-    SizeConstraint,
+    elements::Point, event::DispatchedEvent, AfterLayoutContext, AppContext, Element, EventContext,
+    LayoutContext, PaintContext, SizeConstraint,
 };
 
 // ---------------------------------------------------------------------------

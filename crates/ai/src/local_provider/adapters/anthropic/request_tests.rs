@@ -50,7 +50,11 @@ fn agent_msg(id: &str, body: &str) -> api::Message {
     }
 }
 
-fn tool_call_msg(id: &str, tool_call_id: &str, tool: api::message::tool_call::Tool) -> api::Message {
+fn tool_call_msg(
+    id: &str,
+    tool_call_id: &str,
+    tool: api::message::tool_call::Tool,
+) -> api::Message {
     api::Message {
         id: id.into(),
         message: Some(api::message::Message::ToolCall(api::message::ToolCall {
@@ -660,10 +664,17 @@ fn image_attachment_appends_image_block() {
         ..Default::default()
     };
     let req = compose_anthropic_messages_request(&input, &cfg());
-    let user = req.messages.iter().find(|m| m.role == AnthropicRole::User).unwrap();
+    let user = req
+        .messages
+        .iter()
+        .find(|m| m.role == AnthropicRole::User)
+        .unwrap();
     // text block first, then image block.
     assert_eq!(user.content.len(), 2);
-    assert!(matches!(&user.content[0], AnthropicContentBlock::Text { .. }));
+    assert!(matches!(
+        &user.content[0],
+        AnthropicContentBlock::Text { .. }
+    ));
     assert!(matches!(
         &user.content[1],
         AnthropicContentBlock::Image { source } if source.media_type == "image/png"
@@ -684,9 +695,16 @@ fn pdf_attachment_emits_document_block() {
         ..Default::default()
     };
     let req = compose_anthropic_messages_request(&input, &cfg());
-    let user = req.messages.iter().find(|m| m.role == AnthropicRole::User).unwrap();
+    let user = req
+        .messages
+        .iter()
+        .find(|m| m.role == AnthropicRole::User)
+        .unwrap();
     assert_eq!(user.content.len(), 2);
-    assert!(matches!(&user.content[0], AnthropicContentBlock::Text { .. }));
+    assert!(matches!(
+        &user.content[0],
+        AnthropicContentBlock::Text { .. }
+    ));
     assert!(matches!(
         &user.content[1],
         AnthropicContentBlock::Document { source } if source.media_type == "application/pdf"
@@ -712,10 +730,16 @@ fn audio_attachment_dropped_no_extra_blocks() {
         ..Default::default()
     };
     let req = compose_anthropic_messages_request(&input, &cfg());
-    let user = req.messages.iter().find(|m| m.role == AnthropicRole::User).unwrap();
+    let user = req
+        .messages
+        .iter()
+        .find(|m| m.role == AnthropicRole::User)
+        .unwrap();
     // Audio is dropped; only the text block remains.
     assert_eq!(user.content.len(), 1);
-    assert!(matches!(&user.content[0], AnthropicContentBlock::Text { text } if text == "transcribe this"));
+    assert!(
+        matches!(&user.content[0], AnthropicContentBlock::Text { text } if text == "transcribe this")
+    );
 }
 
 // ---- model field ----
@@ -747,10 +771,7 @@ fn http_client() -> reqwest::Client {
 
 #[test]
 fn anthropic_adapter_reports_anthropic_api_type() {
-    assert_eq!(
-        AnthropicAdapter.api_type(),
-        AgentProviderApiType::Anthropic
-    );
+    assert_eq!(AnthropicAdapter.api_type(), AgentProviderApiType::Anthropic);
 }
 
 #[test]
@@ -763,10 +784,7 @@ fn build_chat_request_targets_messages_endpoint_with_anthropic_headers() {
         .build()
         .expect("buildable");
     assert_eq!(req.method().as_str(), "POST");
-    assert_eq!(
-        req.url().as_str(),
-        "https://api.anthropic.com/v1/messages"
-    );
+    assert_eq!(req.url().as_str(), "https://api.anthropic.com/v1/messages");
     assert_eq!(
         req.headers().get("x-api-key").map(|v| v.to_str().unwrap()),
         Some("sk-ant-test"),
@@ -818,10 +836,7 @@ fn build_summarizer_request_is_non_streaming_with_no_tools() {
         .build()
         .unwrap();
     assert_eq!(req.method().as_str(), "POST");
-    assert_eq!(
-        req.url().as_str(),
-        "https://api.anthropic.com/v1/messages"
-    );
+    assert_eq!(req.url().as_str(), "https://api.anthropic.com/v1/messages");
     assert_eq!(
         req.headers()
             .get(reqwest::header::ACCEPT)
@@ -926,7 +941,9 @@ fn parse_summarizer_response_falls_back_to_thinking_if_no_text() {
 #[test]
 fn parse_summarizer_response_no_content_returns_no_content_error() {
     let body = r#"{"content":[]}"#;
-    let err = AnthropicAdapter.parse_summarizer_response(body).unwrap_err();
+    let err = AnthropicAdapter
+        .parse_summarizer_response(body)
+        .unwrap_err();
     assert!(matches!(err, SummarizerError::NoContent));
 }
 
@@ -936,7 +953,9 @@ fn parse_summarizer_response_surfaces_error_envelope() {
         "type":"error",
         "error":{"type":"invalid_request_error","message":"max_tokens is required"}
     }"#;
-    let err = AnthropicAdapter.parse_summarizer_response(body).unwrap_err();
+    let err = AnthropicAdapter
+        .parse_summarizer_response(body)
+        .unwrap_err();
     match err {
         SummarizerError::UpstreamErrorEnvelope(msg) => {
             assert!(msg.contains("invalid_request_error"));
@@ -987,12 +1006,10 @@ fn create_stream_decoder_with_skip_create_task_suppresses_create_task_action() {
     // Prelude = Init + BeginTransaction only (no CreateTask).
     assert_eq!(out.len(), 2);
     let has_create_task = out.iter().any(|ev| match &ev.r#type {
-        Some(api::response_event::Type::ClientActions(ca)) => ca.actions.iter().any(|a| {
-            matches!(
-                a.action,
-                Some(api::client_action::Action::CreateTask(_))
-            )
-        }),
+        Some(api::response_event::Type::ClientActions(ca)) => ca
+            .actions
+            .iter()
+            .any(|a| matches!(a.action, Some(api::client_action::Action::CreateTask(_)))),
         _ => false,
     });
     assert!(!has_create_task);

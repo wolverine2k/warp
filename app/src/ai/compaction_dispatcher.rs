@@ -25,7 +25,10 @@ impl CompactionDispatcher {
     /// from `AISettings`, encode to a `byop:` LLMId, and resolve via
     /// `snapshot_for_request`. Falls back to `CompactionTarget::same_model`
     /// when the settings are empty or the model is unavailable.
-    pub fn resolve_target(ctx: &AppContext, primary_cfg: &ai::local_provider::LocalProviderConfig) -> CompactionTarget {
+    pub fn resolve_target(
+        ctx: &AppContext,
+        primary_cfg: &ai::local_provider::LocalProviderConfig,
+    ) -> CompactionTarget {
         let ai_settings = AISettings::as_ref(ctx);
         let provider_id = ai_settings.byop_compaction_model_provider_id.to_string();
         let model_id = ai_settings.byop_compaction_model_id.to_string();

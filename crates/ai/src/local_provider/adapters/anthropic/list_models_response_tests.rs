@@ -39,8 +39,7 @@ fn parses_happy_path_with_display_name() {
 
 #[test]
 fn parses_empty_data_array() {
-    let body =
-        r#"{"data": [], "has_more": false, "first_id": null, "last_id": null}"#;
+    let body = r#"{"data": [], "has_more": false, "first_id": null, "last_id": null}"#;
     let page = adapter().parse_list_models_response(body).unwrap();
     assert!(page.models.is_empty());
     assert_eq!(page.next_cursor, None);
@@ -58,8 +57,7 @@ fn errors_on_malformed_json() {
 
 #[test]
 fn errors_on_row_missing_id() {
-    let body =
-        r#"{"data": [{"type": "model", "display_name": "X"}], "has_more": false}"#;
+    let body = r#"{"data": [{"type": "model", "display_name": "X"}], "has_more": false}"#;
     let err = adapter().parse_list_models_response(body).unwrap_err();
     assert!(
         matches!(err, super::AdapterError::EncodeRequest(_)),

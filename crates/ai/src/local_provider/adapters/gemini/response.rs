@@ -133,11 +133,7 @@ impl GeminiSseDecoder {
     /// Feed one SSE data line. `event_name` is ignored — Gemini's SSE stream
     /// has no `event:` name framing; each anonymous `data:` chunk is a
     /// complete `GenerateContentResponse` partial.
-    pub fn feed_event(
-        &mut self,
-        _event_name: Option<&str>,
-        data: &str,
-    ) -> Vec<api::ResponseEvent> {
+    pub fn feed_event(&mut self, _event_name: Option<&str>, data: &str) -> Vec<api::ResponseEvent> {
         if matches!(self.state, State::Done | State::Errored) {
             return vec![];
         }
@@ -165,10 +161,10 @@ impl GeminiSseDecoder {
         }
 
         if let Some(usage) = chunk.usage_metadata {
-            self.captured_input_tokens =
-                usage.prompt_token_count.max(self.captured_input_tokens);
-            self.captured_output_tokens =
-                usage.candidates_token_count.max(self.captured_output_tokens);
+            self.captured_input_tokens = usage.prompt_token_count.max(self.captured_input_tokens);
+            self.captured_output_tokens = usage
+                .candidates_token_count
+                .max(self.captured_output_tokens);
         }
 
         if let Some(candidate) = chunk.candidates.into_iter().next() {
@@ -253,8 +249,7 @@ impl GeminiSseDecoder {
         // keys `action_results` by this id; the translator (request.rs) will
         // match by name on the way back out per Gemini's native shape.
         let id = format!("gemini-call-{}", Uuid::new_v4());
-        let args_json =
-            serde_json::to_string(&call.args).unwrap_or_else(|_| "{}".to_string());
+        let args_json = serde_json::to_string(&call.args).unwrap_or_else(|_| "{}".to_string());
         if let Some(ev) = build_tool_call_event(&self.task_id, &id, &call.name, &args_json) {
             out.push(ev);
         }
@@ -369,11 +364,7 @@ fn map_gemini_finish_reason(reason: &str) -> api::response_event::stream_finishe
 // ---- StreamDecoder trait impl ----
 
 impl crate::local_provider::adapters::StreamDecoder for GeminiSseDecoder {
-    fn feed_event(
-        &mut self,
-        event_name: Option<&str>,
-        data: &str,
-    ) -> Vec<api::ResponseEvent> {
+    fn feed_event(&mut self, event_name: Option<&str>, data: &str) -> Vec<api::ResponseEvent> {
         Self::feed_event(self, event_name, data)
     }
     fn finish(&mut self) -> Vec<api::ResponseEvent> {

@@ -436,7 +436,8 @@ mod tests {
 
     #[test]
     fn deserializes_content_block_start_text() {
-        let s = r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#;
+        let s =
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#;
         let ev: AnthropicStreamEvent = serde_json::from_str(s).unwrap();
         match ev {
             AnthropicStreamEvent::ContentBlockStart {

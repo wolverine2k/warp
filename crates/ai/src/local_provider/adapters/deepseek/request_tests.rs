@@ -109,7 +109,12 @@ fn system_prompt_becomes_first_message_with_role_system() {
     let req = compose_deepseek_chat_request(&input, &cfg());
     assert!(req.messages.len() >= 2);
     assert_eq!(req.messages[0].role, DeepSeekRole::System);
-    assert!(req.messages[0].content.as_ref().and_then(|c| c.as_text()).map(|s| !s.is_empty()).unwrap_or(false));
+    assert!(req.messages[0]
+        .content
+        .as_ref()
+        .and_then(|c| c.as_text())
+        .map(|s| !s.is_empty())
+        .unwrap_or(false));
 }
 
 // ---- 2: user query ----
@@ -121,7 +126,10 @@ fn user_query_becomes_role_user_message() {
     let req = compose_deepseek_chat_request(&input, &cfg());
     assert_eq!(req.messages.len(), 2);
     assert_eq!(req.messages[1].role, DeepSeekRole::User);
-    assert_eq!(req.messages[1].content.as_ref().and_then(|c| c.as_text()), Some("hello"));
+    assert_eq!(
+        req.messages[1].content.as_ref().and_then(|c| c.as_text()),
+        Some("hello")
+    );
 }
 
 // ---- 3: agent output ----
@@ -357,7 +365,10 @@ fn compaction_projection_synthesizes_user_assistant_summary_pair() {
         Some("## Goal\n- summary")
     );
     assert_eq!(req.messages[3].role, DeepSeekRole::User);
-    assert_eq!(req.messages[3].content.as_ref().and_then(|c| c.as_text()), Some("post-compact ask"));
+    assert_eq!(
+        req.messages[3].content.as_ref().and_then(|c| c.as_text()),
+        Some("post-compact ask")
+    );
 }
 
 // ---- 13: synthetic user query anchoring ----
@@ -378,9 +389,15 @@ fn synthetic_user_query_anchoring_works() {
     // system + user(what is X?) + assistant(first answer)
     assert_eq!(req.messages.len(), 3);
     assert_eq!(req.messages[1].role, DeepSeekRole::User);
-    assert_eq!(req.messages[1].content.as_ref().and_then(|c| c.as_text()), Some("what is X?"));
+    assert_eq!(
+        req.messages[1].content.as_ref().and_then(|c| c.as_text()),
+        Some("what is X?")
+    );
     assert_eq!(req.messages[2].role, DeepSeekRole::Assistant);
-    assert_eq!(req.messages[2].content.as_ref().and_then(|c| c.as_text()), Some("first answer"));
+    assert_eq!(
+        req.messages[2].content.as_ref().and_then(|c| c.as_text()),
+        Some("first answer")
+    );
 }
 
 // ---- 14: multi-turn round-trip ----
@@ -722,7 +739,8 @@ fn deepseek_adapter_parse_summarizer_response_empty_yields_no_content_error() {
 
 #[test]
 fn deepseek_adapter_parse_summarizer_response_top_level_error_yields_upstream_envelope() {
-    let body = r#"{"error":{"message":"Invalid API key","type":"invalid_request_error","code":"401"}}"#;
+    let body =
+        r#"{"error":{"message":"Invalid API key","type":"invalid_request_error","code":"401"}}"#;
     let err = DeepSeekAdapter
         .parse_summarizer_response(body)
         .expect_err("should be upstream error");
@@ -769,7 +787,10 @@ fn deepseek_text_only_matches_openai_shape() {
     // Serializes as a plain JSON string, not an array.
     let v = serde_json::to_value(req).unwrap();
     let content = &v["messages"].as_array().unwrap().last().unwrap()["content"];
-    assert!(content.is_string(), "text-only content must serialize as a string, got {content:?}");
+    assert!(
+        content.is_string(),
+        "text-only content must serialize as a string, got {content:?}"
+    );
     assert_eq!(content, "hello deepseek");
 }
 
@@ -810,12 +831,18 @@ fn deepseek_image_attachment_emits_content_array() {
     // Serializes as a JSON array.
     let v = serde_json::to_value(req).unwrap();
     let content = &v["messages"].as_array().unwrap().last().unwrap()["content"];
-    assert!(content.is_array(), "attachment content must serialize as an array, got {content:?}");
+    assert!(
+        content.is_array(),
+        "attachment content must serialize as an array, got {content:?}"
+    );
     assert_eq!(content[0]["type"], "text");
     assert_eq!(content[0]["text"], "look at this");
     assert_eq!(content[1]["type"], "image_url");
     assert!(
-        content[1]["image_url"]["url"].as_str().unwrap().starts_with("data:image/png;base64,"),
+        content[1]["image_url"]["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"),
         "image_url.url must be a data URI"
     );
 }

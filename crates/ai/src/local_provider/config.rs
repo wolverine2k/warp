@@ -186,10 +186,7 @@ impl LocalProviderConfig {
     /// for SSE framing; without it Gemini returns a JSON array. Handles
     /// `/v1beta` already present in the base path idempotently.
     pub fn gemini_stream_generate_url(&self) -> Result<Url, LocalProviderConfigError> {
-        self.gemini_models_endpoint(&format!(
-            "{}:streamGenerateContent?alt=sse",
-            self.model_id
-        ))
+        self.gemini_models_endpoint(&format!("{}:streamGenerateContent?alt=sse", self.model_id))
     }
 
     /// `{base_url}/v1beta/models/{model_id}:generateContent` — Gemini's

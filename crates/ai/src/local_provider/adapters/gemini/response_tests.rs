@@ -45,9 +45,7 @@ fn extract_finished(ev: &api::ResponseEvent) -> &api::response_event::StreamFini
 }
 
 fn make_text_chunk(text: &str) -> String {
-    format!(
-        r#"{{"candidates":[{{"content":{{"role":"model","parts":[{{"text":"{text}"}}]}}}}]}}"#
-    )
+    format!(r#"{{"candidates":[{{"content":{{"role":"model","parts":[{{"text":"{text}"}}]}}}}]}}"#)
 }
 
 fn make_finish_chunk(reason: &str) -> String {
@@ -290,7 +288,9 @@ fn finish_reason_max_tokens_maps_to_max_token_limit() {
     let finished = drive_to_finish_reason("MAX_TOKENS");
     assert!(matches!(
         finished.reason,
-        Some(api::response_event::stream_finished::Reason::MaxTokenLimit(_))
+        Some(api::response_event::stream_finished::Reason::MaxTokenLimit(
+            _
+        ))
     ));
 }
 
@@ -326,7 +326,8 @@ fn finish_reason_unknown_maps_to_other() {
 #[test]
 fn top_level_error_field_surfaces_as_internal_error_on_finish() {
     let mut d = decoder();
-    let chunk = r#"{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT"}}"#;
+    let chunk =
+        r#"{"error":{"code":400,"message":"API key not valid.","status":"INVALID_ARGUMENT"}}"#;
     feed(&mut d, chunk);
     assert!(d.is_terminal());
 
@@ -487,7 +488,10 @@ fn unknown_part_variant_is_silently_ignored() {
         }),
         _ => false,
     });
-    assert!(!has_content_event, "unexpected content event for Unknown part");
+    assert!(
+        !has_content_event,
+        "unexpected content event for Unknown part"
+    );
 
     let closing = d.finish();
     let finished = extract_finished(closing.last().unwrap());

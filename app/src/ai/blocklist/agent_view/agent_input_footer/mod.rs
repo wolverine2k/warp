@@ -1,141 +1,131 @@
 mod attachment_chip;
 mod attachment_input_validator;
 pub(super) mod chips;
+mod drop_target_element;
 pub mod editor;
 mod environment_selector;
-mod drop_target_element;
 pub mod toolbar_item;
 
-use crate::{
-    ai::{
-        blocklist::{
-            history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel},
-            prompt::prompt_alert::{PromptAlertEvent, PromptAlertView},
-            usage::icon_for_context_window_usage,
-            BlocklistAIInputModel,
-        },
-        execution_profiles::profiles::AIExecutionProfilesModel,
-        harness_availability::HarnessAvailabilityModel,
-        AIRequestUsageModel,
-    },
-    appearance::Appearance,
-    auth::{AuthManager, AuthStateProvider},
-    completer::SessionContext,
-    context_chips::{
-        self,
-        display_chip::{DisplayChip, DisplayChipConfig},
-        prompt_type::PromptType,
-        ContextChipKind,
-    },
-    features::FeatureFlag,
-    network::NetworkStatus,
-    send_telemetry_from_ctx,
-    server::telemetry::{PluginChipTelemetryKind, TelemetryEvent},
-    settings::{AISettings, AISettingsChangedEvent, PrivacySettings, PrivacySettingsChangedEvent},
-    settings_view::SettingsSection,
-    terminal::{
-        cli_agent_sessions::{
-            listener::agent_supports_rich_status, CLIAgentInputState, CLIAgentSessionsModel,
-            CLIAgentSessionsModelEvent,
-        },
-        input::{models::InlineModelSelectorTab, HandoffComposeState, MenuPositioningProvider},
-        model_events::ModelEvent,
-        profile_model_selector::{ProfileModelSelector, ProfileModelSelectorEvent},
-        session_settings::{SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection},
-        shared_session::SharedSessionStatus,
-        view::ambient_agent::{AmbientAgentViewModel, ModelSelector, ModelSelectorEvent},
-        view::init::OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING,
-        view::TerminalAction,
-        CLIAgent, TerminalModel,
-    },
-    ui_components::icons::Icon,
-    view_components::{
-        action_button::{
-            ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource, NakedTheme,
-            TooltipAlignment,
-        },
-        DismissibleToast,
-    },
-    workspace::{view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME, ToastStack},
-    workspaces::user_workspaces::UserWorkspaces,
-};
-use toolbar_item::AgentToolbarItemKind;
-use warp_cli::agent::Harness;
-
-use std::sync::Arc;
-
-#[cfg(feature = "voice_input")]
-use crate::server::server_api::TranscribeError;
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::local_shell::LocalShellState;
-#[cfg(not(target_family = "wasm"))]
-use crate::terminal::ShellLaunchData;
-use ai::document::{AIDocumentId, AIDocumentVersion};
-use parking_lot::FairMutex;
-use pathfinder_color::ColorU;
-use pathfinder_geometry::vector::{vec2f, Vector2F};
-use settings::Setting;
-use settings::ToggleableSetting;
-#[cfg(not(target_family = "wasm"))]
 #[cfg(not(target_family = "wasm"))]
 use std::env;
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
+use std::sync::Arc;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Duration;
+
+use ai::document::{AIDocumentId, AIDocumentVersion};
+use parking_lot::FairMutex;
+use pathfinder_color::ColorU;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use settings::{Setting, ToggleableSetting};
 #[cfg(not(target_family = "wasm"))]
 use tokio::fs;
-#[cfg(not(target_family = "wasm"))]
+use toolbar_item::AgentToolbarItemKind;
 #[cfg(feature = "voice_input")]
 use voice_input::{StartListeningError, VoiceSessionResult};
-
-use warp_core::{
-    context_flag::ContextFlag,
-    report_if_error,
-    ui::{
-        color::{blend::Blend, contrast::MinimumAllowedContrast, ContrastingColor},
-        theme::{color::internal_colors, AnsiColorIdentifier, Fill},
-    },
+use warp_cli::agent::Harness;
+use warp_core::context_flag::ContextFlag;
+use warp_core::report_if_error;
+use warp_core::ui::color::blend::Blend;
+use warp_core::ui::color::contrast::MinimumAllowedContrast;
+use warp_core::ui::color::ContrastingColor;
+use warp_core::ui::theme::color::internal_colors;
+use warp_core::ui::theme::{AnsiColorIdentifier, Fill};
+use warpui::elements::{
+    Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
+    CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Expanded, Flex,
+    MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentElement, PositionedElementAnchor,
+    PositionedElementOffsetBounds, Radius, Shrinkable, Stack, Text, Wrap, WrapFill,
+    WrapFillEntireRun, DEFAULT_UI_LINE_HEIGHT_RATIO,
 };
 #[cfg(feature = "voice_input")]
 use warpui::r#async::SpawnedFutureHandle;
+#[cfg(not(target_family = "wasm"))]
+use warpui::r#async::Timer;
 use warpui::{
-    elements::{
-        Border, ChildAnchor, ChildView, Clipped, ConstrainedBox, Container, CornerRadius,
-        CrossAxisAlignment, DispatchEventResult, Element, EventHandler, Expanded, Flex,
-        MainAxisAlignment, MainAxisSize, OffsetPositioning, ParentElement, PositionedElementAnchor,
-        PositionedElementOffsetBounds, Radius, Shrinkable, Stack, Text, Wrap, WrapFill,
-        WrapFillEntireRun, DEFAULT_UI_LINE_HEIGHT_RATIO,
-    },
     AppContext, Entity, EntityId, ModelHandle, SingletonEntity, TypedActionView, View, ViewContext,
     ViewHandle,
 };
 
 #[cfg(feature = "local_fs")]
 pub(crate) use self::environment_selector::sort_environments_by_recency;
-#[cfg(not(target_family = "wasm"))]
-use warpui::r#async::Timer;
-
 pub(crate) use self::environment_selector::{
     EnvironmentSelector, EnvironmentSelectorEvent, EnvironmentSelectorTarget,
 };
+use crate::ai::blocklist::agent_view::is_in_cloud_context;
+use crate::ai::blocklist::history_model::{BlocklistAIHistoryEvent, BlocklistAIHistoryModel};
+use crate::ai::blocklist::prompt::prompt_alert::{PromptAlertEvent, PromptAlertView};
+use crate::ai::blocklist::usage::icon_for_context_window_usage;
+use crate::ai::blocklist::BlocklistAIInputModel;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::harness_availability::HarnessAvailabilityModel;
+use crate::ai::AIRequestUsageModel;
+use crate::appearance::Appearance;
+use crate::auth::{AuthManager, AuthStateProvider};
+use crate::completer::SessionContext;
+use crate::context_chips::display_chip::{DisplayChip, DisplayChipConfig};
+use crate::context_chips::prompt_type::PromptType;
+use crate::context_chips::{self, ContextChipKind};
+use crate::features::FeatureFlag;
+use crate::network::NetworkStatus;
+use crate::send_telemetry_from_ctx;
+#[cfg(feature = "voice_input")]
+use crate::server::server_api::TranscribeError;
 #[cfg(not(target_family = "wasm"))]
 use crate::server::telemetry::PluginChipTelemetryAction;
+use crate::server::telemetry::{PluginChipTelemetryKind, TelemetryEvent};
+use crate::settings::{
+    AISettings, AISettingsChangedEvent, PrivacySettings, PrivacySettingsChangedEvent,
+};
+use crate::settings_view::SettingsSection;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{
     compare_versions, plugin_manager_for, plugin_manager_for_with_shell, CliAgentPluginManager,
     PluginInstallError, PluginModalKind,
 };
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputState, CLIAgentSessionsModel, CLIAgentSessionsModelEvent,
+};
+use crate::terminal::input::models::InlineModelSelectorTab;
+use crate::terminal::input::{HandoffComposeState, MenuPositioningProvider};
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::local_shell::LocalShellState;
+use crate::terminal::model_events::ModelEvent;
+use crate::terminal::profile_model_selector::{ProfileModelSelector, ProfileModelSelectorEvent};
+use crate::terminal::session_settings::{
+    SessionSettings, SessionSettingsChangedEvent, ToolbarChipSelection,
+};
+use crate::terminal::shared_session::SharedSessionStatus;
+use crate::terminal::view::ambient_agent::{
+    AmbientAgentViewModel, ModelSelector, ModelSelectorEvent,
+};
+use crate::terminal::view::init::OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING;
+use crate::terminal::view::TerminalAction;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::ShellLaunchData;
+use crate::terminal::{CLIAgent, TerminalModel};
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{
+    ActionButton, ActionButtonTheme, AdjoinedSide, ButtonSize, KeystrokeSource, NakedTheme,
+    TooltipAlignment,
+};
+use crate::view_components::DismissibleToast;
 #[cfg(not(target_family = "wasm"))]
 use crate::view_components::ToastLink;
+use crate::workspace::view::TOGGLE_PROJECT_EXPLORER_BINDING_NAME;
+use crate::workspace::ToastStack;
 #[cfg(not(target_family = "wasm"))]
 use crate::workspace::WorkspaceAction;
+use crate::workspaces::user_workspaces::UserWorkspaces;
 
 const ENABLE_NLD_TOOLTIP: &str = "Enable terminal command autodetection";
 const DISABLE_NLD_TOOLTIP: &str = "Disable terminal command autodetection";
 
 const FAST_FORWARD_ON_TOOLTIP: &str = "Turn off auto-approve all agent actions";
 const FAST_FORWARD_OFF_TOOLTIP: &str = "Auto-approve all agent actions for this task";
+const FAST_FORWARD_LOCKED_TOOLTIP: &str =
+    "Fast forward is always enabled for cloud agent conversations";
 
 const START_REMOTE_CONTROL_TOOLTIP: &str = "Start remote control";
 const START_REMOTE_CONTROL_LOGIN_REQUIRED_TOOLTIP: &str = "Log in to use /remote-control";
@@ -182,6 +172,19 @@ fn plugin_chip_key(agent_prefix: &str, remote_host: &Option<String>) -> String {
         Some(host) => format!("{agent_prefix}@{host}"),
         None => agent_prefix.to_owned(),
     }
+}
+
+fn is_conversation_transcript_context(
+    terminal_view_id: EntityId,
+    terminal_model: &TerminalModel,
+    app: &AppContext,
+) -> bool {
+    terminal_model.is_conversation_transcript_viewer()
+        || BlocklistAIHistoryModel::as_ref(app)
+            .active_conversation(terminal_view_id)
+            .is_some_and(|conversation| {
+                conversation.is_viewing_shared_session() || conversation.is_cli_agent_transcript()
+            })
 }
 
 /// Footer control bar at the bottom of the agent input.
@@ -373,6 +376,7 @@ impl AgentInputFooter {
                 .with_tooltip(FAST_FORWARD_OFF_TOOLTIP)
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
+                .with_disabled_theme(FastForwardLockedTheme)
                 .on_click(|ctx| {
                     ctx.dispatch_typed_action(TerminalAction::ToggleAutoexecuteMode);
                 })
@@ -388,7 +392,7 @@ impl AgentInputFooter {
                 .with_size(button_size)
                 .with_tooltip_alignment(TooltipAlignment::Left)
                 .on_click(|ctx| {
-                    ctx.dispatch_typed_action(AgentInputFooterAction::OpenHandoffPane);
+                    ctx.dispatch_typed_action(AgentInputFooterAction::HandoffChipClicked);
                 })
         });
 
@@ -530,12 +534,12 @@ impl AgentInputFooter {
                     me.plugin_chip_ready = false;
                 }
 
-                // When a listener connects for an agent with rich status,
-                // the plugin is verified installed — hide the chip.
-                // (Codex always has a listener but no actual plugin to install.)
+                // When a structured plugin connects, the plugin is verified
+                // installed — hide the chip. Codex's OSC 9 fallback is not a
+                // structured plugin, so its chip stays until the plugin connects.
                 if CLIAgentSessionsModel::as_ref(ctx)
                     .session(me.terminal_view_id)
-                    .is_some_and(|s| s.listener.is_some() && agent_supports_rich_status(&s.agent))
+                    .is_some_and(|s| s.supports_rich_status())
                 {
                     me.plugin_chip_ready = false;
                 }
@@ -556,10 +560,7 @@ impl AgentInputFooter {
                                     |me, _, ctx: &mut ViewContext<Self>| {
                                         let suppress = CLIAgentSessionsModel::as_ref(ctx)
                                             .session(me.terminal_view_id)
-                                            .is_some_and(|s| {
-                                                s.listener.is_some()
-                                                    && agent_supports_rich_status(&s.agent)
-                                            });
+                                            .is_some_and(|s| s.supports_rich_status());
                                         if !suppress {
                                             me.plugin_chip_ready = true;
                                             ctx.notify();
@@ -758,6 +759,12 @@ impl AgentInputFooter {
                 me.update_ftu_callout_render_state(ctx);
             }
         });
+        ctx.subscribe_to_model(
+            &display_chip_config.agent_view_controller,
+            |me, _, _, ctx| {
+                me.sync_fast_forward_button(ctx);
+            },
+        );
 
         // Keep the remote-control chip in sync with login state so we can
         // disable it and swap the tooltip when the user is anonymous or
@@ -774,7 +781,8 @@ impl AgentInputFooter {
                     ctx.notify();
                 }
                 SessionSettingsChangedEvent::AgentToolbarChipSelectionSetting { .. }
-                | SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. } => {
+                | SessionSettingsChangedEvent::CLIAgentToolbarChipSelectionSetting { .. }
+                | SessionSettingsChangedEvent::GithubPrChipDefaultValidation { .. } => {
                     me.update_display_chips(&prompt_for_session_settings, ctx);
                     ctx.notify();
                 }
@@ -1001,13 +1009,16 @@ impl AgentInputFooter {
             }
         }
 
-        Flex::row()
+        let content = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(CLOUD_MODE_V2_FOOTER_GAP)
             .with_child(left.finish())
             .with_child(right.finish())
-            .finish()
+            .finish();
+
+        Clipped::new(content).finish()
     }
 
     fn all_display_chips(&self) -> impl Iterator<Item = &ViewHandle<DisplayChip>> {
@@ -1087,7 +1098,7 @@ impl AgentInputFooter {
         use crate::ai::agent_providers::lookup_byop;
         use crate::ai::llms::LLMPreferences;
         use crate::settings::AgentProviderApiType;
-        use attachment_input_validator::{ActiveModelCaps, validate, rejection_message};
+        use attachment_input_validator::{rejection_message, validate, ActiveModelCaps};
 
         let active_llm = LLMPreferences::as_ref(ctx)
             .get_active_base_model(ctx, Some(self.terminal_view_id))
@@ -1111,11 +1122,22 @@ impl AgentInputFooter {
                     model_id,
                 )
             } else {
-                (AgentProviderApiType::default(), None, None, None, active_llm.id.to_string())
+                (
+                    AgentProviderApiType::default(),
+                    None,
+                    None,
+                    None,
+                    active_llm.id.to_string(),
+                )
             };
 
-        let file_types =
-            picker_file_types_for_caps(api_type, &raw_model_id, image_setting, pdf_setting, audio_setting);
+        let file_types = picker_file_types_for_caps(
+            api_type,
+            &raw_model_id,
+            image_setting,
+            pdf_setting,
+            audio_setting,
+        );
 
         if file_types.is_empty() {
             let window_id = ctx.window_id();
@@ -1146,10 +1168,8 @@ impl AgentInputFooter {
                     Ok(paths) => {
                         for path_str in paths {
                             let path = std::path::Path::new(&path_str);
-                            let display_name = path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .map(str::to_owned);
+                            let display_name =
+                                path.file_name().and_then(|n| n.to_str()).map(str::to_owned);
                             let mime = mime_for_path(path);
                             let bytes = match std::fs::read(path) {
                                 Ok(b) => b,
@@ -1310,9 +1330,9 @@ impl AgentInputFooter {
         if let Some(images) = &content.images {
             if !images.is_empty() {
                 // Pick the highest-priority MIME from the clipboard's image set.
-                let best = CLIPBOARD_IMAGE_MIME_TYPES.iter().find_map(|fmt| {
-                    images.iter().find(|img| img.mime_type.as_str() == *fmt)
-                });
+                let best = CLIPBOARD_IMAGE_MIME_TYPES
+                    .iter()
+                    .find_map(|fmt| images.iter().find(|img| img.mime_type.as_str() == *fmt));
                 if let Some(image) = best {
                     let display_name = image.filename.clone().or_else(|| {
                         let ext = match image.mime_type.as_str() {
@@ -1361,17 +1381,12 @@ impl AgentInputFooter {
                 let bytes = match std::fs::read(path) {
                     Ok(b) => b,
                     Err(err) => {
-                        log::warn!(
-                            "AgentInputFooter paste: failed to read {path_str:?}: {err}"
-                        );
+                        log::warn!("AgentInputFooter paste: failed to read {path_str:?}: {err}");
                         continue;
                     }
                 };
                 let mime = mime_for_path(path);
-                let display_name = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(str::to_owned);
+                let display_name = path.file_name().and_then(|n| n.to_str()).map(str::to_owned);
                 let candidate = ai::attachments::AgentAttachment {
                     mime,
                     bytes,
@@ -1388,11 +1403,7 @@ impl AgentInputFooter {
                     Err(rej) => {
                         let msg = rejection_message(&rej);
                         ToastStack::handle(ctx).update(ctx, |ts, ctx| {
-                            ts.add_ephemeral_toast(
-                                DismissibleToast::error(msg),
-                                window_id,
-                                ctx,
-                            );
+                            ts.add_ephemeral_toast(DismissibleToast::error(msg), window_id, ctx);
                         });
                     }
                 }
@@ -1426,10 +1437,9 @@ impl AgentInputFooter {
             let manager = plugin_manager_for(session.agent)?;
             let min_version = manager.minimum_plugin_version();
             let chip_key = plugin_chip_key(session.agent.command_prefix(), &session.remote_host);
-
-            // If the plugin is connected (listener present) and this agent supports
+            // If a structured plugin is connected and this agent supports
             // version-based updates, check the reported version.
-            if session.listener.is_some() && manager.supports_update() {
+            if session.supports_rich_status() && manager.supports_update() {
                 let needs_update = match &session.plugin_version {
                     // No version reported = pre-versioning plugin, definitely outdated.
                     None => true,
@@ -1764,6 +1774,7 @@ impl AgentInputFooter {
         &self,
         item: &AgentToolbarItemKind,
         shared_status: &SharedSessionStatus,
+        is_conversation_transcript_context: bool,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         if !item.available_in().is_available_for_cli()
@@ -1776,7 +1787,8 @@ impl AgentInputFooter {
         // it doesn't make sense to offer remote-control when already
         // viewing a cloud agent's shared session.
         if matches!(item, AgentToolbarItemKind::ShareSession)
-            && self.terminal_model.lock().is_shared_ambient_agent_session()
+            && (is_conversation_transcript_context
+                || self.terminal_model.lock().is_shared_ambient_agent_session())
         {
             return None;
         }
@@ -1802,6 +1814,9 @@ impl AgentInputFooter {
                 None
             }
             AgentToolbarItemKind::ShareSession => {
+                if is_conversation_transcript_context {
+                    return None;
+                }
                 let enabled = FeatureFlag::CreatingSharedSessions.is_enabled()
                     && FeatureFlag::HOARemoteControl.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled();
@@ -1835,7 +1850,7 @@ impl AgentInputFooter {
         // the lock before calling into helpers like `should_use_manual_mode`
         // and `render_cli_toolbar_item`, which may re-lock the same model and
         // would deadlock since the lock is non-reentrant.
-        let (background_color, shared_status) = {
+        let (background_color, shared_status, is_conversation_transcript_context) = {
             let terminal_model = self.terminal_model.lock();
             let background_color = if terminal_model.is_alt_screen_active() {
                 terminal_model
@@ -1846,7 +1861,13 @@ impl AgentInputFooter {
                 appearance.theme().surface_1().into_solid()
             };
             let shared_status = terminal_model.shared_session_status().clone();
-            (background_color, shared_status)
+            let is_conversation_transcript_context =
+                is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
+            (
+                background_color,
+                shared_status,
+                is_conversation_transcript_context,
+            )
         };
 
         let session_settings = SessionSettings::as_ref(app);
@@ -1909,7 +1930,12 @@ impl AgentInputFooter {
         }
 
         for item in &left_items {
-            if let Some(element) = self.render_cli_toolbar_item(item, &shared_status, app) {
+            if let Some(element) = self.render_cli_toolbar_item(
+                item,
+                &shared_status,
+                is_conversation_transcript_context,
+                app,
+            ) {
                 left_buttons.add_child(element);
             }
         }
@@ -1920,7 +1946,12 @@ impl AgentInputFooter {
             .with_spacing(4.);
 
         for item in &right_items {
-            if let Some(element) = self.render_cli_toolbar_item(item, &shared_status, app) {
+            if let Some(element) = self.render_cli_toolbar_item(
+                item,
+                &shared_status,
+                is_conversation_transcript_context,
+                app,
+            ) {
                 right_buttons.add_child(element);
             }
         }
@@ -2354,26 +2385,40 @@ impl AgentInputFooter {
     }
 
     fn sync_fast_forward_button(&self, ctx: &mut ViewContext<Self>) {
+        // In cloud agent conversations fast forward is force-enabled.
+        let terminal_model = self.terminal_model.lock();
+        let is_force_enabled = is_in_cloud_context(
+            terminal_model.block_list().agent_view_state(),
+            &terminal_model,
+        );
+        drop(terminal_model);
+
         // Read directly from the conversation, same data source as the warping
         // indicator footer's auto-approve chip.
         let is_active = BlocklistAIHistoryModel::as_ref(ctx)
             .active_conversation(self.terminal_view_id)
             .map(|c| c.autoexecute_any_action())
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || is_force_enabled;
+
         let icon = if is_active {
             Icon::FastForwardFilled
         } else {
             Icon::FastForward
         };
-        let tooltip = if is_active {
+        let tooltip = if is_force_enabled {
+            FAST_FORWARD_LOCKED_TOOLTIP
+        } else if is_active {
             FAST_FORWARD_ON_TOOLTIP
         } else {
             FAST_FORWARD_OFF_TOOLTIP
         };
+
         self.fast_forward_button.update(ctx, |button, ctx| {
             button.set_icon(Some(icon), ctx);
             button.set_tooltip(Some(tooltip), ctx);
             button.set_active(is_active, ctx);
+            button.set_disabled(is_force_enabled, ctx);
         });
     }
 
@@ -2416,6 +2461,7 @@ impl AgentInputFooter {
         item: &AgentToolbarItemKind,
         shared_status: &SharedSessionStatus,
         is_cloud_context: bool,
+        is_conversation_transcript_context: bool,
         app: &AppContext,
     ) -> Option<Box<dyn Element>> {
         let is_cloud_mode = FeatureFlag::CloudModeImageContext.is_enabled()
@@ -2478,6 +2524,9 @@ impl AgentInputFooter {
                 has_conversation.then(|| ChildView::new(&self.context_window_button).finish())
             }
             AgentToolbarItemKind::ShareSession => {
+                if is_conversation_transcript_context {
+                    return None;
+                }
                 let enabled = FeatureFlag::CreatingSharedSessions.is_enabled()
                     && FeatureFlag::HOARemoteControl.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled();
@@ -2495,10 +2544,7 @@ impl AgentInputFooter {
                 .is_enabled()
                 .then(|| ChildView::new(&self.fast_forward_button).finish()),
             AgentToolbarItemKind::HandoffToCloud => {
-                if !AISettings::as_ref(app)
-                    .is_cloud_handoff_enabled_for_terminal_view(self.terminal_view_id, app)
-                    || is_cloud_context
-                {
+                if !AISettings::as_ref(app).is_cloud_handoff_enabled(app) || is_cloud_context {
                     return None;
                 }
 
@@ -2595,11 +2641,17 @@ impl View for AgentInputFooter {
             terminal_model.block_list().agent_view_state(),
             &terminal_model,
         );
+        let is_conversation_transcript_context =
+            is_conversation_transcript_context(self.terminal_view_id, &terminal_model, app);
 
         for item in &left_items {
-            if let Some(element) =
-                self.render_toolbar_item(item, shared_status, is_cloud_context, app)
-            {
+            if let Some(element) = self.render_toolbar_item(
+                item,
+                shared_status,
+                is_cloud_context,
+                is_conversation_transcript_context,
+                app,
+            ) {
                 left_buttons.add_child(element);
             }
         }
@@ -2620,9 +2672,13 @@ impl View for AgentInputFooter {
             );
         } else {
             for item in &right_items {
-                if let Some(element) =
-                    self.render_toolbar_item(item, shared_status, is_cloud_context, app)
-                {
+                if let Some(element) = self.render_toolbar_item(
+                    item,
+                    shared_status,
+                    is_cloud_context,
+                    is_conversation_transcript_context,
+                    app,
+                ) {
                     right_buttons.add_child(element);
                 }
             }
@@ -2814,9 +2870,10 @@ pub enum AgentInputFooterAction {
     StartRemoteControl,
     StopRemoteControl,
     OpenCodingAgentSettings,
-    /// Open the local-to-cloud handoff pane. Dispatched by the
-    /// "Hand off to cloud" footer chip.
-    OpenHandoffPane,
+    /// User clicked the "Hand off to cloud" footer chip. The terminal `Input`
+    /// subscriber decides whether to dispatch the immediate empty-prompt
+    /// handoff or enter `&` compose mode based on the current input state.
+    HandoffChipClicked,
     ShowContextMenu {
         position: Vector2F,
     },
@@ -3044,12 +3101,16 @@ impl TypedActionView for AgentInputFooter {
                     widget_id: crate::settings_view::cli_agent_settings_widget_id(),
                 });
             }
-            AgentInputFooterAction::OpenHandoffPane => {
+            AgentInputFooterAction::HandoffChipClicked => {
                 if FeatureFlag::OzHandoff.is_enabled()
                     && FeatureFlag::HandoffLocalCloud.is_enabled()
                     && cfg!(all(feature = "local_fs", not(target_family = "wasm")))
                 {
-                    ctx.emit(AgentInputFooterEvent::OpenHandoffPane);
+                    // The terminal `Input` subscriber decides what to do with
+                    // the chip click — auto-handoff when the input buffer is
+                    // empty and the source conversation has content, or `&`
+                    // compose mode otherwise (preserving any in-flight prompt).
+                    ctx.emit(AgentInputFooterEvent::HandoffChipClicked);
                 }
             }
             AgentInputFooterAction::ShowContextMenu { position } => {
@@ -3109,9 +3170,7 @@ impl TypedActionView for AgentInputFooter {
                 });
                 // When the × is clicked the chip emits AttachmentChipEvent::RemoveRequested.
                 ctx.subscribe_to_view(&chip, move |_footer, _chip, _event, ctx| {
-                    ctx.dispatch_typed_action(
-                        &AgentInputFooterAction::RemoveAttachment(index),
-                    );
+                    ctx.dispatch_typed_action(&AgentInputFooterAction::RemoveAttachment(index));
                 });
                 self.attachment_chips.push(chip);
 
@@ -3173,9 +3232,7 @@ impl TypedActionView for AgentInputFooter {
                     );
 
                     // Tell the chip view to use the new source.
-                    let source = warpui::assets::asset_cache::AssetSource::Raw {
-                        id: asset_id,
-                    };
+                    let source = warpui::assets::asset_cache::AssetSource::Raw { id: asset_id };
                     if let Some(chip) = self.attachment_chips.get(*index) {
                         chip.update(ctx, |chip, ctx| {
                             chip.set_thumbnail_source(source);
@@ -3190,7 +3247,7 @@ impl TypedActionView for AgentInputFooter {
                 use crate::ai::agent_providers::lookup_byop;
                 use crate::ai::llms::LLMPreferences;
                 use crate::settings::AgentProviderApiType;
-                use attachment_input_validator::{ActiveModelCaps, rejection_message, validate};
+                use attachment_input_validator::{rejection_message, validate, ActiveModelCaps};
 
                 let active_llm = LLMPreferences::as_ref(ctx)
                     .get_active_base_model(ctx, None)
@@ -3229,17 +3286,12 @@ impl TypedActionView for AgentInputFooter {
                     let bytes = match std::fs::read(path) {
                         Ok(b) => b,
                         Err(err) => {
-                            log::warn!(
-                                "AgentInputFooter drop: failed to read {path:?}: {err}"
-                            );
+                            log::warn!("AgentInputFooter drop: failed to read {path:?}: {err}");
                             continue;
                         }
                     };
                     let mime = mime_for_path(path);
-                    let display_name = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(str::to_owned);
+                    let display_name = path.file_name().and_then(|n| n.to_str()).map(str::to_owned);
                     let candidate = ai::attachments::AgentAttachment {
                         mime,
                         bytes,
@@ -3315,8 +3367,10 @@ pub enum AgentInputFooterEvent {
     #[cfg(not(target_family = "wasm"))]
     OpenPluginInstructionsPane(CLIAgent, PluginModalKind),
     /// Local-to-cloud handoff chip clicked. The terminal `Input` subscriber
-    /// activates `&` handoff-compose mode on the local input.
-    OpenHandoffPane,
+    /// either dispatches the immediate empty-prompt handoff (empty buffer +
+    /// source conversation with content) or activates `&` compose mode
+    /// (preserving any in-flight prompt).
+    HandoffChipClicked,
 }
 
 impl Entity for AgentInputFooter {
@@ -3513,6 +3567,38 @@ impl ActionButtonTheme for FastForwardButtonTheme {
 
     fn should_opt_out_of_contrast_adjustment(&self) -> bool {
         true
+    }
+}
+
+/// Disabled-state theme used by the fast-forward chip when fast-forward is
+/// locked on (cloud agent conversations). Delegates entirely to
+/// `FastForwardButtonTheme`, but forces `hovered=true` on the background so
+/// the chip still reads as "on" while the underlying button is disabled
+/// (which gives us the arrow cursor and no-op click handler for free).
+struct FastForwardLockedTheme;
+
+impl ActionButtonTheme for FastForwardLockedTheme {
+    fn background(&self, _hovered: bool, appearance: &Appearance) -> Option<Fill> {
+        // Force the active (hovered) background so the disabled chip still
+        // visually looks like fast-forward is on.
+        FastForwardButtonTheme.background(true, appearance)
+    }
+
+    fn text_color(
+        &self,
+        hovered: bool,
+        background: Option<Fill>,
+        appearance: &Appearance,
+    ) -> ColorU {
+        FastForwardButtonTheme.text_color(hovered, background, appearance)
+    }
+
+    fn border(&self, appearance: &Appearance) -> Option<ColorU> {
+        FastForwardButtonTheme.border(appearance)
+    }
+
+    fn should_opt_out_of_contrast_adjustment(&self) -> bool {
+        FastForwardButtonTheme.should_opt_out_of_contrast_adjustment()
     }
 }
 
@@ -3779,10 +3865,9 @@ mod tests {
         // Verifies that the agent-view paste gate in `process_paste_event`
         // would NOT route a text-only clipboard through `PasteFromClipboard`.
         let clipboard_has_image_content = content.has_image_data()
-            || content
-                .paths
-                .as_ref()
-                .is_some_and(|paths| !warpui::clipboard_utils::get_image_filepaths_from_paths(paths).is_empty());
+            || content.paths.as_ref().is_some_and(|paths| {
+                !warpui::clipboard_utils::get_image_filepaths_from_paths(paths).is_empty()
+            });
         assert!(!clipboard_has_image_content);
     }
 

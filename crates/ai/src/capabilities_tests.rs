@@ -7,13 +7,7 @@ use crate::local_provider::AgentProviderApiType;
 
 use super::{resolve_audio, resolve_image, resolve_pdf};
 
-fn catalog_entry(
-    provider: &str,
-    id: &str,
-    image: bool,
-    pdf: bool,
-    audio: bool,
-) -> CatalogModel {
+fn catalog_entry(provider: &str, id: &str, image: bool, pdf: bool, audio: bool) -> CatalogModel {
     CatalogModel {
         catalog_provider: provider.to_string(),
         id: id.to_string(),
@@ -63,7 +57,13 @@ fn explicit_some_false_wins_over_catalog_and_heuristic() {
 
 #[test]
 fn catalog_lookup_resolves_image() {
-    let catalog = vec![catalog_entry("anthropic", "claude-opus-4-7", true, true, false)];
+    let catalog = vec![catalog_entry(
+        "anthropic",
+        "claude-opus-4-7",
+        true,
+        true,
+        false,
+    )];
     assert!(resolve_image(
         AgentProviderApiType::Anthropic,
         "claude-opus-4-7",
@@ -75,16 +75,36 @@ fn catalog_lookup_resolves_image() {
 #[test]
 fn catalog_lookup_resolves_pdf_and_audio_independently() {
     let catalog = vec![catalog_entry("google", "gemini-2-pro", true, true, true)];
-    assert!(resolve_image(AgentProviderApiType::Gemini, "gemini-2-pro", None, &catalog));
-    assert!(resolve_pdf(AgentProviderApiType::Gemini, "gemini-2-pro", None, &catalog));
-    assert!(resolve_audio(AgentProviderApiType::Gemini, "gemini-2-pro", None, &catalog));
+    assert!(resolve_image(
+        AgentProviderApiType::Gemini,
+        "gemini-2-pro",
+        None,
+        &catalog
+    ));
+    assert!(resolve_pdf(
+        AgentProviderApiType::Gemini,
+        "gemini-2-pro",
+        None,
+        &catalog
+    ));
+    assert!(resolve_audio(
+        AgentProviderApiType::Gemini,
+        "gemini-2-pro",
+        None,
+        &catalog
+    ));
 }
 
 #[test]
 fn catalog_lookup_can_return_false_explicitly() {
     // A catalog entry that says image:false should override the heuristic.
     let catalog = vec![catalog_entry("openai", "gpt-4o", false, false, false)];
-    assert!(!resolve_image(AgentProviderApiType::OpenAi, "gpt-4o", None, &catalog));
+    assert!(!resolve_image(
+        AgentProviderApiType::OpenAi,
+        "gpt-4o",
+        None,
+        &catalog
+    ));
 }
 
 #[test]
@@ -114,9 +134,24 @@ fn ollama_catalog_lookup_uses_open_weights_union() {
 
 #[test]
 fn heuristic_resolves_openai_gpt4o_image_true() {
-    assert!(resolve_image(AgentProviderApiType::OpenAi, "gpt-4o", None, &[]));
-    assert!(resolve_image(AgentProviderApiType::OpenAi, "gpt-4o-mini", None, &[]));
-    assert!(resolve_image(AgentProviderApiType::OpenAi, "gpt-4-turbo", None, &[]));
+    assert!(resolve_image(
+        AgentProviderApiType::OpenAi,
+        "gpt-4o",
+        None,
+        &[]
+    ));
+    assert!(resolve_image(
+        AgentProviderApiType::OpenAi,
+        "gpt-4o-mini",
+        None,
+        &[]
+    ));
+    assert!(resolve_image(
+        AgentProviderApiType::OpenAi,
+        "gpt-4-turbo",
+        None,
+        &[]
+    ));
     assert!(resolve_image(AgentProviderApiType::OpenAi, "o1", None, &[]));
 }
 
@@ -149,23 +184,68 @@ fn heuristic_resolves_claude_3_5_pdf_true() {
 
 #[test]
 fn heuristic_resolves_gemini_all_modalities() {
-    assert!(resolve_image(AgentProviderApiType::Gemini, "gemini-1.5-pro", None, &[]));
-    assert!(resolve_pdf(AgentProviderApiType::Gemini, "gemini-1.5-pro", None, &[]));
-    assert!(resolve_audio(AgentProviderApiType::Gemini, "gemini-1.5-pro", None, &[]));
+    assert!(resolve_image(
+        AgentProviderApiType::Gemini,
+        "gemini-1.5-pro",
+        None,
+        &[]
+    ));
+    assert!(resolve_pdf(
+        AgentProviderApiType::Gemini,
+        "gemini-1.5-pro",
+        None,
+        &[]
+    ));
+    assert!(resolve_audio(
+        AgentProviderApiType::Gemini,
+        "gemini-1.5-pro",
+        None,
+        &[]
+    ));
 }
 
 #[test]
 fn heuristic_resolves_ollama_llava_image_only() {
-    assert!(resolve_image(AgentProviderApiType::Ollama, "llava:latest", None, &[]));
-    assert!(!resolve_pdf(AgentProviderApiType::Ollama, "llava:latest", None, &[]));
-    assert!(!resolve_audio(AgentProviderApiType::Ollama, "llava:latest", None, &[]));
+    assert!(resolve_image(
+        AgentProviderApiType::Ollama,
+        "llava:latest",
+        None,
+        &[]
+    ));
+    assert!(!resolve_pdf(
+        AgentProviderApiType::Ollama,
+        "llava:latest",
+        None,
+        &[]
+    ));
+    assert!(!resolve_audio(
+        AgentProviderApiType::Ollama,
+        "llava:latest",
+        None,
+        &[]
+    ));
 }
 
 #[test]
 fn heuristic_deepseek_all_false() {
-    assert!(!resolve_image(AgentProviderApiType::DeepSeek, "deepseek-chat", None, &[]));
-    assert!(!resolve_pdf(AgentProviderApiType::DeepSeek, "deepseek-chat", None, &[]));
-    assert!(!resolve_audio(AgentProviderApiType::DeepSeek, "deepseek-chat", None, &[]));
+    assert!(!resolve_image(
+        AgentProviderApiType::DeepSeek,
+        "deepseek-chat",
+        None,
+        &[]
+    ));
+    assert!(!resolve_pdf(
+        AgentProviderApiType::DeepSeek,
+        "deepseek-chat",
+        None,
+        &[]
+    ));
+    assert!(!resolve_audio(
+        AgentProviderApiType::DeepSeek,
+        "deepseek-chat",
+        None,
+        &[]
+    ));
 }
 
 // ── Level 4: conservative fallback ─────────────────────────────────────────
@@ -197,6 +277,16 @@ fn unknown_model_returns_false() {
 
 #[test]
 fn heuristic_match_is_case_insensitive() {
-    assert!(resolve_image(AgentProviderApiType::OpenAi, "GPT-4O", None, &[]));
-    assert!(resolve_image(AgentProviderApiType::Anthropic, "Claude-3-Opus", None, &[]));
+    assert!(resolve_image(
+        AgentProviderApiType::OpenAi,
+        "GPT-4O",
+        None,
+        &[]
+    ));
+    assert!(resolve_image(
+        AgentProviderApiType::Anthropic,
+        "Claude-3-Opus",
+        None,
+        &[]
+    ));
 }

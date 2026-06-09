@@ -24,26 +24,24 @@ pub mod response;
 pub mod wire;
 
 #[cfg(test)]
+#[path = "list_models_response_tests.rs"]
+mod list_models_tests;
+#[cfg(test)]
 #[path = "request_tests.rs"]
 mod request_tests;
 #[cfg(test)]
 #[path = "response_tests.rs"]
 mod response_tests;
-#[cfg(test)]
-#[path = "list_models_response_tests.rs"]
-mod list_models_tests;
 
 use super::{
     AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
-    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, StreamingFormat, SummarizerError,
-    SummarizerInput,
+    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, StreamingFormat,
+    SummarizerError, SummarizerInput,
 };
 
 use request::compose_ollama_chat_request;
 use response::OllamaDecoder;
-use wire::{
-    OllamaChatChunk, OllamaChatMessage, OllamaChatRequest, OllamaOptions, OllamaRole,
-};
+use wire::{OllamaChatChunk, OllamaChatMessage, OllamaChatRequest, OllamaOptions, OllamaRole};
 
 pub struct OllamaAdapter;
 
@@ -126,10 +124,7 @@ impl ProviderAdapter for OllamaAdapter {
         if let Some(err) = parsed.error {
             return Err(SummarizerError::UpstreamErrorEnvelope(err));
         }
-        let text = parsed
-            .message
-            .map(|m| m.content)
-            .unwrap_or_default();
+        let text = parsed.message.map(|m| m.content).unwrap_or_default();
         let trimmed = text.trim();
         if trimmed.is_empty() {
             Err(SummarizerError::NoContent)
@@ -159,10 +154,7 @@ impl ProviderAdapter for OllamaAdapter {
         Ok(apply_ollama_headers(http.get(url), cfg.api_key.as_deref()))
     }
 
-    fn parse_list_models_response(
-        &self,
-        body: &str,
-    ) -> Result<ListModelsPage, AdapterError> {
+    fn parse_list_models_response(&self, body: &str) -> Result<ListModelsPage, AdapterError> {
         let parsed: wire::OllamaTagsResponse = serde_json::from_str(body)?;
         let models = parsed
             .models
@@ -174,7 +166,10 @@ impl ProviderAdapter for OllamaAdapter {
                 max_output_tokens: None,
             })
             .collect();
-        Ok(ListModelsPage { models, next_cursor: None })
+        Ok(ListModelsPage {
+            models,
+            next_cursor: None,
+        })
     }
 }
 

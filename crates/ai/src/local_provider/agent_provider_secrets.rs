@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use serde::Deserialize;
-use warpui::{Entity, ModelContext, SingletonEntity};
+use warpui_core::{Entity, ModelContext, SingletonEntity};
 use warpui_extras::secure_storage::{self, AppContextExt};
 
 const SECURE_STORAGE_KEY: &str = "AgentProviderSecrets";

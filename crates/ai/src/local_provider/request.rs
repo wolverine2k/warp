@@ -198,9 +198,7 @@ pub fn compose_chat_completion_request(
 
     if input.user_query.is_some() || !input.attachments.is_empty() {
         let user_content = if input.attachments.is_empty() {
-            ChatMessageContent::Text(
-                input.user_query.clone().unwrap_or_default(),
-            )
+            ChatMessageContent::Text(input.user_query.clone().unwrap_or_default())
         } else {
             let mut parts: Vec<ChatContentPart> = Vec::new();
             if let Some(text) = input.user_query.as_ref() {
@@ -293,7 +291,6 @@ pub(crate) fn enabled_local_tools(
         .filter_map(|t| LocalTool::from_name(tool_type_name(t)))
         .collect()
 }
-
 
 fn system_message(local_tools: &[LocalTool], cfg: &LocalProviderConfig) -> ChatMessage {
     let descriptions: Vec<&str> = local_tools.iter().map(|t| t.description()).collect();
@@ -871,10 +868,7 @@ mod tests {
         let tool_msg = &req.messages[2];
         assert!(matches!(tool_msg.role, Role::Tool));
         assert_eq!(tool_msg.tool_call_id.as_deref(), Some("call_real"));
-        assert_eq!(
-            content_text(tool_msg),
-            Some("[package]\nname = \"foo\"")
-        );
+        assert_eq!(content_text(tool_msg), Some("[package]\nname = \"foo\""));
     }
 
     #[test]
@@ -1347,7 +1341,10 @@ mod tests {
         assert!(matches!(req.messages[1].role, Role::Assistant));
         assert!(matches!(req.messages[2].role, Role::Tool));
         assert_eq!(req.messages[2].tool_call_id.as_deref(), Some("call_alpha"));
-        assert_eq!(content_text(&req.messages[2]), Some("[package]\nname = \"foo\""));
+        assert_eq!(
+            content_text(&req.messages[2]),
+            Some("[package]\nname = \"foo\"")
+        );
         assert!(matches!(req.messages[3].role, Role::Assistant));
         assert!(matches!(req.messages[4].role, Role::Tool));
         assert_eq!(req.messages[4].tool_call_id.as_deref(), Some("call_beta"));
@@ -1477,7 +1474,11 @@ mod tests {
             ..Default::default()
         };
         let req = compose_chat_completion_request(&input, &cfg());
-        let user_msg = req.messages.iter().find(|m| matches!(m.role, Role::User)).unwrap();
+        let user_msg = req
+            .messages
+            .iter()
+            .find(|m| matches!(m.role, Role::User))
+            .unwrap();
         assert!(
             matches!(&user_msg.content, Some(ChatMessageContent::Text(t)) if t == "hello"),
             "expected Text(\"hello\"), got {:?}",
@@ -1493,7 +1494,11 @@ mod tests {
             ..Default::default()
         };
         let req = compose_chat_completion_request(&input, &cfg());
-        let user_msg = req.messages.iter().find(|m| matches!(m.role, Role::User)).unwrap();
+        let user_msg = req
+            .messages
+            .iter()
+            .find(|m| matches!(m.role, Role::User))
+            .unwrap();
         let parts = match &user_msg.content {
             Some(ChatMessageContent::Parts(p)) => p,
             other => panic!("expected Parts, got {other:?}"),
@@ -1524,7 +1529,11 @@ mod tests {
             ..Default::default()
         };
         let req = compose_chat_completion_request(&input, &cfg());
-        let user_msg = req.messages.iter().find(|m| matches!(m.role, Role::User)).unwrap();
+        let user_msg = req
+            .messages
+            .iter()
+            .find(|m| matches!(m.role, Role::User))
+            .unwrap();
         let parts = match &user_msg.content {
             Some(ChatMessageContent::Parts(p)) => p,
             other => panic!("expected Parts, got {other:?}"),
@@ -1542,13 +1551,21 @@ mod tests {
             ..Default::default()
         };
         let req = compose_chat_completion_request(&input, &cfg());
-        let user_msg = req.messages.iter().find(|m| matches!(m.role, Role::User)).unwrap();
+        let user_msg = req
+            .messages
+            .iter()
+            .find(|m| matches!(m.role, Role::User))
+            .unwrap();
         let parts = match &user_msg.content {
             Some(ChatMessageContent::Parts(p)) => p,
             other => panic!("expected Parts, got {other:?}"),
         };
         // Empty text is filtered out; only the image remains.
-        assert_eq!(parts.len(), 1, "expected 1 part (image only), got {parts:?}");
+        assert_eq!(
+            parts.len(),
+            1,
+            "expected 1 part (image only), got {parts:?}"
+        );
         assert!(matches!(&parts[0], ChatContentPart::ImageUrl { .. }));
     }
 }

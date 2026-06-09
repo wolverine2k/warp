@@ -68,7 +68,8 @@ pub async fn try_compact(
     manual: bool,
     http: &reqwest::Client,
 ) -> Result<AutoCompactionOutcome, AutoCompactionError> {
-    let model = ModelLimit::from_context_window(target.primary_cfg.context_window.map(|n| n as usize));
+    let model =
+        ModelLimit::from_context_window(target.primary_cfg.context_window.map(|n| n as usize));
     if !manual && !is_overflow(compaction_cfg, tokens, model) {
         return Ok(AutoCompactionOutcome::Skipped);
     }
@@ -78,7 +79,8 @@ pub async fn try_compact(
     let tool_names = build_tool_name_lookup(messages_refs.iter().copied());
     let views = build_views(&messages_refs, &tool_names, state);
 
-    let summarizer_model = ModelLimit::from_context_window(target.summarizer_cfg.context_window.map(|n| n as usize));
+    let summarizer_model =
+        ModelLimit::from_context_window(target.summarizer_cfg.context_window.map(|n| n as usize));
     let usable_tokens = usable(compaction_cfg, summarizer_model);
     let preserve_budget = compaction_cfg.preserve_recent_budget(usable_tokens);
     let select_result = algorithm::select(
@@ -147,8 +149,8 @@ mod tests {
     use std::sync::Once;
 
     use super::*;
-    use crate::local_provider::compaction::CompactionConfig;
     use crate::local_provider::compaction::config::CompactionTarget;
+    use crate::local_provider::compaction::CompactionConfig;
     use crate::local_provider::config::LocalProviderConfig;
 
     /// reqwest's default rustls feature requires a crypto provider before

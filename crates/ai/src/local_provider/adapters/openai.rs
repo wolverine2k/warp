@@ -14,7 +14,8 @@ use crate::local_provider::{
 
 use super::{
     AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
-    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError, SummarizerInput,
+    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError,
+    SummarizerInput,
 };
 
 // ---------------------------------------------------------------------------
@@ -159,10 +160,7 @@ impl ProviderAdapter for OpenAiAdapter {
         Ok(req)
     }
 
-    fn parse_list_models_response(
-        &self,
-        body: &str,
-    ) -> Result<ListModelsPage, AdapterError> {
+    fn parse_list_models_response(&self, body: &str) -> Result<ListModelsPage, AdapterError> {
         let parsed: OpenAiModelsListResponse = serde_json::from_str(body)?;
         let models = parsed
             .data
@@ -174,7 +172,10 @@ impl ProviderAdapter for OpenAiAdapter {
                 max_output_tokens: None,
             })
             .collect();
-        Ok(ListModelsPage { models, next_cursor: None })
+        Ok(ListModelsPage {
+            models,
+            next_cursor: None,
+        })
     }
 }
 

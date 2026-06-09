@@ -515,11 +515,7 @@ impl OpenAiSseAdapter {
 // existing single-arg `feed`. The trait's default `feed(data)` impl
 // forwards to `feed_event(None, data)` — both call paths land here.
 impl crate::local_provider::adapters::StreamDecoder for OpenAiSseAdapter {
-    fn feed_event(
-        &mut self,
-        _event_name: Option<&str>,
-        data: &str,
-    ) -> Vec<api::ResponseEvent> {
+    fn feed_event(&mut self, _event_name: Option<&str>, data: &str) -> Vec<api::ResponseEvent> {
         Self::feed(self, data)
     }
     fn finish(&mut self) -> Vec<api::ResponseEvent> {

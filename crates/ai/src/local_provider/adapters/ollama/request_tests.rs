@@ -49,7 +49,11 @@ fn agent_msg(id: &str, body: &str) -> api::Message {
     }
 }
 
-fn tool_call_msg(id: &str, tool_call_id: &str, tool: api::message::tool_call::Tool) -> api::Message {
+fn tool_call_msg(
+    id: &str,
+    tool_call_id: &str,
+    tool: api::message::tool_call::Tool,
+) -> api::Message {
     api::Message {
         id: id.into(),
         message: Some(api::message::Message::ToolCall(api::message::ToolCall {
@@ -254,7 +258,10 @@ fn tool_call_history_becomes_assistant_message_with_object_arguments() {
     assert_eq!(req.messages.len(), 3);
     assert_eq!(req.messages[1].role, OllamaRole::Assistant);
     assert_eq!(req.messages[1].content, "");
-    let tcs = req.messages[1].tool_calls.as_ref().expect("tool_calls present");
+    let tcs = req.messages[1]
+        .tool_calls
+        .as_ref()
+        .expect("tool_calls present");
     assert_eq!(tcs.len(), 1);
     assert_eq!(tcs[0].function.name, "read_files");
     // Arguments must be an object, not a string.
@@ -268,11 +275,7 @@ fn tool_call_history_becomes_assistant_message_with_object_arguments() {
 fn outbound_tool_call_omits_id_and_type_fields() {
     let task = api::Task {
         id: "t1".into(),
-        messages: vec![tool_call_msg(
-            "m1",
-            "call_alpha",
-            read_files_tool(&["x"]),
-        )],
+        messages: vec![tool_call_msg("m1", "call_alpha", read_files_tool(&["x"]))],
         ..Default::default()
     };
     let input = LocalProviderInput {
@@ -282,7 +285,10 @@ fn outbound_tool_call_omits_id_and_type_fields() {
     let req = compose_ollama_chat_request(&input, &cfg());
     let v = serde_json::to_value(&req).unwrap();
     let tool_call = &v["messages"][1]["tool_calls"][0];
-    assert!(tool_call.get("id").is_none(), "tool_call should not have id");
+    assert!(
+        tool_call.get("id").is_none(),
+        "tool_call should not have id"
+    );
     assert!(
         tool_call.get("type").is_none(),
         "tool_call should not have type field"
@@ -507,8 +513,7 @@ fn context_window_threads_into_system_prompt() {
     input.user_query = Some("hi".into());
     let req = compose_ollama_chat_request(&input, &c);
     assert!(
-        req.messages[0].content.contains("200000")
-            || req.messages[0].content.contains("200_000")
+        req.messages[0].content.contains("200000") || req.messages[0].content.contains("200_000")
     );
 }
 

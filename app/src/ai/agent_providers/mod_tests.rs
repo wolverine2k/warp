@@ -199,7 +199,10 @@ fn resolve_byop_for_remote_child_returns_anthropic_wire_shape() {
         let (base_url, api_type, secret_name) =
             app.read(|ctx| resolve_byop_for_remote_child(ctx, &encoded));
 
-        assert_eq!(base_url.as_deref(), Some("https://api.anthropic.example/v1"));
+        assert_eq!(
+            base_url.as_deref(),
+            Some("https://api.anthropic.example/v1")
+        );
         assert_eq!(api_type.as_deref(), Some("anthropic"));
         assert_eq!(secret_name.as_deref(), Some("byop-prov-a"));
     });
@@ -285,31 +288,31 @@ fn resolve_byop_for_remote_child_maps_every_api_type() {
     ];
     for (api_type, expected) in cases {
         App::test((), |mut app| async move {
-                initialize_settings_for_tests(&mut app);
-                app.add_singleton_model(AgentProviderSecrets::new);
-                AISettings::handle(&app).update(&mut app, |settings, ctx| {
-                    let provider = AgentProvider {
-                        id: "p".to_owned(),
-                        name: "P".to_owned(),
-                        kind: AgentProviderKind::default(),
-                        api_type,
-                        base_url: "https://api.example.com".to_owned(),
-                        models: vec![AgentProviderModel::from_id("m".to_owned())],
-                        available_for_orchestration: true,
-                        remote_secret_name: String::new(),
-                    };
-                    settings
-                        .agent_providers
-                        .set_value(vec![provider], ctx)
-                        .unwrap();
-                });
-                AgentProviderSecrets::handle(&app).update(&mut app, |secrets, ctx| {
-                    secrets.set("p", "sk".to_string(), ctx);
-                });
-                let encoded = llm_id::encode("p", "m").to_string();
-                let (_base_url, api_type_str, _secret) =
-                    app.read(|ctx| resolve_byop_for_remote_child(ctx, &encoded));
-                assert_eq!(api_type_str.as_deref(), Some(expected));
+            initialize_settings_for_tests(&mut app);
+            app.add_singleton_model(AgentProviderSecrets::new);
+            AISettings::handle(&app).update(&mut app, |settings, ctx| {
+                let provider = AgentProvider {
+                    id: "p".to_owned(),
+                    name: "P".to_owned(),
+                    kind: AgentProviderKind::default(),
+                    api_type,
+                    base_url: "https://api.example.com".to_owned(),
+                    models: vec![AgentProviderModel::from_id("m".to_owned())],
+                    available_for_orchestration: true,
+                    remote_secret_name: String::new(),
+                };
+                settings
+                    .agent_providers
+                    .set_value(vec![provider], ctx)
+                    .unwrap();
+            });
+            AgentProviderSecrets::handle(&app).update(&mut app, |secrets, ctx| {
+                secrets.set("p", "sk".to_string(), ctx);
+            });
+            let encoded = llm_id::encode("p", "m").to_string();
+            let (_base_url, api_type_str, _secret) =
+                app.read(|ctx| resolve_byop_for_remote_child(ctx, &encoded));
+            assert_eq!(api_type_str.as_deref(), Some(expected));
         });
     }
 }

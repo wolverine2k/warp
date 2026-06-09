@@ -366,11 +366,7 @@ async fn synthesize_ndjson_stream(
         // reason. Defensive on .text() errors — if the body can't be
         // read, surface just the HTTP status.
         let body = response.text().await.unwrap_or_default();
-        let excerpt: String = body
-            .trim()
-            .chars()
-            .take(ERROR_BODY_EXCERPT_CHARS)
-            .collect();
+        let excerpt: String = body.trim().chars().take(ERROR_BODY_EXCERPT_CHARS).collect();
         let msg = if excerpt.is_empty() {
             prefix
         } else {

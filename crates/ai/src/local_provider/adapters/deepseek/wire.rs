@@ -493,10 +493,7 @@ mod tests {
             }
         }"#;
         let chunk: DeepSeekChatChunk = serde_json::from_str(s).unwrap();
-        assert_eq!(
-            chunk.choices[0].finish_reason.as_deref(),
-            Some("stop")
-        );
+        assert_eq!(chunk.choices[0].finish_reason.as_deref(), Some("stop"));
         let usage = chunk.usage.unwrap();
         assert_eq!(usage.prompt_tokens, 42);
         assert_eq!(usage.completion_tokens, 88);

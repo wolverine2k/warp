@@ -14,7 +14,10 @@ pub const MAX_ATTACHMENT_BYTES: usize = 20 * 1024 * 1024; // 20 MiB
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttachmentRejection {
     /// The active model doesn't support this modality (image/pdf/audio).
-    UnsupportedModality { modality: Modality, model_id: String },
+    UnsupportedModality {
+        modality: Modality,
+        model_id: String,
+    },
     /// File exceeds MAX_ATTACHMENT_BYTES.
     FileTooLarge { actual_bytes: usize },
     /// Pending pile is already at MAX_ATTACHMENTS_PER_TURN.
@@ -63,7 +66,12 @@ pub fn validate(
         });
     }
     if candidate.is_image() {
-        if !resolve_image(caps.api_type, caps.model_id, caps.image_setting, caps.catalog) {
+        if !resolve_image(
+            caps.api_type,
+            caps.model_id,
+            caps.image_setting,
+            caps.catalog,
+        ) {
             return Err(AttachmentRejection::UnsupportedModality {
                 modality: Modality::Image,
                 model_id: caps.model_id.to_string(),
@@ -77,7 +85,12 @@ pub fn validate(
             });
         }
     } else if candidate.is_audio() {
-        if !resolve_audio(caps.api_type, caps.model_id, caps.audio_setting, caps.catalog) {
+        if !resolve_audio(
+            caps.api_type,
+            caps.model_id,
+            caps.audio_setting,
+            caps.catalog,
+        ) {
             return Err(AttachmentRejection::UnsupportedModality {
                 modality: Modality::Audio,
                 model_id: caps.model_id.to_string(),

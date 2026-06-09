@@ -24,18 +24,19 @@ pub mod response;
 pub mod wire;
 
 #[cfg(test)]
+#[path = "list_models_response_tests.rs"]
+mod list_models_tests;
+#[cfg(test)]
 #[path = "request_tests.rs"]
 mod request_tests;
 #[cfg(test)]
 #[path = "response_tests.rs"]
 mod response_tests;
-#[cfg(test)]
-#[path = "list_models_response_tests.rs"]
-mod list_models_tests;
 
 use super::{
     AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
-    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError, SummarizerInput,
+    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError,
+    SummarizerInput,
 };
 
 use request::compose_gemini_request;
@@ -184,10 +185,7 @@ impl ProviderAdapter for GeminiAdapter {
         Ok(apply_gemini_headers(http.get(url), cfg.api_key.as_deref()))
     }
 
-    fn parse_list_models_response(
-        &self,
-        body: &str,
-    ) -> Result<ListModelsPage, AdapterError> {
+    fn parse_list_models_response(&self, body: &str) -> Result<ListModelsPage, AdapterError> {
         let parsed: wire::GeminiModelsListResponse = serde_json::from_str(body)?;
         let models: Vec<DiscoveredModel> = parsed
             .models
@@ -201,7 +199,11 @@ impl ProviderAdapter for GeminiAdapter {
             })
             .map(|m| {
                 // Strip the "models/" prefix; keep raw name if absent (defensive).
-                let id = m.name.strip_prefix("models/").unwrap_or(&m.name).to_string();
+                let id = m
+                    .name
+                    .strip_prefix("models/")
+                    .unwrap_or(&m.name)
+                    .to_string();
                 DiscoveredModel {
                     id,
                     display_name: m.display_name,

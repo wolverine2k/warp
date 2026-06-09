@@ -21,8 +21,7 @@ use ai::local_provider::{
     adapters::{DiscoveredModel, ListModelsPage},
     api_type::AgentProviderApiType,
     config::LocalProviderConfig,
-    select_adapter,
-    ProviderAdapterError as AdapterError,
+    select_adapter, ProviderAdapterError as AdapterError,
 };
 
 /// Hard caps for the pagination loop. The entry cap bounds the modal
@@ -50,10 +49,7 @@ impl FetchModelsOutcome {
 /// Run the full fetch flow for one provider. Selects the adapter,
 /// pre-flights API-key requirement, builds + sends the request (with
 /// pagination), dedupes by `id`, and returns a structured outcome.
-pub async fn fetch_models(
-    cfg: LocalProviderConfig,
-    http: reqwest::Client,
-) -> FetchModelsOutcome {
+pub async fn fetch_models(cfg: LocalProviderConfig, http: reqwest::Client) -> FetchModelsOutcome {
     match tokio::time::timeout(FETCH_TIMEOUT, fetch_models_inner(cfg, http)).await {
         Ok(outcome) => outcome,
         Err(_) => FetchModelsOutcome::Failed(format!(
@@ -63,10 +59,7 @@ pub async fn fetch_models(
     }
 }
 
-async fn fetch_models_inner(
-    cfg: LocalProviderConfig,
-    http: reqwest::Client,
-) -> FetchModelsOutcome {
+async fn fetch_models_inner(cfg: LocalProviderConfig, http: reqwest::Client) -> FetchModelsOutcome {
     let adapter = match select_adapter(cfg.api_type) {
         Ok(a) => a,
         Err(AdapterError::UnsupportedApiType(t)) => {

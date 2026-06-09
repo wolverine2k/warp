@@ -210,10 +210,7 @@ pub trait ProviderAdapter: Send + Sync {
     /// Parse a successful 2xx body from `build_list_models_request` into
     /// a `ListModelsPage`. Stateless. The default impl returns
     /// `UnsupportedApiType` for the same reason as `build_list_models_request`.
-    fn parse_list_models_response(
-        &self,
-        _body: &str,
-    ) -> Result<ListModelsPage, AdapterError> {
+    fn parse_list_models_response(&self, _body: &str) -> Result<ListModelsPage, AdapterError> {
         Err(AdapterError::UnsupportedApiType(self.api_type()))
     }
 }

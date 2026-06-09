@@ -9,9 +9,7 @@ const CATALOG_URL: &str = "https://models.dev/api.json";
 const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_BODY_BYTES: usize = 5 * 1024 * 1024;
 
-pub async fn fetch_catalog(
-    http: &reqwest::Client,
-) -> Result<Vec<CatalogModel>, CatalogError> {
+pub async fn fetch_catalog(http: &reqwest::Client) -> Result<Vec<CatalogModel>, CatalogError> {
     let body = tokio::time::timeout(FETCH_TIMEOUT, fetch_body(http, CATALOG_URL))
         .await
         .map_err(|_| {

@@ -10,6 +10,5 @@ use super::parse::{parse_catalog, CatalogModel};
 const SNAPSHOT_JSON: &str = include_str!("snapshot.json");
 
 pub static BAKED_IN_SNAPSHOT: LazyLock<Vec<CatalogModel>> = LazyLock::new(|| {
-    parse_catalog(SNAPSHOT_JSON)
-        .expect("baked-in catalog snapshot must parse — fix snapshot.json")
+    parse_catalog(SNAPSHOT_JSON).expect("baked-in catalog snapshot must parse — fix snapshot.json")
 });

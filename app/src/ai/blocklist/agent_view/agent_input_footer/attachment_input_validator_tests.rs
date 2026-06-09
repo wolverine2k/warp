@@ -1,6 +1,6 @@
 use super::{
-    validate, ActiveModelCaps, AttachmentRejection, Modality, MAX_ATTACHMENT_BYTES,
-    MAX_ATTACHMENTS_PER_TURN,
+    validate, ActiveModelCaps, AttachmentRejection, Modality, MAX_ATTACHMENTS_PER_TURN,
+    MAX_ATTACHMENT_BYTES,
 };
 use ai::attachments::AgentAttachment;
 use ai::local_provider::AgentProviderApiType;

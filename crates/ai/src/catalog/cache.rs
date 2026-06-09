@@ -119,12 +119,10 @@ impl CatalogCache {
     }
 
     fn save(&self) -> Result<(), CatalogError> {
-        let path = cache_path().ok_or_else(|| {
-            CatalogError::Io("config dir unavailable".to_string())
-        })?;
+        let path =
+            cache_path().ok_or_else(|| CatalogError::Io("config dir unavailable".to_string()))?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| CatalogError::Io(format!("{e}")))?;
+            std::fs::create_dir_all(parent).map_err(|e| CatalogError::Io(format!("{e}")))?;
         }
         let on_disk = OnDisk {
             version: ON_DISK_VERSION,

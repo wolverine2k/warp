@@ -232,7 +232,10 @@ fn tool_call_proto_becomes_function_call_part_with_object_args() {
     match &model_content.parts[0] {
         GeminiOutboundPart::FunctionCall(fc) => {
             assert_eq!(fc.function_call.name, "read_files");
-            assert!(fc.function_call.args.is_object(), "args must be a JSON object");
+            assert!(
+                fc.function_call.args.is_object(),
+                "args must be a JSON object"
+            );
             assert_eq!(fc.function_call.args["paths"][0], "Cargo.toml");
         }
         other => panic!("expected FunctionCall part, got {other:?}"),
@@ -269,7 +272,10 @@ fn tool_result_proto_becomes_function_response_with_content_wrapper() {
     match &user_with_fr.parts[0] {
         GeminiOutboundPart::FunctionResponse(fr) => {
             let resp = &fr.function_response.response;
-            assert!(resp.get("content").is_some(), "response must have 'content' key");
+            assert!(
+                resp.get("content").is_some(),
+                "response must have 'content' key"
+            );
             assert!(resp["content"].is_string());
         }
         other => panic!("expected FunctionResponse part, got {other:?}"),
@@ -347,7 +353,10 @@ fn function_response_name_is_empty_when_no_prior_tool_call() {
         .expect("FunctionResponse content present");
     match &fr_content.parts[0] {
         GeminiOutboundPart::FunctionResponse(fr) => {
-            assert_eq!(fr.function_response.name, "", "name should be empty string as defensive fallback");
+            assert_eq!(
+                fr.function_response.name, "",
+                "name should be empty string as defensive fallback"
+            );
         }
         other => panic!("expected FunctionResponse, got {other:?}"),
     }
@@ -402,7 +411,10 @@ fn generation_config_always_emitted() {
     input.user_query = Some("hi".into());
     let req = compose_gemini_request(&input, &cfg());
     let v = serde_json::to_value(&req).unwrap();
-    assert!(v.get("generationConfig").is_some(), "generationConfig must always be present");
+    assert!(
+        v.get("generationConfig").is_some(),
+        "generationConfig must always be present"
+    );
     assert_eq!(v["generationConfig"], serde_json::json!({}));
 }
 
@@ -502,9 +514,21 @@ fn adjacent_same_role_messages_are_merged() {
     };
     let req = compose_gemini_request(&input, &cfg());
     // Both model messages should be merged into a single entry.
-    let model_entries: Vec<_> = req.contents.iter().filter(|c| c.role == GeminiRole::Model).collect();
-    assert_eq!(model_entries.len(), 1, "adjacent Model entries must be merged");
-    assert_eq!(model_entries[0].parts.len(), 2, "merged entry has both parts");
+    let model_entries: Vec<_> = req
+        .contents
+        .iter()
+        .filter(|c| c.role == GeminiRole::Model)
+        .collect();
+    assert_eq!(
+        model_entries.len(),
+        1,
+        "adjacent Model entries must be merged"
+    );
+    assert_eq!(
+        model_entries[0].parts.len(),
+        2,
+        "merged entry has both parts"
+    );
     match &model_entries[0].parts[0] {
         GeminiOutboundPart::Text(t) => assert_eq!(t.text, "first model response"),
         other => panic!("expected Text, got {other:?}"),
@@ -546,11 +570,20 @@ fn multi_turn_round_trip() {
     assert_eq!(req.contents.len(), 5, "{:#?}", req.contents);
     assert_eq!(req.contents[0].role, GeminiRole::User);
     assert_eq!(req.contents[1].role, GeminiRole::Model);
-    assert!(matches!(req.contents[1].parts[0], GeminiOutboundPart::FunctionCall(_)));
+    assert!(matches!(
+        req.contents[1].parts[0],
+        GeminiOutboundPart::FunctionCall(_)
+    ));
     assert_eq!(req.contents[2].role, GeminiRole::User);
-    assert!(matches!(req.contents[2].parts[0], GeminiOutboundPart::FunctionResponse(_)));
+    assert!(matches!(
+        req.contents[2].parts[0],
+        GeminiOutboundPart::FunctionResponse(_)
+    ));
     assert_eq!(req.contents[3].role, GeminiRole::Model);
-    assert!(matches!(req.contents[3].parts[0], GeminiOutboundPart::Text(_)));
+    assert!(matches!(
+        req.contents[3].parts[0],
+        GeminiOutboundPart::Text(_)
+    ));
     assert_eq!(req.contents[4].role, GeminiRole::User);
 
     // Spot-check JSON serialization shape.
@@ -558,7 +591,9 @@ fn multi_turn_round_trip() {
     assert_eq!(v["contents"][1]["role"], "model");
     assert!(v["contents"][1]["parts"][0].get("functionCall").is_some());
     assert_eq!(v["contents"][2]["role"], "user");
-    assert!(v["contents"][2]["parts"][0].get("functionResponse").is_some());
+    assert!(v["contents"][2]["parts"][0]
+        .get("functionResponse")
+        .is_some());
 }
 
 // ---- 18. model_role_serializes_as_lowercase_string ----
@@ -582,8 +617,7 @@ fn model_role_serializes_as_lowercase_string() {
         .position(|c| c.role == GeminiRole::Model)
         .expect("model entry present");
     assert_eq!(
-        v["contents"][model_entry]["role"],
-        "model",
+        v["contents"][model_entry]["role"], "model",
         "role must serialize as lowercase 'model'"
     );
     assert_ne!(v["contents"][model_entry]["role"], "Model");
@@ -605,11 +639,18 @@ fn text_only_turn_emits_just_text_part() {
         .iter()
         .find(|c| c.role == GeminiRole::User)
         .expect("user content present");
-    assert_eq!(user_entry.parts.len(), 1, "text-only turn must have exactly one part");
+    assert_eq!(
+        user_entry.parts.len(),
+        1,
+        "text-only turn must have exactly one part"
+    );
     assert!(matches!(user_entry.parts[0], GeminiOutboundPart::Text(_)));
     // Wire: no inline_data key on the parts.
     for part in v["contents"][0]["parts"].as_array().unwrap() {
-        assert!(part.get("inline_data").is_none(), "no inline_data on text-only turn");
+        assert!(
+            part.get("inline_data").is_none(),
+            "no inline_data on text-only turn"
+        );
     }
 }
 
@@ -633,9 +674,16 @@ fn image_attachment_appends_inline_data_part() {
         .find(|c| c.role == GeminiRole::User)
         .expect("user content present");
     // text part + inline_data part
-    assert_eq!(user_entry.parts.len(), 2, "should have text + inline_data parts");
+    assert_eq!(
+        user_entry.parts.len(),
+        2,
+        "should have text + inline_data parts"
+    );
     assert!(matches!(user_entry.parts[0], GeminiOutboundPart::Text(_)));
-    assert!(matches!(user_entry.parts[1], GeminiOutboundPart::InlineData(_)));
+    assert!(matches!(
+        user_entry.parts[1],
+        GeminiOutboundPart::InlineData(_)
+    ));
     // Wire shape: {"inline_data":{"mime_type":"image/png","data":"<b64>"}}
     let v = serde_json::to_value(&req).unwrap();
     let inline = &v["contents"][0]["parts"][1];
@@ -643,7 +691,10 @@ fn image_attachment_appends_inline_data_part() {
     assert_eq!(inline["inline_data"]["data"], expected_b64);
     // No data-URI prefix.
     assert!(
-        !inline["inline_data"]["data"].as_str().unwrap().starts_with("data:"),
+        !inline["inline_data"]["data"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:"),
         "data must be raw base64, not a data-URI"
     );
 }
@@ -667,8 +718,15 @@ fn audio_attachment_emits_inline_data_with_audio_mime() {
         .iter()
         .find(|c| c.role == GeminiRole::User)
         .expect("user content present");
-    assert_eq!(user_entry.parts.len(), 2, "should have text + inline_data parts");
-    assert!(matches!(user_entry.parts[1], GeminiOutboundPart::InlineData(_)));
+    assert_eq!(
+        user_entry.parts.len(),
+        2,
+        "should have text + inline_data parts"
+    );
+    assert!(matches!(
+        user_entry.parts[1],
+        GeminiOutboundPart::InlineData(_)
+    ));
     let v = serde_json::to_value(&req).unwrap();
     let inline = &v["contents"][0]["parts"][1];
     assert_eq!(inline["inline_data"]["mime_type"], "audio/wav");
@@ -793,7 +851,10 @@ fn gemini_adapter_summarizer_request_uses_generate_content_url_with_application_
     let body_bytes = req.body().and_then(|b| b.as_bytes()).expect("body present");
     let body_str = std::str::from_utf8(body_bytes).unwrap();
     let v: serde_json::Value = serde_json::from_str(body_str).unwrap();
-    assert!(v.get("systemInstruction").is_some(), "systemInstruction must be lifted");
+    assert!(
+        v.get("systemInstruction").is_some(),
+        "systemInstruction must be lifted"
+    );
     // contents should map user role.
     assert_eq!(v["contents"][0]["role"], "user");
 }
@@ -816,7 +877,8 @@ fn gemini_adapter_summarizer_body_lifts_system_to_top_level() {
         .build()
         .unwrap();
     let body_bytes = req.body().and_then(|b| b.as_bytes()).expect("body present");
-    let v: serde_json::Value = serde_json::from_str(std::str::from_utf8(body_bytes).unwrap()).unwrap();
+    let v: serde_json::Value =
+        serde_json::from_str(std::str::from_utf8(body_bytes).unwrap()).unwrap();
 
     assert_eq!(v["systemInstruction"]["parts"][0]["text"], "S");
     assert_eq!(v["contents"][0]["role"], "user");

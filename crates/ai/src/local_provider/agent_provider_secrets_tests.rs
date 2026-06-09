@@ -7,7 +7,7 @@
 //! providing the integration coverage these unit tests intentionally skip.
 
 use super::*;
-use warpui::{App, SingletonEntity};
+use warpui_core::{App, SingletonEntity};
 
 #[test]
 fn set_inserts_and_get_returns_value() {

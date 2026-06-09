@@ -4,7 +4,9 @@
 use super::{ListModelsPage, OpenAiAdapter, ProviderAdapter};
 use crate::local_provider::adapters::DiscoveredModel;
 
-fn adapter() -> OpenAiAdapter { OpenAiAdapter }
+fn adapter() -> OpenAiAdapter {
+    OpenAiAdapter
+}
 
 #[test]
 fn parses_happy_path_three_models() {
@@ -16,11 +18,30 @@ fn parses_happy_path_three_models() {
             {"id": "text-embedding-3-small", "object": "model", "created": 3, "owned_by": "system"}
         ]
     }"#;
-    let ListModelsPage { models, next_cursor } = adapter().parse_list_models_response(body).unwrap();
+    let ListModelsPage {
+        models,
+        next_cursor,
+    } = adapter().parse_list_models_response(body).unwrap();
     assert_eq!(next_cursor, None);
     assert_eq!(models.len(), 3);
-    assert_eq!(models[0], DiscoveredModel { id: "gpt-4o".into(),       display_name: None, context_window: None, max_output_tokens: None });
-    assert_eq!(models[1], DiscoveredModel { id: "gpt-4o-mini".into(),  display_name: None, context_window: None, max_output_tokens: None });
+    assert_eq!(
+        models[0],
+        DiscoveredModel {
+            id: "gpt-4o".into(),
+            display_name: None,
+            context_window: None,
+            max_output_tokens: None
+        }
+    );
+    assert_eq!(
+        models[1],
+        DiscoveredModel {
+            id: "gpt-4o-mini".into(),
+            display_name: None,
+            context_window: None,
+            max_output_tokens: None
+        }
+    );
     assert_eq!(models[2].id, "text-embedding-3-small");
 }
 
@@ -34,16 +55,22 @@ fn parses_empty_data_array() {
 
 #[test]
 fn errors_on_malformed_json() {
-    let body = r#"{"object": "list", "data": ["#;   // truncated
+    let body = r#"{"object": "list", "data": ["#; // truncated
     let err = adapter().parse_list_models_response(body).unwrap_err();
-    assert!(matches!(err, super::AdapterError::EncodeRequest(_)), "got {err:?}");
+    assert!(
+        matches!(err, super::AdapterError::EncodeRequest(_)),
+        "got {err:?}"
+    );
 }
 
 #[test]
 fn errors_on_row_missing_id() {
     let body = r#"{"data": [{"object": "model", "created": 1, "owned_by": "system"}]}"#;
     let err = adapter().parse_list_models_response(body).unwrap_err();
-    assert!(matches!(err, super::AdapterError::EncodeRequest(_)), "got {err:?}");
+    assert!(
+        matches!(err, super::AdapterError::EncodeRequest(_)),
+        "got {err:?}"
+    );
 }
 
 #[test]

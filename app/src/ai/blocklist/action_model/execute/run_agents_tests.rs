@@ -1,233 +1,770 @@
-use super::*;
-use crate::settings::{AISettings, AgentProvider, AgentProviderApiType, AgentProviderModel};
-use crate::test_util::settings::initialize_settings_for_tests;
-use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
-use ai::local_provider::llm_id;
-use settings::Setting;
-use warpui::App;
+use std::collections::HashMap;
 
-fn make_request(model_id: &str, harness_type: &str) -> RunAgentsRequest {
+use ai::agent::action::{RunAgentsAgentRunConfig, RunAgentsExecutionMode, RunAgentsRequest};
+use ai::agent::orchestration_config::{
+    OrchestrationConfig, OrchestrationConfigStatus, OrchestrationExecutionMode,
+};
+use ai::local_provider::{llm_id, AgentProviderApiType};
+use settings::Setting;
+use warp_core::execution_mode::ExecutionMode;
+use warp_core::features::FeatureFlag;
+use warpui::{App, EntityId, ModelHandle};
+
+use super::*;
+use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
+use crate::ai::agent::task::TaskId;
+use crate::ai::blocklist::{BlocklistAIHistoryModel, BlocklistAIPermissions};
+use crate::ai::cloud_agent_settings::CloudAgentSettings;
+use crate::ai::execution_profiles::profiles::AIExecutionProfilesModel;
+use crate::ai::execution_profiles::RunAgentsPermission;
+use crate::ai::mcp::templatable_manager::TemplatableMCPServerManager;
+use crate::auth::AuthStateProvider;
+use crate::cloud_object::model::persistence::CloudModel;
+use crate::network::NetworkStatus;
+use crate::server::cloud_objects::update_manager::UpdateManager;
+use crate::server::sync_queue::SyncQueue;
+use crate::settings::ai::AISettings;
+use crate::settings::PrivacySettings;
+use crate::settings::{AgentProvider, AgentProviderKind, AgentProviderModel};
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::test_util::settings::initialize_settings_for_tests_with_mode;
+use crate::workspaces::team_tester::TeamTesterStatus;
+use crate::workspaces::user_workspaces::UserWorkspaces;
+use crate::{
+    AgentNotificationsModel, GlobalResourceHandles, GlobalResourceHandlesProvider, LaunchMode,
+};
+
+struct RunAgentsTestState {
+    conversation_id: AIConversationId,
+    executor: ModelHandle<RunAgentsExecutor>,
+}
+fn with_plan_id(mut action: AIAgentAction, plan_id: &str) -> AIAgentAction {
+    let AIAgentActionType::RunAgents(request) = &mut action.action else {
+        panic!("expected run_agents action");
+    };
+    request.plan_id = plan_id.to_string();
+    action
+}
+
+fn persist_plan_config(
+    app: &mut App,
+    conversation_id: AIConversationId,
+    plan_id: &str,
+    status: OrchestrationConfigStatus,
+) {
+    persist_plan_config_with_harness(app, conversation_id, plan_id, "oz", status);
+}
+
+fn persist_plan_config_with_harness(
+    app: &mut App,
+    conversation_id: AIConversationId,
+    plan_id: &str,
+    harness_type: &str,
+    status: OrchestrationConfigStatus,
+) {
+    BlocklistAIHistoryModel::handle(app).update(app, |history, _ctx| {
+        history
+            .conversation_mut(&conversation_id)
+            .expect("conversation should exist")
+            .set_orchestration_config_for_plan(
+                plan_id.to_string(),
+                OrchestrationConfig {
+                    model_id: "auto".to_string(),
+                    harness_type: harness_type.to_string(),
+                    execution_mode: OrchestrationExecutionMode::Remote {
+                        environment_id: "env-1".to_string(),
+                        worker_host: "warp".to_string(),
+                    },
+                },
+                status,
+            );
+    });
+}
+
+#[test]
+fn should_autoexecute_duplicate_launched_agent_denial() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        state.executor.update(&mut app, |executor, _ctx| {
+            executor.record_launched_agents(
+                state.conversation_id,
+                &[RunAgentsAgentOutcome {
+                    name: "child".to_string(),
+                    kind: RunAgentsAgentOutcomeKind::Launched {
+                        agent_id: "agent-123".to_string(),
+                    },
+                }],
+            );
+        });
+        let action = remote_run_agents_action("oz");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: state.conversation_id,
+                },
+                ctx,
+            )
+        });
+
+        assert!(should_autoexecute);
+    });
+}
+
+#[test]
+fn execute_denies_duplicate_launched_agent() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        state.executor.update(&mut app, |executor, _ctx| {
+            executor.record_launched_agents(
+                state.conversation_id,
+                &[RunAgentsAgentOutcome {
+                    name: "child".to_string(),
+                    kind: RunAgentsAgentOutcomeKind::Launched {
+                        agent_id: "agent-123".to_string(),
+                    },
+                }],
+            );
+        });
+        let action = with_agent_name(remote_run_agents_action("oz"), "Child");
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: state.conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+
+        let AnyActionExecution::Sync(AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
+            reason,
+        })) = execution
+        else {
+            panic!("expected synchronous run_agents denial");
+        };
+        assert!(reason.contains("child (agent-123)"));
+        assert!(reason.contains("send_message_to_agent"));
+    });
+}
+
+fn initialize_run_agents_test(app: &mut App, mode: ExecutionMode) -> RunAgentsTestState {
+    initialize_settings_for_tests_with_mode(app, mode, false);
+    let global_resource_handles = GlobalResourceHandles::mock(app);
+    app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+    let history = app.add_singleton_model(|_| BlocklistAIHistoryModel::new(vec![], &[]));
+    app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+    app.add_singleton_model(|_| ActiveAgentViewsModel::new());
+    app.add_singleton_model(AgentNotificationsModel::new);
+    app.add_singleton_model(BlocklistAIPermissions::new);
+    let terminal_view_id = EntityId::new();
+    app.add_singleton_model(|_| AuthStateProvider::new_for_test());
+    app.add_singleton_model(SyncQueue::mock);
+    app.add_singleton_model(|_| NetworkStatus::new());
+    app.add_singleton_model(TeamTesterStatus::mock);
+    app.add_singleton_model(UpdateManager::mock);
+    app.add_singleton_model(CloudModel::mock);
+    app.add_singleton_model(|_| TemplatableMCPServerManager::default());
+    app.add_singleton_model(|ctx| {
+        AIExecutionProfilesModel::new(&LaunchMode::new_for_unit_test(), ctx)
+    });
+    app.add_singleton_model(PrivacySettings::mock);
+    app.add_singleton_model(UserWorkspaces::default_mock);
+    let conversation_id = history.update(app, |history_model, ctx| {
+        history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+    });
+    let start_agent_executor = app.add_model(StartAgentExecutor::new);
+    let executor =
+        app.add_model(|_| RunAgentsExecutor::new(start_agent_executor, terminal_view_id));
+
+    RunAgentsTestState {
+        conversation_id,
+        executor,
+    }
+}
+
+fn remote_run_agents_action(harness_type: &str) -> AIAgentAction {
+    AIAgentAction {
+        id: AIAgentActionId::from("run-agents-action".to_string()),
+        task_id: TaskId::new("run-agents-task".to_string()),
+        requires_result: true,
+        action: AIAgentActionType::RunAgents(RunAgentsRequest {
+            summary: "Run child agent".to_string(),
+            base_prompt: "Help".to_string(),
+            skills: vec![],
+            model_id: String::new(),
+            harness_type: harness_type.to_string(),
+            execution_mode: RunAgentsExecutionMode::Remote {
+                environment_id: "env-1".to_string(),
+                worker_host: "warp".to_string(),
+                computer_use_enabled: false,
+            },
+            agent_run_configs: vec![RunAgentsAgentRunConfig {
+                name: "child".to_string(),
+                prompt: "Help".to_string(),
+                title: String::new(),
+            }],
+            plan_id: String::new(),
+            harness_auth_secret_name: None,
+        }),
+    }
+}
+
+fn local_run_agents_request(model_id: &str, harness_type: &str) -> RunAgentsRequest {
     RunAgentsRequest {
-        summary: String::new(),
-        base_prompt: "go".to_string(),
+        summary: "Run child agent".to_string(),
+        base_prompt: "Help".to_string(),
         skills: vec![],
         model_id: model_id.to_string(),
         harness_type: harness_type.to_string(),
         execution_mode: RunAgentsExecutionMode::Local,
         agent_run_configs: vec![RunAgentsAgentRunConfig {
-            name: "child-1".to_string(),
-            prompt: "do thing".to_string(),
-            title: "T".to_string(),
+            name: "child".to_string(),
+            prompt: "Help".to_string(),
+            title: String::new(),
         }],
         plan_id: String::new(),
         harness_auth_secret_name: None,
     }
 }
 
-fn add_byop_provider_for_orchestration(
+fn add_byop_provider(
     app: &mut App,
     provider_id: &str,
     api_type: AgentProviderApiType,
+    available_for_orchestration: bool,
 ) {
     AISettings::handle(app).update(app, |settings, ctx| {
-        let provider = AgentProvider {
-            id: provider_id.to_owned(),
-            name: "P".to_owned(),
-            kind: Default::default(),
-            api_type,
-            base_url: "https://api.example.com/v1".to_owned(),
-            models: vec![AgentProviderModel::from_id("m1".to_owned())],
-            available_for_orchestration: true,
-            remote_secret_name: String::new(),
-        };
         let mut providers = settings.agent_providers.value().clone();
-        providers.push(provider);
+        providers.push(AgentProvider {
+            id: provider_id.to_string(),
+            name: "BYOP test provider".to_string(),
+            kind: AgentProviderKind::default(),
+            api_type,
+            base_url: "https://api.example.com/v1".to_string(),
+            models: vec![AgentProviderModel::from_id("model-1".to_string())],
+            available_for_orchestration,
+            remote_secret_name: String::new(),
+        });
         settings.agent_providers.set_value(providers, ctx).unwrap();
     });
+}
+
+fn with_agent_name(mut action: AIAgentAction, name: &str) -> AIAgentAction {
+    let AIAgentActionType::RunAgents(request) = &mut action.action else {
+        panic!("expected run_agents action");
+    };
+    request.agent_run_configs[0].name = name.to_string();
+    action
+}
+
+#[test]
+fn local_codex_run_agents_maps_to_local_harness_mode_when_flag_enabled() {
+    let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
+    let cfg = RunAgentsAgentRunConfig {
+        name: "child".to_string(),
+        prompt: "Investigate the failure".to_string(),
+        title: String::new(),
+    };
+
+    let mode = run_agents_to_start_agent_mode(
+        &RunAgentsExecutionMode::Local,
+        "codex",
+        "",
+        &[],
+        None,
+        &cfg,
+    )
+    .expect("local Codex should be accepted when the feature flag is enabled");
+
+    assert_eq!(
+        mode,
+        StartAgentExecutionMode::Local {
+            harness_type: Some("codex".to_string()),
+            model_id: None,
+        }
+    );
 }
 
 #[test]
 fn validate_request_accepts_compatible_byop_with_oz_harness() {
     App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
-        add_byop_provider_for_orchestration(&mut app, "prov-1", AgentProviderApiType::OpenAi);
+        initialize_settings_for_tests_with_mode(&mut app, ExecutionMode::App, false);
+        add_byop_provider(&mut app, "prov-openai", AgentProviderApiType::OpenAi, true);
+        let byop_model_id = llm_id::encode("prov-openai", "model-1").to_string();
+        let request = local_run_agents_request(&byop_model_id, "oz");
 
-        let model_id = llm_id::encode("prov-1", "m1").to_string();
-        let request = make_request(&model_id, "oz");
-        app.read(|ctx| {
-            assert!(validate_request(&request, ctx).is_ok());
-        });
+        app.read(|ctx| validate_request(&request, ctx))
+            .expect("compatible BYOP model should validate");
     });
 }
 
 #[test]
 fn validate_request_rejects_anthropic_byop_with_gemini_harness() {
     App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
-        add_byop_provider_for_orchestration(&mut app, "prov-2", AgentProviderApiType::Anthropic);
+        initialize_settings_for_tests_with_mode(&mut app, ExecutionMode::App, false);
+        add_byop_provider(
+            &mut app,
+            "prov-anthropic",
+            AgentProviderApiType::Anthropic,
+            true,
+        );
+        let byop_model_id = llm_id::encode("prov-anthropic", "model-1").to_string();
+        let request = local_run_agents_request(&byop_model_id, "gemini");
 
-        let model_id = llm_id::encode("prov-2", "m1").to_string();
-        // gemini harness is incompatible with Anthropic API and is not a
-        // local-child harness, so only the BYOP validator fires.
-        let request = make_request(&model_id, "gemini");
-        app.read(|ctx| {
-            let err = validate_request(&request, ctx).unwrap_err();
-            assert!(err.contains("not compatible with harness 'gemini'"), "{err}");
-        });
+        let error = app
+            .read(|ctx| validate_request(&request, ctx))
+            .expect_err("incompatible BYOP model should be rejected")
+            .to_string();
+        assert!(error.contains("not compatible"));
+        assert!(error.contains("Anthropic"));
+        assert!(error.contains("gemini"));
     });
 }
 
 #[test]
 fn validate_request_rejects_byop_when_provider_not_opted_in() {
     App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
-        add_byop_provider_for_orchestration(&mut app, "prov-3", AgentProviderApiType::OpenAi);
-        AISettings::handle(&app).update(&mut app, |settings, ctx| {
-            let mut providers = settings.agent_providers.value().clone();
-            providers
-                .last_mut()
-                .unwrap()
-                .available_for_orchestration = false;
-            settings.agent_providers.set_value(providers, ctx).unwrap();
-        });
+        initialize_settings_for_tests_with_mode(&mut app, ExecutionMode::App, false);
+        add_byop_provider(&mut app, "prov-openai", AgentProviderApiType::OpenAi, false);
+        let byop_model_id = llm_id::encode("prov-openai", "model-1").to_string();
+        let request = local_run_agents_request(&byop_model_id, "oz");
 
-        let model_id = llm_id::encode("prov-3", "m1").to_string();
-        let request = make_request(&model_id, "oz");
-        app.read(|ctx| {
-            let err = validate_request(&request, ctx).unwrap_err();
-            assert!(err.contains("not enabled for orchestration"), "{err}");
-        });
+        let error = app
+            .read(|ctx| validate_request(&request, ctx))
+            .expect_err("non-opted-in BYOP model should be rejected")
+            .to_string();
+        assert!(error.contains("not enabled for orchestration"));
     });
 }
 
 #[test]
 fn validate_request_passes_through_first_party_model_ids() {
     App::test((), |mut app| async move {
-        initialize_settings_for_tests(&mut app);
-        let request = make_request("claude-4.5-sonnet", "oz");
-        app.read(|ctx| {
-            assert!(validate_request(&request, ctx).is_ok());
-        });
+        initialize_settings_for_tests_with_mode(&mut app, ExecutionMode::App, false);
+        let request = local_run_agents_request("auto", "oz");
+
+        app.read(|ctx| validate_request(&request, ctx))
+            .expect("non-BYOP model ids should keep existing validation behavior");
     });
 }
 
-// Phase 5b integration tests for the orchestration submit -> child-agent
-// translator. Verifies that BYOP model ids survive `run_agents_to_start_agent_mode`
-// into the per-child `StartAgentExecutionMode` so the existing in-process
-// BYOP dispatcher (Phase 4d) takes over.
-
-mod run_agents_to_start_agent_mode_byop_tests {
-    use super::*;
-    use ai::agent::action::{
-        RunAgentsAgentRunConfig, RunAgentsExecutionMode, StartAgentExecutionMode,
+#[test]
+fn byop_model_id_threads_into_local_native_start_mode() {
+    let cfg = RunAgentsAgentRunConfig {
+        name: "child".to_string(),
+        prompt: "Investigate".to_string(),
+        title: String::new(),
     };
-    use ai::local_provider::llm_id;
+    let byop_model_id = llm_id::encode("prov-openai", "model-1").to_string();
 
-    fn make_run_config() -> RunAgentsAgentRunConfig {
-        RunAgentsAgentRunConfig {
-            name: "child-1".to_string(),
-            prompt: "p".to_string(),
-            title: "T".to_string(),
+    let mode = run_agents_to_start_agent_mode(
+        &RunAgentsExecutionMode::Local,
+        "oz",
+        &byop_model_id,
+        &[],
+        None,
+        &cfg,
+    )
+    .expect("local native harness should accept BYOP model ids");
+
+    assert_eq!(
+        mode,
+        StartAgentExecutionMode::Local {
+            harness_type: None,
+            model_id: Some(byop_model_id),
         }
-    }
+    );
+}
 
-    #[test]
-    fn byop_model_id_threads_into_local_native_start_mode() {
-        let model_id = llm_id::encode("prov-1", "m1").to_string();
-        let mode = run_agents_to_start_agent_mode(
-            &RunAgentsExecutionMode::Local,
-            "oz",
-            &model_id,
-            &[],
-            None,
-            &make_run_config(),
-        )
-        .expect("Local Native + BYOP must translate");
-        match mode {
-            StartAgentExecutionMode::Local {
-                harness_type,
-                model_id: forwarded,
-            } => {
-                assert!(harness_type.is_none(), "oz harness should be None on Local");
-                assert_eq!(forwarded.as_deref(), Some(model_id.as_str()));
-            }
-            other => panic!("expected Local mode, got {other:?}"),
+#[test]
+fn empty_harness_is_treated_as_native_oz() {
+    let cfg = RunAgentsAgentRunConfig {
+        name: "child".to_string(),
+        prompt: "Investigate".to_string(),
+        title: String::new(),
+    };
+    let byop_model_id = llm_id::encode("prov-openai", "model-1").to_string();
+
+    let mode = run_agents_to_start_agent_mode(
+        &RunAgentsExecutionMode::Local,
+        "",
+        &byop_model_id,
+        &[],
+        None,
+        &cfg,
+    )
+    .expect("empty local harness should be treated as native Oz");
+
+    assert_eq!(
+        mode,
+        StartAgentExecutionMode::Local {
+            harness_type: None,
+            model_id: Some(byop_model_id),
         }
-    }
+    );
+}
 
-    #[test]
-    fn empty_harness_is_treated_as_native_oz() {
-        let model_id = llm_id::encode("prov-1", "m1").to_string();
-        let mode = run_agents_to_start_agent_mode(
-            &RunAgentsExecutionMode::Local,
-            "",
-            &model_id,
-            &[],
-            None,
-            &make_run_config(),
-        )
-        .expect("empty harness == native oz");
-        assert!(matches!(
-            mode,
-            StartAgentExecutionMode::Local {
-                harness_type: None,
-                ..
-            }
-        ));
-    }
+#[test]
+fn byop_model_id_threads_into_codex_local_when_harness_set() {
+    let _local_codex = FeatureFlag::LocalClaudeCodexChildHarnesses.override_enabled(true);
+    let cfg = RunAgentsAgentRunConfig {
+        name: "child".to_string(),
+        prompt: "Investigate".to_string(),
+        title: String::new(),
+    };
+    let byop_model_id = llm_id::encode("prov-openai", "model-1").to_string();
 
-    #[test]
-    fn byop_model_id_threads_into_codex_local_when_harness_set() {
-        // Sanity: even when the orchestration UI lets the user pick a third-party
-        // local harness, the BYOP id rides along as the model. (Wiring the
-        // env-vars for that path is Phase 5c work; this test only proves the
-        // translator preserves the model_id.)
-        let model_id = llm_id::encode("prov-1", "m1").to_string();
-        let mode = run_agents_to_start_agent_mode(
-            &RunAgentsExecutionMode::Local,
-            "codex",
-            &model_id,
-            &[],
-            None,
-            &make_run_config(),
+    let mode = run_agents_to_start_agent_mode(
+        &RunAgentsExecutionMode::Local,
+        "codex",
+        &byop_model_id,
+        &[],
+        None,
+        &cfg,
+    )
+    .expect("local Codex harness should accept BYOP model ids when enabled");
+
+    assert_eq!(
+        mode,
+        StartAgentExecutionMode::Local {
+            harness_type: Some("codex".to_string()),
+            model_id: Some(byop_model_id),
+        }
+    );
+}
+
+#[test]
+fn empty_model_id_returns_none_on_local_native() {
+    let cfg = RunAgentsAgentRunConfig {
+        name: "child".to_string(),
+        prompt: "Investigate".to_string(),
+        title: String::new(),
+    };
+
+    let mode =
+        run_agents_to_start_agent_mode(&RunAgentsExecutionMode::Local, "oz", "", &[], None, &cfg)
+            .expect("empty model id should preserve default local behavior");
+
+    assert_eq!(
+        mode,
+        StartAgentExecutionMode::Local {
+            harness_type: None,
+            model_id: None,
+        }
+    );
+}
+
+fn persist_default_auth_secret(app: &mut App, harness_config_name: &str, secret_name: &str) {
+    CloudAgentSettings::handle(app).update(app, |settings, ctx| {
+        let mut secrets = settings.last_selected_auth_secret.value().clone();
+        secrets.insert(harness_config_name.to_string(), secret_name.to_string());
+        settings
+            .last_selected_auth_secret
+            .set_value(secrets, ctx)
+            .unwrap();
+        settings
+            .inherit_auth_secret_harnesses
+            .set_value(HashMap::new(), ctx)
+            .unwrap();
+    });
+}
+
+#[test]
+fn should_autoexecute_when_plan_has_approved_orchestration_config() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        persist_plan_config(
+            &mut app,
+            state.conversation_id,
+            "plan-1",
+            OrchestrationConfigStatus::Approved,
         );
-        // Two acceptable outcomes depending on the build's
-        // `LocalClaudeCodexChildHarnesses` feature flag state:
-        //   - flag on  -> Ok(Local { harness_type: Some("codex"), model_id: Some(byop_id) })
-        //   - flag off -> Err containing the disabled-harness sentinel from
-        //     local_child_harness_disabled_message.
-        // Asserting one of those (not silently passing on anything) keeps the
-        // test useful in either configuration.
-        match mode {
-            Ok(StartAgentExecutionMode::Local {
-                harness_type,
-                model_id: forwarded,
-            }) => {
-                assert_eq!(harness_type.as_deref(), Some("codex"));
-                assert_eq!(forwarded.as_deref(), Some(model_id.as_str()));
-            }
-            Ok(other) => panic!("expected Local mode, got {other:?}"),
-            Err(message) => assert!(
-                message.contains("Local Codex child agents are temporarily disabled"),
-                "unexpected error from codex harness path: {message}"
-            ),
-        }
-    }
+        let action = with_plan_id(remote_run_agents_action("oz"), "plan-1");
 
-    #[test]
-    fn empty_model_id_returns_none_on_local_native() {
-        let mode = run_agents_to_start_agent_mode(
-            &RunAgentsExecutionMode::Local,
-            "oz",
-            "", // run-wide model_id empty => fall back to child's own pref
-            &[],
-            None,
-            &make_run_config(),
-        )
-        .expect("empty model_id must still translate");
-        match mode {
-            StartAgentExecutionMode::Local { model_id, .. } => assert!(model_id.is_none()),
-            other => panic!("expected Local mode, got {other:?}"),
-        }
-    }
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: state.conversation_id,
+                },
+                ctx,
+            )
+        });
+
+        assert!(should_autoexecute);
+    });
+}
+
+#[test]
+fn should_not_autoexecute_approved_remote_non_warp_plan_without_default_auth_secret() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        persist_plan_config_with_harness(
+            &mut app,
+            state.conversation_id,
+            "plan-1",
+            "codex",
+            OrchestrationConfigStatus::Approved,
+        );
+        let action = with_plan_id(remote_run_agents_action("oz"), "plan-1");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: state.conversation_id,
+                },
+                ctx,
+            )
+        });
+
+        assert!(!should_autoexecute);
+    });
+}
+
+#[test]
+fn execute_denies_disapproved_plan_config() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        persist_plan_config(
+            &mut app,
+            state.conversation_id,
+            "plan-1",
+            OrchestrationConfigStatus::Disapproved,
+        );
+        let action = with_plan_id(remote_run_agents_action("oz"), "plan-1");
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: state.conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+
+        let AnyActionExecution::Sync(AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
+            reason,
+        })) = execution
+        else {
+            panic!("expected synchronous run_agents denial");
+        };
+        assert_eq!(reason, "Orchestration config was disapproved");
+    });
+}
+
+#[test]
+fn execute_denies_never_allow_profile_setting() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        set_run_agents_permission(&mut app, RunAgentsPermission::NeverAllow);
+        let action = remote_run_agents_action("oz");
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: state.conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+
+        let AnyActionExecution::Sync(AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
+            reason,
+        })) = execution
+        else {
+            panic!("expected synchronous run_agents denial");
+        };
+        assert_eq!(
+            reason,
+            "Running child agents is disabled by the active execution profile."
+        );
+    });
+}
+
+#[test]
+fn autonomous_mode_autoexecutes_and_does_not_deny_missing_api_key() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::Sdk);
+        set_run_agents_permission(&mut app, RunAgentsPermission::NeverAllow);
+        let action = remote_run_agents_action("codex");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: state.conversation_id,
+                },
+                ctx,
+            )
+        });
+        assert!(should_autoexecute);
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: state.conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+        assert!(matches!(execution, AnyActionExecution::Async { .. }));
+    });
+}
+
+fn set_run_agents_permission(app: &mut App, permission: RunAgentsPermission) {
+    AIExecutionProfilesModel::handle(app).update(app, |profiles, ctx| {
+        let profile_id = *profiles.active_profile(None, ctx).id();
+        profiles.set_run_agents(profile_id, permission, ctx);
+    });
+}
+
+#[test]
+fn should_not_autoexecute_without_approved_plan_or_always_allow_profile() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let action = remote_run_agents_action("oz");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: state.conversation_id,
+                },
+                ctx,
+            )
+        });
+
+        assert!(!should_autoexecute);
+    });
+}
+
+#[test]
+fn execute_denies_remote_non_warp_harness_without_default_auth_secret() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        let action = remote_run_agents_action("codex");
+
+        let execution = state.executor.update(&mut app, |executor, ctx| {
+            executor
+                .execute(
+                    ExecuteActionInput {
+                        action: &action,
+                        conversation_id: state.conversation_id,
+                    },
+                    ctx,
+                )
+                .into()
+        });
+
+        let AnyActionExecution::Sync(AIAgentActionResultType::RunAgents(RunAgentsResult::Denied {
+            reason,
+        })) = execution
+        else {
+            panic!("expected synchronous run_agents denial");
+        };
+        assert_eq!(
+            reason,
+            "Cloud child agents using this harness require an API key before they can run."
+        );
+    });
+}
+
+#[test]
+fn should_autoexecute_remote_non_warp_harness_with_always_allow_even_without_default_auth_secret() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        set_run_agents_permission(&mut app, RunAgentsPermission::AlwaysAllow);
+        let action = remote_run_agents_action("codex");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: state.conversation_id,
+                },
+                ctx,
+            )
+        });
+
+        assert!(should_autoexecute);
+    });
+}
+
+#[test]
+fn should_autoexecute_remote_non_warp_harness_with_default_auth_secret() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        set_run_agents_permission(&mut app, RunAgentsPermission::AlwaysAllow);
+        persist_default_auth_secret(&mut app, "codex", "default-openai-key");
+        let action = remote_run_agents_action("codex");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: state.conversation_id,
+                },
+                ctx,
+            )
+        });
+
+        assert!(should_autoexecute);
+    });
+}
+
+#[test]
+fn should_autoexecute_remote_warp_harness_without_default_auth_secret() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        set_run_agents_permission(&mut app, RunAgentsPermission::AlwaysAllow);
+        let action = remote_run_agents_action("oz");
+
+        let should_autoexecute = state.executor.update(&mut app, |executor, ctx| {
+            executor.should_autoexecute(
+                ExecuteActionInput {
+                    action: &action,
+                    conversation_id: state.conversation_id,
+                },
+                ctx,
+            )
+        });
+
+        assert!(should_autoexecute);
+    });
+}
+
+#[test]
+fn populate_default_auth_secret_for_autoexecute_uses_persisted_secret() {
+    App::test((), |mut app| async move {
+        let state = initialize_run_agents_test(&mut app, ExecutionMode::App);
+        persist_default_auth_secret(&mut app, "claude", "default-anthropic-key");
+        let AIAgentActionType::RunAgents(mut request) = remote_run_agents_action("claude").action
+        else {
+            panic!("expected run_agents action");
+        };
+
+        state.executor.update(&mut app, |_, ctx| {
+            populate_default_auth_secret_for_execution(&mut request, ctx);
+        });
+
+        assert_eq!(
+            request.harness_auth_secret_name.as_deref(),
+            Some("default-anthropic-key")
+        );
+    });
 }

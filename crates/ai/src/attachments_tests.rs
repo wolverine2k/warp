@@ -82,7 +82,10 @@ fn metadata_serde_round_trip() {
     };
     let json = serde_json::to_string(&md).unwrap();
     // bytes must not appear in the serialized form
-    assert!(!json.contains("bytes"), "serialized metadata must not contain bytes field");
+    assert!(
+        !json.contains("bytes"),
+        "serialized metadata must not contain bytes field"
+    );
     let restored: AttachmentMetadata = serde_json::from_str(&json).unwrap();
     assert_eq!(restored, md);
 }

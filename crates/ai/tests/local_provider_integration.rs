@@ -1288,7 +1288,9 @@ fn attachment_input() -> LocalProviderInput {
     }
 }
 
-fn base_cfg(api_type: ai::local_provider::AgentProviderApiType) -> ai::local_provider::config::LocalProviderConfig {
+fn base_cfg(
+    api_type: ai::local_provider::AgentProviderApiType,
+) -> ai::local_provider::config::LocalProviderConfig {
     ai::local_provider::config::LocalProviderConfig {
         display_name: "Test".into(),
         base_url: "http://127.0.0.1:9999/v1".into(),
@@ -1313,7 +1315,10 @@ fn openai_attachment_turn_emits_content_array_in_outbound_body() {
     assert_eq!(user["role"], "user");
     // content must be an array (Parts), not a plain string.
     let content = &user["content"];
-    assert!(content.is_array(), "OpenAi: expected content array, got {content}");
+    assert!(
+        content.is_array(),
+        "OpenAi: expected content array, got {content}"
+    );
     let parts = content.as_array().unwrap();
     // text part first
     assert_eq!(parts[0]["type"], "text");
@@ -1375,7 +1380,9 @@ fn ollama_attachment_turn_emits_images_array_in_outbound_body() {
         .iter()
         .find(|m| m["role"] == "user")
         .expect("Ollama: expected user message");
-    let images = user["images"].as_array().expect("Ollama: images must be an array");
+    let images = user["images"]
+        .as_array()
+        .expect("Ollama: images must be an array");
     assert_eq!(images.len(), 1, "Ollama: expected exactly one image entry");
     assert_eq!(
         images[0].as_str().unwrap(),
@@ -1417,7 +1424,10 @@ fn gemini_attachment_turn_emits_inline_data_part_in_outbound_body() {
         .expect("Gemini: expected user content");
     let parts = user["parts"].as_array().unwrap();
     // text part first, inline_data second.
-    assert!(parts[0].get("text").is_some(), "Gemini: first part must be text");
+    assert!(
+        parts[0].get("text").is_some(),
+        "Gemini: first part must be text"
+    );
     let inline = &parts[1]["inline_data"];
     assert_eq!(inline["mime_type"], "image/png");
     assert_eq!(
@@ -1443,7 +1453,10 @@ fn deepseek_attachment_turn_emits_content_array_in_outbound_body() {
     let user = messages.last().unwrap();
     assert_eq!(user["role"], "user");
     let content = &user["content"];
-    assert!(content.is_array(), "DeepSeek: expected content array, got {content}");
+    assert!(
+        content.is_array(),
+        "DeepSeek: expected content array, got {content}"
+    );
     let parts = content.as_array().unwrap();
     assert_eq!(parts[0]["type"], "text");
     assert_eq!(parts[1]["type"], "image_url");
