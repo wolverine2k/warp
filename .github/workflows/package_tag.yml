@@ -103,101 +103,7 @@ jobs:
           set -euo pipefail
 
           git fetch --force --tags origin '+refs/tags/*:refs/tags/*'
-
-          previous_tag=""
-          release_date_prefix="${TAG%_*}"
-
-          if [[ "$TAG" == v0.*."${CHANNEL}"_* ]]; then
-            while IFS= read -r candidate; do
-              candidate_prefix="${candidate%_*}"
-              if [[ "$candidate" != "$TAG" && "$candidate_prefix" != "$release_date_prefix" ]]; then
-                previous_tag="$candidate"
-                break
-              fi
-            done < <(git tag --list "v0.*.${CHANNEL}_00" --sort=-version:refname)
-          fi
-
-          if [[ -z "$previous_tag" ]]; then
-            previous_tag="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
-          fi
-
-          if [[ -n "$previous_tag" ]]; then
-            commit_range="$previous_tag..$TAG"
-          else
-            if git rev-parse --verify --quiet "${TAG}^" >/dev/null; then
-              commit_range="${TAG}^..${TAG}"
-            else
-              commit_range="$TAG"
-            fi
-          fi
-
-          changelog_section=""
-          if [[ -f CHANGELOG.md ]]; then
-            changelog_section="$(
-              awk -v tag="$TAG" '
-                /^##[[:space:]]+/ {
-                  if (in_section) exit
-                  if (index($0, tag) > 0) {
-                    in_section = 1
-                    found = 1
-                    next
-                  }
-                }
-                in_section { print }
-                END { exit found ? 0 : 1 }
-              ' CHANGELOG.md || true
-            )"
-
-            if [[ -z "$changelog_section" ]]; then
-              changelog_section="$(
-                awk '
-                  /^##[[:space:]]+/ {
-                    if (in_section) exit
-                    heading = tolower($0)
-                    if (heading ~ /unreleased/) {
-                      in_section = 1
-                      found = 1
-                      next
-                    }
-                  }
-                  in_section { print }
-                  END { exit found ? 0 : 1 }
-                ' CHANGELOG.md || true
-              )"
-            fi
-          fi
-
-          {
-            echo "# Warp ${TAG}"
-            echo
-            echo "### Release"
-            echo "- Channel: \`${CHANNEL}\`"
-            if [[ -n "$previous_tag" ]]; then
-              echo "- Previous tag: \`${previous_tag}\`"
-            fi
-            echo
-          } > release-notes.md
-
-          if [[ "$changelog_section" =~ [^[:space:]] ]]; then
-            printf '%s\n' "$changelog_section" >> release-notes.md
-          else
-            echo "### Changelog" >> release-notes.md
-
-            mapfile -t commits < <(git log --no-merges --format='%h%x09%s' "$commit_range")
-            if (( ${#commits[@]} == 0 )); then
-              mapfile -t commits < <(git log --format='%h%x09%s' "$commit_range")
-            fi
-
-            if (( ${#commits[@]} == 0 )); then
-              echo "- No commits found for this tag." >> release-notes.md
-            else
-              for entry in "${commits[@]}"; do
-                sha="${entry%%$'\t'*}"
-                subject="${entry#*$'\t'}"
-                echo "- ${subject} ([\`${sha}\`](https://github.com/${GITHUB_REPOSITORY}/commit/${sha}))" >> release-notes.md
-              done
-            fi
-          fi
+          script/generate_release_notes --output release-notes.md
 
       - name: Create or update GitHub release
         if: ${{ needs.resolve.outputs.create_release == 'true' }}
@@ -206,7 +112,7 @@ jobs:
           tag_name: ${{ needs.resolve.outputs.tag }}
           name: ${{ needs.resolve.outputs.tag }}
           body_path: release-notes.md
-          generate_release_notes: true
+          generate_release_notes: false
           token: ${{ secrets.GITHUB_TOKEN }}
 
   package_linux:

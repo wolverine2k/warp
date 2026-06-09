@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+tmpdirs=()
+cleanup() {
+  for dir in "${tmpdirs[@]+"${tmpdirs[@]}"}"; do
+    rm -rf "$dir"
+  done
+}
+trap cleanup EXIT
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+assert_contains() {
+  local file="$1"
+  local expected="$2"
+  if ! grep -Fq -- "$expected" "$file"; then
+    printf 'Expected to find:\n%s\n\nIn file:\n' "$expected" >&2
+    sed -n '1,200p' "$file" >&2
+    fail "missing expected content"
+  fi
+}
+
+assert_not_contains() {
+  local file="$1"
+  local unexpected="$2"
+  if grep -Fq -- "$unexpected" "$file"; then
+    printf 'Did not expect to find:\n%s\n\nIn file:\n' "$unexpected" >&2
+    sed -n '1,200p' "$file" >&2
+    fail "found unexpected content"
+  fi
+}
+
+make_git_repo() {
+  local dir
+  dir="$(mktemp -d)"
+  tmpdirs+=("$dir")
+
+  git -C "$dir" init -q
+  git -C "$dir" config user.name "Release Test"
+  git -C "$dir" config user.email "release-test@example.com"
+
+  printf '# fixture\n' > "$dir/README.md"
+  git -C "$dir" add README.md
+  git -C "$dir" commit -q -m "Initial release baseline"
+  git -C "$dir" tag v1.3.0
+
+  printf 'unrelated\n' >> "$dir/README.md"
+  git -C "$dir" add README.md
+  git -C "$dir" commit -q -m "Unrelated master fix"
+
+  printf '%s\n' "$dir"
+}
+
+run_generator() {
+  local fixture_repo="$1"
+  local tag="$2"
+  local output="$3"
+  (
+    cd "$fixture_repo"
+    TAG="$tag" CHANNEL=oss GITHUB_REPOSITORY=wolverine2k/warp \
+      "$repo_root/script/generate_release_notes" --output "$output"
+  )
+}
+
+test_uses_tag_specific_local_llm_changelog() {
+  local fixture_repo notes
+  fixture_repo="$(make_git_repo)"
+  notes="$fixture_repo/release-notes.md"
+
+  mkdir -p "$fixture_repo/specs/multi-local-llm"
+  cat > "$fixture_repo/specs/multi-local-llm/CHANGELOG.md" <<'EOF'
+# LocalLLM Changelog
+
+## Unreleased
+- This should not be used for v1.4.0.
+
+## v1.4.0
+### New Features
+- Added curated Gemini BYOP launch support.
+
+### Improvements
+- Added managed-secret forwarding for Remote workers.
+EOF
+  git -C "$fixture_repo" add specs/multi-local-llm/CHANGELOG.md
+  git -C "$fixture_repo" commit -q -m "Add localLLM changelog"
+  git -C "$fixture_repo" tag v1.4.0
+
+  run_generator "$fixture_repo" v1.4.0 "$notes"
+
+  assert_contains "$notes" "# Warp v1.4.0"
+  assert_contains "$notes" "### LocalLLM Changelog"
+  assert_contains "$notes" "Added curated Gemini BYOP launch support."
+  assert_contains "$notes" "Added managed-secret forwarding for Remote workers."
+  assert_not_contains "$notes" "Unrelated master fix"
+  assert_not_contains "$notes" "This should not be used for v1.4.0."
+}
+
+test_uses_unreleased_local_llm_changelog_for_future_semver_tags() {
+  local fixture_repo notes
+  fixture_repo="$(make_git_repo)"
+  notes="$fixture_repo/release-notes.md"
+
+  mkdir -p "$fixture_repo/specs/multi-local-llm"
+  cat > "$fixture_repo/specs/multi-local-llm/CHANGELOG.md" <<'EOF'
+# LocalLLM Changelog
+
+## Unreleased
+### Improvements
+- Keep future semver tags on a curated localLLM changelog path.
+EOF
+  git -C "$fixture_repo" add specs/multi-local-llm/CHANGELOG.md
+  git -C "$fixture_repo" commit -q -m "Prepare future localLLM changelog"
+  git -C "$fixture_repo" tag v1.5.0
+
+  run_generator "$fixture_repo" v1.5.0 "$notes"
+
+  assert_contains "$notes" "# Warp v1.5.0"
+  assert_contains "$notes" "### LocalLLM Changelog"
+  assert_contains "$notes" "Keep future semver tags on a curated localLLM changelog path."
+  assert_not_contains "$notes" "Unrelated master fix"
+}
+
+test_semver_local_llm_tags_require_curated_changelog() {
+  local fixture_repo notes stderr
+  fixture_repo="$(make_git_repo)"
+  notes="$fixture_repo/release-notes.md"
+  stderr="$fixture_repo/stderr.txt"
+
+  git -C "$fixture_repo" tag v1.4.0
+
+  if run_generator "$fixture_repo" v1.4.0 "$notes" 2> "$stderr"; then
+    fail "generator succeeded without a curated localLLM changelog"
+  fi
+
+  assert_contains "$stderr" "Curated localLLM changelog is required for semver tag v1.4.0"
+}
+
+test_uses_tag_specific_local_llm_changelog
+test_uses_unreleased_local_llm_changelog_for_future_semver_tags
+test_semver_local_llm_tags_require_curated_changelog
+
+printf 'generate_release_notes tests passed\n'

@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+output_file="release-notes.md"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output)
+      output_file="${2:?--output requires a path}"
+      shift 2
+      ;;
+    *)
+      printf 'Unknown argument: %s\n' "$1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+tag="${TAG:?TAG is required}"
+channel="${CHANNEL:?CHANNEL is required}"
+github_repository="${GITHUB_REPOSITORY:-warpdotdev/warp}"
+
+is_semver_tag() {
+  [[ "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]]
+}
+
+extract_tag_section() {
+  local file="$1"
+  local section_tag="$2"
+
+  awk -v tag="$section_tag" '
+    /^##[[:space:]]+/ {
+      if (in_section) exit
+      if (index($0, tag) > 0) {
+        in_section = 1
+        found = 1
+        next
+      }
+    }
+    in_section { print }
+    END { exit found ? 0 : 1 }
+  ' "$file" || true
+}
+
+extract_unreleased_section() {
+  local file="$1"
+
+  awk '
+    /^##[[:space:]]+/ {
+      if (in_section) exit
+      heading = tolower($0)
+      if (heading ~ /unreleased/) {
+        in_section = 1
+        found = 1
+        next
+      }
+    }
+    in_section { print }
+    END { exit found ? 0 : 1 }
+  ' "$file" || true
+}
+
+extract_preferred_section() {
+  local file="$1"
+  local section
+
+  section="$(extract_tag_section "$file" "$tag")"
+  if [[ "$section" =~ [^[:space:]] ]]; then
+    printf '%s\n' "$section"
+    return 0
+  fi
+
+  extract_unreleased_section "$file"
+}
+
+previous_tag=""
+release_date_prefix="${tag%_*}"
+
+if [[ "$tag" == v0.*."${channel}"_* ]]; then
+  while IFS= read -r candidate; do
+    candidate_prefix="${candidate%_*}"
+    if [[ "$candidate" != "$tag" && "$candidate_prefix" != "$release_date_prefix" ]]; then
+      previous_tag="$candidate"
+      break
+    fi
+  done < <(git tag --list "v0.*.${channel}_00" --sort=-version:refname)
+elif is_semver_tag; then
+  while IFS= read -r candidate; do
+    if [[ "$candidate" != "$tag" ]]; then
+      previous_tag="$candidate"
+      break
+    fi
+  done < <(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname)
+fi
+
+if [[ -z "$previous_tag" ]]; then
+  previous_tag="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
+fi
+
+if [[ -n "$previous_tag" ]]; then
+  commit_range="$previous_tag..$tag"
+else
+  if git rev-parse --verify --quiet "${tag}^" >/dev/null; then
+    commit_range="${tag}^..${tag}"
+  else
+    commit_range="$tag"
+  fi
+fi
+
+changelog_title=""
+changelog_section=""
+
+if [[ -f CHANGELOG.md ]]; then
+  changelog_section="$(extract_preferred_section CHANGELOG.md)"
+fi
+
+if [[ ! "$changelog_section" =~ [^[:space:]] ]] && is_semver_tag; then
+  local_llm_changelog="specs/multi-local-llm/CHANGELOG.md"
+  if [[ -f "$local_llm_changelog" ]]; then
+    changelog_section="$(extract_preferred_section "$local_llm_changelog")"
+  fi
+
+  if [[ "$changelog_section" =~ [^[:space:]] ]]; then
+    changelog_title="### LocalLLM Changelog"
+  else
+    printf 'Curated localLLM changelog is required for semver tag %s\n' "$tag" >&2
+    printf 'Add a %s or Unreleased section to %s.\n' "$tag" "$local_llm_changelog" >&2
+    exit 1
+  fi
+fi
+
+{
+  printf '# Warp %s\n\n' "$tag"
+  printf '### Release\n'
+  printf -- '- Channel: `%s`\n' "$channel"
+  if [[ -n "$previous_tag" ]]; then
+    printf -- '- Previous tag: `%s`\n' "$previous_tag"
+  fi
+  printf '\n'
+
+  if [[ "$changelog_section" =~ [^[:space:]] ]]; then
+    if [[ -n "$changelog_title" ]]; then
+      printf '%s\n' "$changelog_title"
+    fi
+    printf '%s\n' "$changelog_section"
+  else
+    printf '### Changelog\n'
+
+    mapfile -t commits < <(git log --no-merges --format='%h%x09%s' "$commit_range")
+    if (( ${#commits[@]} == 0 )); then
+      mapfile -t commits < <(git log --format='%h%x09%s' "$commit_range")
+    fi
+
+    if (( ${#commits[@]} == 0 )); then
+      printf -- '- No commits found for this tag.\n'
+    else
+      for entry in "${commits[@]}"; do
+        sha="${entry%%$'\t'*}"
+        subject="${entry#*$'\t'}"
+        printf -- '- %s ([`%s`](https://github.com/%s/commit/%s))\n' \
+          "$subject" "$sha" "$github_repository" "$sha"
+      done
+    fi
+  fi
+
+  if [[ -n "$previous_tag" ]]; then
+    printf '\n**Full Changelog**: https://github.com/%s/compare/%s...%s\n' \
+      "$github_repository" "$previous_tag" "$tag"
+  fi
+} > "$output_file"
