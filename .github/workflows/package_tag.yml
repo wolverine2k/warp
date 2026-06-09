@@ -4,27 +4,6 @@ on:
   push:
     tags:
       - "*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Git tag to package, for example v0.2026.05.27
-        required: true
-        type: string
-      channel:
-        description: Release channel to build.
-        required: true
-        type: choice
-        default: oss
-        options:
-          - oss
-          - stable
-          - preview
-          - dev
-      create_release:
-        description: Attach generated packages to the GitHub release for the tag.
-        required: true
-        type: boolean
-        default: true
 
 permissions:
   contents: write
@@ -33,7 +12,7 @@ env:
   CARGO_TERM_COLOR: always
 
 concurrency:
-  group: package-tag-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  group: package-tag-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -51,23 +30,17 @@ jobs:
         id: resolve
         shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.tag }}"
-            channel="${{ inputs.channel }}"
-            create_release="${{ inputs.create_release }}"
+          tag="${GITHUB_REF_NAME}"
+          if [[ "$tag" =~ \.([A-Za-z]+)_ ]]; then
+            channel="${BASH_REMATCH[1]}"
           else
-            tag="${GITHUB_REF_NAME}"
-            if [[ "$tag" =~ \.([A-Za-z]+)_ ]]; then
-              channel="${BASH_REMATCH[1]}"
-            else
-              channel="oss"
-            fi
-            case "$channel" in
-              oss|stable|preview|dev) ;;
-              *) channel="oss" ;;
-            esac
-            create_release="true"
+            channel="oss"
           fi
+          case "$channel" in
+            oss|stable|preview|dev) ;;
+            *) channel="oss" ;;
+          esac
+          create_release="true"
 
           tag="${tag#refs/tags/}"
           artifact_tag="$(printf '%s' "$tag" | sed 's#[/\\:*?"<>| ]#-#g')"
