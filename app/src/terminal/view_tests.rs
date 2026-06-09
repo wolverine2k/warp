@@ -365,6 +365,7 @@ fn test_create_new_block_with_local_status() {
         });
 
         assert_eventually!(
+            200 =>
             terminal.read(&app, |view, ctx| !view
                 .active_block_is_considered_remote(ctx)),
             "Block should be local"
@@ -372,6 +373,7 @@ fn test_create_new_block_with_local_status() {
 
         // No remote blocks should exist
         assert_eventually!(
+            200 =>
             terminal.read(&app, |view, _ctx| !view.contains_restored_remote_blocks()),
             "No remote blocks should exist"
         );
@@ -379,6 +381,7 @@ fn test_create_new_block_with_local_status() {
         // Update the view's flags
         // view.update_focused_terminal_info(ctx);
         assert_eventually!(
+            200 =>
             terminal.read(&app, |view, _ctx| !view.any_session_contains_remote_blocks),
             "No remote blocks should exist"
         );
@@ -406,6 +409,7 @@ fn test_create_new_block_with_local_status() {
 
         // Verify block is non-local (remote)
         assert_eventually!(
+            200 =>
             terminal.read(&app, |view, ctx| view
                 .active_block_is_considered_remote(ctx)),
             "Block should be non-local (remote)"
@@ -413,6 +417,7 @@ fn test_create_new_block_with_local_status() {
 
         // Remote blocks should be detected
         assert_eventually!(
+            200 =>
             terminal.read(&app, |view, _ctx| view.any_session_contains_remote_blocks),
             "Remote blocks should be detected"
         );
@@ -5652,6 +5657,7 @@ fn submit_cli_agent_rich_input_opencode_defers_enter_and_close() {
 
         // Wait for the delayed \r to arrive.
         assert_eventually!(
+            200 =>
             pty_writes.borrow().len() == 2,
             "carriage return should be written after delay"
         );
@@ -5739,6 +5745,7 @@ fn drag_drop_image_in_cli_agent_long_running_command_pastes_via_clipboard() {
             vec![0x16]
         };
         assert_eventually!(
+            200 =>
             pty_writes.borrow().len() == 1 && pty_writes.borrow()[0] == expected_paste_bytes,
             "expected single paste-keystroke PTY write {:?}; got {:?}",
             expected_paste_bytes,
@@ -5994,6 +6001,7 @@ fn submit_with_plugin_but_auto_toggle_off_respects_auto_dismiss() {
         // auto_toggle is off, so auto_dismiss closes rich input.
         // Claude uses DelayedEnter, so the close happens after a timer.
         assert_eventually!(
+            200 =>
             terminal.read(&app, |view, ctx| !view
                 .has_active_cli_agent_input_session(ctx)),
             "Rich input should be closed after submit with auto_dismiss"

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use ai::api_keys::ApiKeyManager;
+use ai::local_provider::AgentProviderSecrets;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 use warpui::{App, SingletonEntity};
@@ -99,6 +100,7 @@ fn restored_conversation_with_queries(queries: &[&str]) -> AIConversation {
 
 fn initialize_custom_endpoint_usage_test_app(app: &mut App) {
     initialize_settings_for_tests(app);
+    app.add_singleton_model(AgentProviderSecrets::new);
     app.add_singleton_model(|_| ServerApiProvider::new_for_test());
     app.add_singleton_model(|_| NetworkStatus::new());
     app.add_singleton_model(UserWorkspaces::default_mock);

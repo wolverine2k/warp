@@ -548,7 +548,7 @@ fn execute_rejects_invalid_local_harness_names_before_pane_creation() {
         });
         let action = build_start_agent_action(
             StartAgentVersion::V2,
-            StartAgentExecutionMode::local_harness("gemini".to_string()),
+            StartAgentExecutionMode::local_harness("unknown-harness".to_string()),
         );
 
         let execution = executor.update(&mut app, |executor, ctx| {
@@ -567,7 +567,7 @@ fn execute_rejects_invalid_local_harness_names_before_pane_creation() {
         assert!(matches!(
             result,
             AIAgentActionResultType::StartAgent(StartAgentResult::Error { error, version })
-                if error == "Unsupported local child harness 'gemini'."
+                if error == "Unsupported local child harness 'unknown-harness'."
                     && version == StartAgentVersion::V2
         ));
     });

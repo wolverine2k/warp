@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use ai::local_provider::AgentProviderSecrets;
 use warp_core::features::FeatureFlag;
 use warpui::App;
 
@@ -63,6 +64,7 @@ fn assert_context_window_limit_for_request(
             .override_enabled(gpt_configurable_context_window_enabled);
 
         initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(AgentProviderSecrets::new);
         app.add_singleton_model(|_| ServerApiProvider::new_for_test());
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
         app.add_singleton_model(AuthManager::new_for_test);

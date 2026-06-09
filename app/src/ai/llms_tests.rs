@@ -1,3 +1,4 @@
+use ai::local_provider::AgentProviderSecrets;
 use warpui::App;
 
 use super::*;
@@ -366,6 +367,7 @@ fn reconcile_preserves_custom_models_saved_on_execution_profile() {
         let _custom_inference_flag = FeatureFlag::CustomInferenceEndpoints.override_enabled(true);
 
         initialize_settings_for_tests(&mut app);
+        app.add_singleton_model(AgentProviderSecrets::new);
         app.add_singleton_model(|_| ServerApiProvider::new_for_test());
         app.add_singleton_model(|_| AuthStateProvider::new_for_test());
         app.add_singleton_model(AuthManager::new_for_test);
