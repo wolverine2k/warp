@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+bundle_script="$repo_root/script/macos/bundle"
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+assert_contains() {
+  local expected="$1"
+  if ! grep -Fq -- "$expected" "$bundle_script"; then
+    fail "expected macOS bundle script to contain: $expected"
+  fi
+}
+
+assert_not_contains() {
+  local unexpected="$1"
+  if grep -Fq -- "$unexpected" "$bundle_script"; then
+    fail "macOS bundle script still contains unsafe DMG source: $unexpected"
+  fi
+}
+
+test_dmg_creation_uses_isolated_source_dir() {
+  assert_contains 'DMG_SOURCE_DIR='
+  assert_contains 'create_warp_dmg "$DMG_SOURCE_DIR"'
+  assert_not_contains 'create_warp_dmg "$DMG_DIR"'
+  assert_not_contains 'create_warp_dmg "$BUNDLE_DIR"'
+}
+
+test_dmg_creation_uses_isolated_source_dir
+
+printf 'macOS bundle DMG source tests passed\n'

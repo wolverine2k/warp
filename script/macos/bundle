@@ -76,6 +76,13 @@ cleanup_dmg_files() {
     done
 }
 
+cleanup_dmg_source_dir() {
+    if [[ -n "${DMG_SOURCE_DIR:-}" && -d "$DMG_SOURCE_DIR" ]]; then
+        echo "Cleaning up DMG source directory $DMG_SOURCE_DIR"
+        rm -rf "$DMG_SOURCE_DIR"
+    fi
+}
+
 # Clean up the temporary codesigning keychain.
 cleanup_codesign_keychain() {
     if [[ "${CODESIGN:-false}" = true && -n "${CODESIGN_KEYCHAIN_NAME:-}" ]]; then
@@ -85,7 +92,7 @@ cleanup_codesign_keychain() {
 }
 
 # Set up cleanup trap
-trap 'cleanup_dmg_files "$DMG_DIR"; cleanup_codesign_keychain' EXIT
+trap 'cleanup_dmg_files "$DMG_DIR"; cleanup_dmg_source_dir; cleanup_codesign_keychain' EXIT
 
 # Define a helper function that uses Python to compute a relative path.
 function relpath() {
@@ -373,6 +380,7 @@ if [[ "$CHECK_ONLY" == "true" ]]; then
 fi
 
 DMG_DIR="$BUNDLE_DIR/dmg/$WARP_BIN"
+DMG_SOURCE_DIR="$BUNDLE_DIR/dmg-source/$WARP_BIN"
 DMG_NAME="$WARP_APP_NAME.dmg"
 if [[ -z "$FINAL_DMG_NAME" && -n "$DMG_NAME_SUFFIX" ]]; then
   FINAL_DMG_NAME="$WARP_APP_NAME-$DMG_NAME_SUFFIX.dmg"
@@ -729,9 +737,20 @@ fi
 ########################
 
 if [[ "$ARTIFACT" = app ]]; then
+  function prepare_dmg_source_dir() {
+    if test -d "$DMG_SOURCE_DIR"; then
+      echo "Clearing old dmg source directory $DMG_SOURCE_DIR"
+      rm -r "$DMG_SOURCE_DIR"
+    fi
+
+    echo "Creating $DMG_SOURCE_DIR"
+    mkdir -p "$DMG_SOURCE_DIR"
+    cp -R "$BUNDLE_DIR/$WARP_APP_NAME.app" "$DMG_SOURCE_DIR"
+  }
+
   function create_warp_dmg() {
     echo "Creating $DMG_DIR/$DMG_NAME..."
-    rm "$DMG_DIR/$DMG_NAME" || true
+    rm -f "$DMG_DIR/$DMG_NAME"
     local source_folder="$1"
 
     local args=(
@@ -763,8 +782,8 @@ if [[ "$ARTIFACT" = app ]]; then
     create-dmg "${args[@]}"
   }
 
-  # If we're codesigning, stage the signed app and use that to create the DMG.
-  # Otherwise, create a DMG from the bundle dir directly.
+  # Stage the app outside of the DMG output directory so hdiutil never images
+  # its own temporary or final DMG files.
   if [[ $CODESIGN = true ]]; then
     if test -d "$DMG_DIR"; then
       echo "Clearing old dmg directory $DMG_DIR"
@@ -772,9 +791,9 @@ if [[ "$ARTIFACT" = app ]]; then
     fi
     echo "Creating $DMG_DIR"
     mkdir -p "$DMG_DIR"
-    cp -R "$BUNDLE_DIR/$WARP_APP_NAME.app" "$DMG_DIR"
+    prepare_dmg_source_dir
 
-    create_warp_dmg "$DMG_DIR"
+    create_warp_dmg "$DMG_SOURCE_DIR"
 
     echo "Codesigning $DMG_DIR/$DMG_NAME..."
     codesign -s "$APPLE_TEAM_ID" --timestamp "$DMG_DIR/$DMG_NAME"
@@ -787,8 +806,9 @@ if [[ "$ARTIFACT" = app ]]; then
 
     echo "Cleaning up any existing DMG files before creating new ones..."
     cleanup_dmg_files "$DMG_DIR"
+    prepare_dmg_source_dir
 
-    create_warp_dmg "$BUNDLE_DIR"
+    create_warp_dmg "$DMG_SOURCE_DIR"
   fi
 fi
 
