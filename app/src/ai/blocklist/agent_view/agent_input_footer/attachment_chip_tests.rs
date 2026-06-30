@@ -6,8 +6,9 @@
 //! `#[ignore]` on platforms where the test-app cannot be spun up headlessly
 //! — see the inline comments.
 
-use super::*;
 use ai::attachments::AgentAttachment;
+
+use super::*;
 
 // ---------------------------------------------------------------------------
 // Helper: build a minimal 1×1 PNG in memory.
@@ -16,8 +17,9 @@ use ai::attachments::AgentAttachment;
 fn tiny_png() -> Vec<u8> {
     // Construct a 1×1 white RGBA PNG using the `image` crate (available as a
     // workspace dep).
-    use image::{ImageBuffer, ImageFormat, Rgba};
     use std::io::Cursor;
+
+    use image::{ImageBuffer, ImageFormat, Rgba};
     let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
         ImageBuffer::from_pixel(1, 1, Rgba([255, 255, 255, 255]));
     let mut buf = Vec::new();
@@ -162,8 +164,9 @@ fn red_border_when_capability_unsupported() {
 /// and height ≤ 128 (aspect-ratio preserving resize).
 #[test]
 fn decode_thumbnail_resizes_to_fit() {
-    use image::{ImageBuffer, ImageFormat, Rgba};
     use std::io::Cursor;
+
+    use image::{ImageBuffer, ImageFormat, Rgba};
 
     // Build a 200×100 PNG.
     let img: ImageBuffer<Rgba<u8>, Vec<u8>> =

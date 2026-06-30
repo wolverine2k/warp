@@ -9,9 +9,8 @@ use ai::attachments::AttachmentMetadata;
 use warp_core::ui::appearance::Appearance;
 use warpui::{App, SingletonEntity};
 
-use crate::ui_components::icons::Icon;
-
 use super::{file_attachment_icon, render_file_attachment_metadata};
+use crate::ui_components::icons::Icon;
 
 // ─── Pure icon-mapping tests (no app context) ──────────────────────────────
 

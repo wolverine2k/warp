@@ -1,5 +1,6 @@
-use super::*;
 use ai::local_provider::AgentProviderApiType;
+
+use super::*;
 
 // ---------------------------------------------------------------
 // Harness compatibility matrix tests — one per row of the matrix

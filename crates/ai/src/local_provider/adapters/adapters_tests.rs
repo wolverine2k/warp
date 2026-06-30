@@ -4,7 +4,8 @@
 //! tests in `crates/ai/tests/local_provider_integration.rs`.
 
 use super::*;
-use crate::local_provider::{config::LocalProviderConfig, request::LocalProviderInput};
+use crate::local_provider::config::LocalProviderConfig;
+use crate::local_provider::request::LocalProviderInput;
 
 fn http_client() -> reqwest::Client {
     super::ensure_rustls_provider();

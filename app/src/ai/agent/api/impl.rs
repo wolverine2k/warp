@@ -6,10 +6,22 @@ use futures_util::StreamExt;
 use warp_core::features::FeatureFlag;
 use warp_multi_agent_api as api;
 
-use super::{convert_to::convert_input, ConvertToAPITypeError, RequestParams, ResponseStream};
+use super::convert_to::convert_input;
+use super::{ConvertToAPITypeError, RequestParams, ResponseStream};
 use crate::ai::agent::redaction;
 use crate::server::server_api::{AIApiError, ServerApi};
 use crate::terminal::model::session::SessionType;
+
+async fn convert_multi_agent_client_error(
+    error: warp_multi_agent_client::Error,
+) -> Arc<AIApiError> {
+    match error {
+        warp_multi_agent_client::Error::EventSource(error) => {
+            Arc::new(AIApiError::from_stream_error("multi-agent", *error).await)
+        }
+        error => Arc::new(AIApiError::Other(anyhow::Error::new(error))),
+    }
+}
 
 pub async fn generate_multi_agent_output(
     server_api: Arc<ServerApi>,

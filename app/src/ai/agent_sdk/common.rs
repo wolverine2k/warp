@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use futures::TryFutureExt;
 use inquire::{InquireError, Select};
+use settings::Setting;
 use warp_cli::agent::Harness;
 use warp_cli::environment::{EnvironmentCreateArgs, EnvironmentUpdateArgs};
 use warpui::r#async::FutureExt;
@@ -25,7 +26,6 @@ use crate::server::server_api::ai::AIClient;
 use crate::server::server_api::ServerApiProvider;
 use crate::workspaces::update_manager::TeamUpdateManager;
 use crate::workspaces::user_workspaces::UserWorkspaces;
-use settings::Setting;
 
 /// How long to wait for workspace metadata to refresh.
 pub const WORKSPACE_METADATA_REFRESH_TIMEOUT: Duration = Duration::from_secs(10);
@@ -73,10 +73,11 @@ pub fn validate_orchestration_model_id(
     execution_mode: &ai::agent::action::RunAgentsExecutionMode,
     ctx: &AppContext,
 ) -> anyhow::Result<LLMId> {
+    use ai::local_provider::llm_id;
+
     use crate::ai::byop_orchestration_filter::{
         base_url_reachable_from_remote, byop_harness_compatible,
     };
-    use ai::local_provider::llm_id;
 
     let llm_id: LLMId = model_id.into();
 

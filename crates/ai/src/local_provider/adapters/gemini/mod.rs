@@ -33,15 +33,15 @@ mod request_tests;
 #[path = "response_tests.rs"]
 mod response_tests;
 
+use request::compose_gemini_request;
+use response::GeminiSseDecoder;
+use wire::{GeminiGenerateRequest, GeminiGenerateResponse};
+
 use super::{
     AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
     LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError,
     SummarizerInput,
 };
-
-use request::compose_gemini_request;
-use response::GeminiSseDecoder;
-use wire::{GeminiGenerateRequest, GeminiGenerateResponse};
 
 pub struct GeminiAdapter;
 

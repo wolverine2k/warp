@@ -28,17 +28,17 @@ mod request_tests;
 #[path = "response_tests.rs"]
 mod response_tests;
 
-use super::{
-    AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
-    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError,
-    SummarizerInput,
-};
-
 use request::{compose_anthropic_messages_request, resolve_max_tokens};
 use response::AnthropicSseDecoder;
 use wire::{
     AnthropicContentBlock, AnthropicMessage, AnthropicMessageResponse, AnthropicMessagesRequest,
     AnthropicModelsListResponse, AnthropicRole, ResponseContentBlock,
+};
+
+use super::{
+    AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
+    LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError,
+    SummarizerInput,
 };
 
 /// Anthropic-version pin sent on every request. The 2023-06-01 value is the

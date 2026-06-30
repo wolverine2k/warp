@@ -6,12 +6,10 @@
 use thiserror::Error;
 use warp_multi_agent_api as api;
 
-use crate::local_provider::{
-    api_type::AgentProviderApiType,
-    config::{LocalProviderConfig, LocalProviderConfigError},
-    request::LocalProviderInput,
-    run::{SummarizerError, SummarizerInput},
-};
+use crate::local_provider::api_type::AgentProviderApiType;
+use crate::local_provider::config::{LocalProviderConfig, LocalProviderConfigError};
+use crate::local_provider::request::LocalProviderInput;
+use crate::local_provider::run::{SummarizerError, SummarizerInput};
 
 pub mod anthropic;
 pub mod deepseek;

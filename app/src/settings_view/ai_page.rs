@@ -94,12 +94,12 @@ use crate::settings::{
     AgentProviderModel, AwsBedrockAutoLogin, AwsBedrockCredentialsEnabled,
     CanUseWarpCreditsForFallback, CodeSettings, CodebaseContextEnabled, FileBasedMcpEnabled,
     GitOperationsAutogenEnabled, IncludeAgentCommandsInHistory, InputSettings,
-    IntelligentAutosuggestionsEnabled, MemoryEnabled, NLDInTerminalEnabled,
-    NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode, PromptSubmissionMode,
-    RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled, ShouldRenderCLIAgentToolbar,
-    ShouldRenderUseAgentToolbarForUserCommands, ShouldShowOzUpdatesInZeroState, ShowAgentTips,
-    ShowConversationHistory, ShowHintText, ThinkingDisplayMode, VoiceInputEnabled,
-    WarpDriveContextEnabled,
+    IntelligentAutosuggestionsEnabled, LongRunningCommandSubmissionMode, MemoryEnabled,
+    NLDInTerminalEnabled, NaturalLanguageAutosuggestionsEnabled, OrchestrationMessageDisplayMode,
+    PromptSubmissionMode, RuleSuggestionsEnabled, SharedBlockTitleGenerationEnabled,
+    ShouldRenderCLIAgentToolbar, ShouldRenderUseAgentToolbarForUserCommands,
+    ShouldShowOzUpdatesInZeroState, ShowAgentTips, ShowConversationHistory, ShowHintText,
+    ThinkingDisplayMode, VoiceInputEnabled, WarpDriveContextEnabled,
 };
 use crate::terminal::session_settings::{SessionSettings, SessionSettingsChangedEvent};
 use crate::terminal::CLIAgent;
@@ -5654,6 +5654,20 @@ impl TypedActionView for AISettingsPageView {
                         .byop_compaction_model_provider_id
                         .set_value(provider_id, ctx));
                     report_if_error!(settings.byop_compaction_model_id.set_value(model_id, ctx));
+                });
+                ctx.notify();
+            }
+            AISettingsPageAction::ConnectGrokSubscription => {
+                #[cfg(not(target_family = "wasm"))]
+                self.start_grok_oauth(ctx);
+            }
+            AISettingsPageAction::DisconnectGrokSubscription => {
+                self.grok_oauth_attempt = None;
+                self.grok_code_editor.update(ctx, |editor, ctx| {
+                    editor.clear_buffer(ctx);
+                });
+                ApiKeyManager::handle(ctx).update(ctx, |manager, ctx| {
+                    manager.set_grok_tokens(None, ctx);
                 });
                 ctx.notify();
             }

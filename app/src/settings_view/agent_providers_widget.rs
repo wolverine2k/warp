@@ -16,23 +16,20 @@ use warpui::elements::{
     ChildView, Container, CornerRadius, CrossAxisAlignment, Expanded, Flex, MainAxisAlignment,
     MouseStateHandle, ParentElement, Radius, Text,
 };
-use warpui::ui_components::{
-    button::ButtonVariant,
-    components::{Coords, UiComponent, UiComponentStyles},
-};
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Element, SingletonEntity, ViewContext, ViewHandle};
 
+use super::ai_page::{AISettingsPageAction, AISettingsPageView};
+use super::fetched_models_modal::FetchedModelsModalState;
+use super::settings_page::{build_sub_header, render_separator, SettingsWidget, HEADER_PADDING};
+use crate::ai::agent_providers::fetch_models::MAX_ENTRIES as FETCH_MODELS_MAX_ENTRIES;
 use crate::appearance::Appearance;
 use crate::editor::{
     EditorView, Event as EditorEvent, SingleLineEditorOptions, TextColors, TextOptions,
 };
 use crate::settings::{AISettings, AgentProvider, AgentProviderApiType, AgentProviderModel};
 use crate::view_components::{Dropdown, DropdownItem};
-
-use super::ai_page::{AISettingsPageAction, AISettingsPageView};
-use super::fetched_models_modal::FetchedModelsModalState;
-use super::settings_page::{build_sub_header, render_separator, SettingsWidget, HEADER_PADDING};
-use crate::ai::agent_providers::fetch_models::MAX_ENTRIES as FETCH_MODELS_MAX_ENTRIES;
 
 const CARD_BUTTON_FONT_SIZE: f32 = 12.0;
 const CARD_BUTTON_PADDING: f32 = 6.0;

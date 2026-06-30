@@ -4,6 +4,8 @@ pub mod attachments;
 pub mod aws_credentials;
 pub mod capabilities;
 pub mod catalog;
+pub mod geap_credentials;
+pub mod grok_subscription;
 pub mod llm_id;
 pub mod local_provider;
 

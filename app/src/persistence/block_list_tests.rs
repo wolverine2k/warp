@@ -35,6 +35,7 @@ fn make_query(text: &str) -> Arc<PersistedAIInput> {
             text: text.to_string(),
             context: Default::default(),
             referenced_attachments: Default::default(),
+            file_attachment_metadata: Vec::new(),
         }],
         output_status: AIQueryHistoryOutputStatus::Completed,
         working_directory: None,
@@ -131,6 +132,7 @@ fn upsert_ai_query_updates_existing_exchange_without_evicting() {
             text: "first-updated".to_string(),
             context: Default::default(),
             referenced_attachments: Default::default(),
+            file_attachment_metadata: Vec::new(),
         }],
         ..(*first).clone()
     });

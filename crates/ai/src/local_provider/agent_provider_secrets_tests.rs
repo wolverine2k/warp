@@ -6,8 +6,9 @@
 //! migration helper tests exercise the full chain end-to-end via `App::test`,
 //! providing the integration coverage these unit tests intentionally skip.
 
-use super::*;
 use warpui_core::{App, SingletonEntity};
+
+use super::*;
 
 #[test]
 fn set_inserts_and_get_returns_value() {

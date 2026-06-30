@@ -29,15 +29,15 @@ mod request_tests;
 #[path = "response_tests.rs"]
 mod response_tests;
 
+use request::compose_deepseek_chat_request;
+use response::DeepSeekSseDecoder;
+use wire::{DeepSeekChatRequest, DeepSeekChatResponse};
+
 use super::{
     AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
     LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError,
     SummarizerInput,
 };
-
-use request::compose_deepseek_chat_request;
-use response::DeepSeekSseDecoder;
-use wire::{DeepSeekChatRequest, DeepSeekChatResponse};
 
 pub struct DeepSeekAdapter;
 
@@ -210,8 +210,9 @@ fn build_deepseek_summarizer_body(
     input: &SummarizerInput,
     cfg: &LocalProviderConfig,
 ) -> DeepSeekChatRequest {
-    use crate::local_provider::wire::Role;
     use wire::{DeepSeekChatMessage, DeepSeekRole};
+
+    use crate::local_provider::wire::Role;
     let messages: Vec<DeepSeekChatMessage> = input
         .messages
         .iter()

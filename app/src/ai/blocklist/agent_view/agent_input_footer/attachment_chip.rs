@@ -15,24 +15,19 @@ use ai::attachments::AgentAttachment;
 use pathfinder_color::ColorU;
 use pathfinder_geometry::vector::vec2f;
 use warp_core::ui::theme::color::internal_colors;
-use warpui::{
-    assets::asset_cache::AssetSource,
-    elements::{
-        Border, CacheOption, ChildAnchor, ChildView, ConstrainedBox, CornerRadius,
-        CrossAxisAlignment, Element, Flex, Hoverable, Image, MainAxisSize, MouseStateHandle,
-        OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
-    },
-    AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle,
+use warpui::assets::asset_cache::AssetSource;
+use warpui::elements::{
+    Border, CacheOption, ChildAnchor, ChildView, ConstrainedBox, CornerRadius, CrossAxisAlignment,
+    Element, Flex, Hoverable, Image, MainAxisSize, MouseStateHandle, OffsetPositioning,
+    ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Stack, Text,
 };
-
 use warpui::ui_components::components::UiComponent;
+use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
-use crate::{
-    appearance::Appearance,
-    context_chips::display_chip::{chip_container, CHIP_BORDER_WIDTH},
-    ui_components::icons::Icon,
-    view_components::action_button::{ActionButton, ButtonSize, NakedTheme},
-};
+use crate::appearance::Appearance;
+use crate::context_chips::display_chip::{chip_container, CHIP_BORDER_WIDTH};
+use crate::ui_components::icons::Icon;
+use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme};
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -338,9 +333,10 @@ pub const THUMBNAIL_DIM: u32 = 128;
 ///   tag may appear rotated.
 /// - **HEIC / HEIF**: not supported by the `image` crate; returns `None`.
 pub fn decode_thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Cursor;
+
     use image::imageops::FilterType;
     use image::ImageReader;
-    use std::io::Cursor;
 
     let img = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()

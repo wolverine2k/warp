@@ -80,8 +80,6 @@ const TELEMETRY_TITLE: &str = "Help improve Warp";
 const TELEMETRY_DESCRIPTION: &str =
     "App analytics help us make the product better for you. We may collect \
     certain console interactions to improve Warp's AI capabilities.";
-const TELEMETRY_FREE_TIER_NOTE: &str =
-    "On the free tier, analytics must be enabled to use AI features.";
 const TELEMETRY_DOCS_URL: &str = "https://docs.warp.dev/support-and-community/privacy-and-security/privacy#what-telemetry-data-does-warp-collect-and-why";
 
 const DATA_MANAGEMENT_TITLE: &str = "Manage your data";

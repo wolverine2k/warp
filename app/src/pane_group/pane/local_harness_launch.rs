@@ -8,8 +8,10 @@ use uuid::Uuid;
 use warp_cli::agent::Harness;
 
 use crate::ai::agent_sdk::driver::harness::claude_code::prepare_claude_environment_config;
+use crate::ai::agent_sdk::driver::harness::gemini::{
+    prepare_gemini_environment_config, GeminiByopConfig,
+};
 use crate::ai::agent_sdk::driver::harness::{
-    gemini::{prepare_gemini_environment_config, GeminiByopConfig},
     harness_kind, harness_model_env_vars, remove_claude_externally_managed_listener_env_vars,
     HarnessKind,
 };

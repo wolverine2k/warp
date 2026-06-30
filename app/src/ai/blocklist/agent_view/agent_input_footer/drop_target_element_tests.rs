@@ -7,16 +7,18 @@
 //! and verify the observable preconditions (bounds check and empty-path guard)
 //! that gate dispatch.
 
-use super::AttachmentDropTargetElement;
-use pathfinder_geometry::{
-    rect::RectF,
-    vector::{vec2f, Vector2F},
-};
 use std::any::Any;
+
+use pathfinder_geometry::rect::RectF;
+use pathfinder_geometry::vector::{vec2f, Vector2F};
+use warpui::elements::Point;
+use warpui::event::DispatchedEvent;
 use warpui::{
-    elements::Point, event::DispatchedEvent, AfterLayoutContext, AppContext, Element, EventContext,
-    LayoutContext, PaintContext, SizeConstraint,
+    AfterLayoutContext, AppContext, Element, EventContext, LayoutContext, PaintContext,
+    SizeConstraint,
 };
+
+use super::AttachmentDropTargetElement;
 
 // ---------------------------------------------------------------------------
 // Stub child element with configurable bounds.

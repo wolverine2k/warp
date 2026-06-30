@@ -17,12 +17,10 @@
 
 use std::time::Duration;
 
-use ai::local_provider::{
-    adapters::{DiscoveredModel, ListModelsPage},
-    api_type::AgentProviderApiType,
-    config::LocalProviderConfig,
-    select_adapter, ProviderAdapterError as AdapterError,
-};
+use ai::local_provider::adapters::{DiscoveredModel, ListModelsPage};
+use ai::local_provider::api_type::AgentProviderApiType;
+use ai::local_provider::config::LocalProviderConfig;
+use ai::local_provider::{select_adapter, ProviderAdapterError as AdapterError};
 
 /// Hard caps for the pagination loop. The entry cap bounds the modal
 /// size; the page cap bounds the time spent on a misbehaving cursor.

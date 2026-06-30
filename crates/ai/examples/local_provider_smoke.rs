@@ -33,14 +33,13 @@
 //!     --query "Use the read_files tool to read Cargo.toml"
 //! ```
 
-use ai::local_provider::{
-    config::LocalProviderConfig,
-    request::LocalProviderInput,
-    run::{run_chat_turn, LocalRunError},
-};
+use std::process::ExitCode;
+
+use ai::local_provider::config::LocalProviderConfig;
+use ai::local_provider::request::LocalProviderInput;
+use ai::local_provider::run::{run_chat_turn, LocalRunError};
 use clap::Parser;
 use futures::stream::StreamExt;
-use std::process::ExitCode;
 use warp_multi_agent_api as api;
 
 #[derive(Parser, Debug)]

@@ -15,17 +15,14 @@
 use std::sync::Once;
 use std::time::Duration;
 
-use ai::local_provider::{
-    compaction::{
-        commit_summarization, try_compact, AutoCompactionOutcome, CompactionConfig,
-        CompactionState, CompactionTarget, TokenCounts,
-    },
-    config::LocalProviderConfig,
-    request::LocalProviderInput,
-    run::{
-        build_summarizer_messages, run_chat_turn, run_summarizer_turn, LocalRunError,
-        SummarizerInput,
-    },
+use ai::local_provider::compaction::{
+    commit_summarization, try_compact, AutoCompactionOutcome, CompactionConfig, CompactionState,
+    CompactionTarget, TokenCounts,
+};
+use ai::local_provider::config::LocalProviderConfig;
+use ai::local_provider::request::LocalProviderInput;
+use ai::local_provider::run::{
+    build_summarizer_messages, run_chat_turn, run_summarizer_turn, LocalRunError, SummarizerInput,
 };
 use futures::stream::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

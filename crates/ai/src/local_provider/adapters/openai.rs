@@ -5,18 +5,15 @@
 
 use serde::Deserialize;
 
-use crate::local_provider::{
-    request::compose_chat_completion_request,
-    response::OpenAiSseAdapter,
-    run::first_chars,
-    wire::{ChatCompletionRequest, ChatCompletionResponse},
-};
-
 use super::{
     AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
     LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, SummarizerError,
     SummarizerInput,
 };
+use crate::local_provider::request::compose_chat_completion_request;
+use crate::local_provider::response::OpenAiSseAdapter;
+use crate::local_provider::run::first_chars;
+use crate::local_provider::wire::{ChatCompletionRequest, ChatCompletionResponse};
 
 // ---------------------------------------------------------------------------
 // Wire types for GET /v1/models

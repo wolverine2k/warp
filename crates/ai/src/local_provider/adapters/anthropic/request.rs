@@ -37,15 +37,12 @@ use super::wire::{
     AnthropicContentBlock, AnthropicMediaSource, AnthropicMessage, AnthropicMessagesRequest,
     AnthropicRole, AnthropicSourceType, AnthropicToolChoice,
 };
-use crate::local_provider::{
-    compaction,
-    config::LocalProviderConfig,
-    prompt,
-    request::{
-        enabled_local_tools, summarize_tool_call_input, summarize_tool_result, LocalProviderInput,
-    },
-    tools::{tool_definitions_anthropic, LocalTool},
+use crate::local_provider::config::LocalProviderConfig;
+use crate::local_provider::request::{
+    enabled_local_tools, summarize_tool_call_input, summarize_tool_result, LocalProviderInput,
 };
+use crate::local_provider::tools::{tool_definitions_anthropic, LocalTool};
+use crate::local_provider::{compaction, prompt};
 
 /// Build the Anthropic request body for a single turn.
 pub fn compose_anthropic_messages_request(

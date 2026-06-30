@@ -232,6 +232,7 @@ fn test_title_update_refreshes_shadowing_task_title() {
                 orchestration_harness_type: None,
                 parent_conversation_id: None,
                 is_remote_child: false,
+                compaction_state_json: None,
                 root_task_is_optimistic: None,
                 run_id: None,
                 autoexecute_override: None,

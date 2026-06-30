@@ -20,15 +20,14 @@
 
 use std::pin::Pin;
 
-use futures::{
-    channel::oneshot,
-    stream::{self, BoxStream, Stream, StreamExt},
-    Future,
-};
+use futures::channel::oneshot;
+use futures::stream::{self, BoxStream, Stream, StreamExt};
+use futures::Future;
 use reqwest_eventsource::{Event, RequestBuilderExt};
 use warp_multi_agent_api as api;
 
-use crate::local_provider::{config::LocalProviderConfig, request::LocalProviderInput};
+use crate::local_provider::config::LocalProviderConfig;
+use crate::local_provider::request::LocalProviderInput;
 
 /// Errors that prevent the local provider from producing any response stream.
 /// Mid-stream errors are encoded as `Finished{InternalError}` events instead.

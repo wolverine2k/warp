@@ -4,9 +4,9 @@
 
 use std::sync::Once;
 
+use ai::local_provider::api_type::AgentProviderApiType;
+use ai::local_provider::config::LocalProviderConfig;
 use mockito::Server;
-
-use ai::local_provider::{api_type::AgentProviderApiType, config::LocalProviderConfig};
 
 use super::{fetch_models, FetchModelsOutcome};
 

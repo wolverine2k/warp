@@ -28,15 +28,12 @@ use super::wire::{
     GeminiOutboundFunctionResponsePart, GeminiOutboundPart, GeminiRole, GeminiSystemInstruction,
     GeminiTextPart, GeminiToolEnvelope,
 };
-use crate::local_provider::{
-    compaction,
-    config::LocalProviderConfig,
-    prompt,
-    request::{
-        enabled_local_tools, summarize_tool_call_input, summarize_tool_result, LocalProviderInput,
-    },
-    tools::{self, LocalTool},
+use crate::local_provider::config::LocalProviderConfig;
+use crate::local_provider::request::{
+    enabled_local_tools, summarize_tool_call_input, summarize_tool_result, LocalProviderInput,
 };
+use crate::local_provider::tools::{self, LocalTool};
+use crate::local_provider::{compaction, prompt};
 
 pub fn compose_gemini_request(
     input: &LocalProviderInput,

@@ -2,11 +2,10 @@ use ai::local_provider::{llm_id, AgentProviderApiType, AgentProviderSecrets};
 use settings::Setting;
 use warpui::{App, SingletonEntity};
 
+use super::{lookup_byop, resolve_byop_for_local_child, resolve_byop_for_remote_child};
 use crate::settings::ai::AISettings;
 use crate::settings::{AgentProvider, AgentProviderKind, AgentProviderModel};
 use crate::test_util::settings::initialize_settings_for_tests;
-
-use super::{lookup_byop, resolve_byop_for_local_child, resolve_byop_for_remote_child};
 
 #[test]
 fn resolve_byop_for_local_child_returns_provider_api_key_and_user_model_id() {

@@ -268,6 +268,12 @@ impl RequestParams {
             supported_tools_override: None,
             parent_agent_id: None,
             agent_name: None,
+            local_provider_config: None,
+            root_task_id: None,
+            local_provider_compaction_config: Default::default(),
+            attachments: Vec::new(),
+            local_provider_compaction_state: Default::default(),
+            local_provider_history: Default::default(),
         }
     }
 
@@ -370,12 +376,15 @@ impl RequestParams {
                 api_key_manager.custom_model_providers_for_request(is_custom_inference_enabled)
             })
             .flatten();
-        let custom_model_routers = FeatureFlag::CustomModelRouters.is_enabled().then(|| {
-            LLMPreferences::as_ref(app).custom_model_routers_for_request(
-                &request_input.model_id,
-                &request_input.coding_model_id,
-            )
-        });
+        let custom_model_routers = FeatureFlag::CustomModelRouters
+            .is_enabled()
+            .then(|| {
+                LLMPreferences::as_ref(app).custom_model_routers_for_request(
+                    &request_input.model_id,
+                    &request_input.coding_model_id,
+                )
+            })
+            .flatten();
         let allow_use_of_warp_credits = *AISettings::as_ref(app).can_use_warp_credits_for_fallback;
 
         let app_execution_mode = AppExecutionMode::as_ref(app);

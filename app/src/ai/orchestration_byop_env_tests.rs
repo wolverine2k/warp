@@ -3,9 +3,8 @@ use std::ffi::OsString;
 use ai::local_provider::AgentProviderApiType;
 use warp_cli::agent::Harness;
 
-use crate::settings::{AgentProvider, AgentProviderKind, AgentProviderModel};
-
 use super::byop_env_for_harness;
+use crate::settings::{AgentProvider, AgentProviderKind, AgentProviderModel};
 
 fn provider_with(api_type: AgentProviderApiType, base_url: &str) -> AgentProvider {
     AgentProvider {

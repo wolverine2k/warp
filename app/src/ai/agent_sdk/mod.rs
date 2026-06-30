@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use ai::api_keys::{ApiKeyManager, AwsCredentialsRefreshStrategy};
 use anyhow::Context;
+pub(crate) use common::validate_orchestration_model_id;
 pub(crate) use driver::harness::{task_env_vars, validate_cli_installed, ClaudeHarness};
 pub use driver::AgentDriver;
 use driver::AgentDriverError;
@@ -62,7 +63,6 @@ use crate::ai::llms::LLMId;
 use crate::ai::skills::{
     clone_repo_for_skill, resolve_skill_spec, ResolveSkillError, ResolvedSkill,
 };
-
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
 use crate::cloud_object::model::persistence::CloudModel;
@@ -73,7 +73,6 @@ use crate::server::server_api::ai::{AIClient, AgentConfigSnapshot, GitCredential
 use crate::server::server_api::ServerApiProvider;
 use crate::terminal::view::ConversationRestorationInNewPaneType;
 use crate::workflows::workflow::Workflow;
-pub(crate) use common::validate_orchestration_model_id;
 
 mod admin;
 mod agent_config;

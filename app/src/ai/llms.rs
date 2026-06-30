@@ -12,7 +12,7 @@ use warp_core::user_preferences::GetUserPreferences;
 use warp_multi_agent_api as api;
 use warpui::{AppContext, Entity, EntityId, ModelContext, SingletonEntity};
 
-use super::custom_model_routers::{self, CustomModelRouter, ModelConfigError};
+use super::custom_model_routers::{self, CustomModelRouter};
 use super::execution_profiles::profiles::AIExecutionProfilesModel;
 use crate::auth::auth_manager::{AuthManager, AuthManagerEvent};
 use crate::auth::AuthStateProvider;
@@ -609,6 +609,8 @@ pub struct LLMPreferences {
     /// These entries are NOT chained into `custom_llm_choices` — they only
     /// surface through `get_orchestration_llm_choices`.
     byop_orchestration_llms: Vec<LLMInfo>,
+    /// Synthetic `LLMInfo` entries backed by YAML-authored custom model routers.
+    custom_model_routers: Vec<CustomModelRouter>,
 }
 
 impl LLMPreferences {
@@ -683,6 +685,7 @@ impl LLMPreferences {
             base_llm_for_terminal_view,
             custom_llms,
             byop_orchestration_llms,
+            custom_model_routers: Vec::new(),
         };
 
         // Seed from any already-loaded local config (the async load emits
@@ -940,6 +943,28 @@ impl LLMPreferences {
             .flatten()
     }
 
+    fn custom_router_llm_info_for_id(&self, id: &LLMId) -> Option<&LLMInfo> {
+        self.custom_model_routers
+            .iter()
+            .find(|router| router.info.id == *id)
+            .map(|router| &router.info)
+    }
+
+    fn custom_router_llm_info_for_id_if_enabled(&self, id: &LLMId) -> Option<&LLMInfo> {
+        FeatureFlag::CustomModelRouters
+            .is_enabled()
+            .then(|| self.custom_router_llm_info_for_id(id))
+            .flatten()
+    }
+
+    pub fn custom_router_choices(&self) -> impl Iterator<Item = &LLMInfo> {
+        let enabled = FeatureFlag::CustomModelRouters.is_enabled();
+        self.custom_model_routers
+            .iter()
+            .filter(move |_| enabled)
+            .map(|router| &router.info)
+    }
+
     /// Iterator over the user's custom-endpoint LLMs, gated on the feature flag and entitlement.
     pub fn custom_llm_choices(&self, app: &AppContext) -> std::slice::Iter<'_, LLMInfo> {
         if Self::custom_inference_enabled(app) {
@@ -991,10 +1016,11 @@ impl LLMPreferences {
         harness_type: &str,
         execution_mode: &ai::agent::action::RunAgentsExecutionMode,
     ) -> Vec<LLMInfo> {
+        use ai::local_provider::llm_id;
+
         use crate::ai::byop_orchestration_filter::{
             base_url_reachable_from_remote, byop_harness_compatible,
         };
-        use ai::local_provider::llm_id;
 
         let is_remote = execution_mode.is_remote();
 
@@ -1047,6 +1073,73 @@ impl LLMPreferences {
     /// edits, and removals all propagate immediately.
     fn rebuild_custom_llms(&mut self, app: &AppContext) {
         self.custom_llms = build_custom_llm_infos(ApiKeyManager::as_ref(app).keys());
+    }
+
+    fn rebuild_custom_model_routers(&mut self, app: &AppContext) {
+        self.custom_model_routers = WarpConfig::as_ref(app).custom_model_routers().clone();
+    }
+
+    fn reconcile_stale_custom_router_selection(&mut self, ctx: &mut ModelContext<Self>) {
+        if FeatureFlag::CustomModelRouters.is_enabled() {
+            return;
+        }
+
+        let router_ids: HashSet<_> = self
+            .custom_model_routers
+            .iter()
+            .map(|router| router.llm_id())
+            .collect();
+        if router_ids.is_empty() {
+            return;
+        }
+
+        self.base_llm_for_terminal_view.retain(|_, id| {
+            !custom_model_routers::is_local_custom_router_id(id.as_str())
+                || !router_ids.contains(id)
+        });
+
+        AIExecutionProfilesModel::handle(ctx).update(ctx, |profiles, ctx| {
+            for profile_id in profiles.get_all_profile_ids() {
+                let Some(profile) = profiles.get_profile_by_id(profile_id, ctx) else {
+                    continue;
+                };
+                let data = profile.data();
+                if data
+                    .base_model
+                    .as_ref()
+                    .is_some_and(|id| router_ids.contains(id))
+                {
+                    profiles.set_base_model(profile_id, None, ctx);
+                }
+                if data
+                    .coding_model
+                    .as_ref()
+                    .is_some_and(|id| router_ids.contains(id))
+                {
+                    profiles.set_coding_model(profile_id, None, ctx);
+                }
+            }
+        });
+    }
+
+    pub fn custom_model_routers_for_request(
+        &self,
+        base_model_id: &LLMId,
+        coding_model_id: &LLMId,
+    ) -> Option<api::request::settings::CustomModelRouters> {
+        if !FeatureFlag::CustomModelRouters.is_enabled() {
+            return None;
+        }
+
+        let selected_ids = [base_model_id, coding_model_id];
+        let routers = self
+            .custom_model_routers
+            .iter()
+            .filter(|router| selected_ids.contains(&&router.info.id))
+            .map(CustomModelRouter::to_proto)
+            .collect::<Vec<_>>();
+
+        (!routers.is_empty()).then_some(api::request::settings::CustomModelRouters { routers })
     }
 
     /// Reads the user's current `AgentProviders` (filtered by

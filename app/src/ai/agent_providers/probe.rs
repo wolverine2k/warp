@@ -8,9 +8,8 @@
 //! support automatically as soon as their `build_probe_request` returns
 //! something other than `Err(UnsupportedApiType(...))`.
 
-use ai::local_provider::{
-    config::LocalProviderConfig, select_adapter, ProviderAdapterError as AdapterError,
-};
+use ai::local_provider::config::LocalProviderConfig;
+use ai::local_provider::{select_adapter, ProviderAdapterError as AdapterError};
 
 /// Outcome of a single probe attempt.
 #[derive(Debug, Clone)]

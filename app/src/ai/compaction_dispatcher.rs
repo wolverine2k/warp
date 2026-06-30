@@ -9,7 +9,8 @@ use ai::local_provider::compaction::{
     try_compact, AutoCompactionOutcome, CompactionTarget, CompletedCompaction, TokenCounts,
 };
 use ai::local_provider::llm_id;
-use warp_multi_agent_api::{self as api, response_event::stream_finished::TokenUsage};
+use warp_multi_agent_api::response_event::stream_finished::TokenUsage;
+use warp_multi_agent_api::{self as api};
 use warpui::{AppContext, ModelContext, SingletonEntity};
 
 use crate::ai::agent::conversation::AIConversationId;

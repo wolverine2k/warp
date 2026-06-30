@@ -2,10 +2,9 @@
 //! level (explicit, catalog, heuristic, conservative-fallback) for each
 //! modality (image / pdf / audio).
 
+use super::{resolve_audio, resolve_image, resolve_pdf};
 use crate::catalog::CatalogModel;
 use crate::local_provider::AgentProviderApiType;
-
-use super::{resolve_audio, resolve_image, resolve_pdf};
 
 fn catalog_entry(provider: &str, id: &str, image: bool, pdf: bool, audio: bool) -> CatalogModel {
     CatalogModel {

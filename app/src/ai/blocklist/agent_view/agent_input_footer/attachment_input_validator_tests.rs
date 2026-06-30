@@ -1,9 +1,10 @@
+use ai::attachments::AgentAttachment;
+use ai::local_provider::AgentProviderApiType;
+
 use super::{
     validate, ActiveModelCaps, AttachmentRejection, Modality, MAX_ATTACHMENTS_PER_TURN,
     MAX_ATTACHMENT_BYTES,
 };
-use ai::attachments::AgentAttachment;
-use ai::local_provider::AgentProviderApiType;
 
 /// Build a minimal `AgentAttachment` with the given mime and byte length.
 fn make_attachment(mime: &str, byte_len: usize) -> AgentAttachment {

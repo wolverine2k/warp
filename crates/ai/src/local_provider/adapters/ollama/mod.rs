@@ -33,15 +33,15 @@ mod request_tests;
 #[path = "response_tests.rs"]
 mod response_tests;
 
+use request::compose_ollama_chat_request;
+use response::OllamaDecoder;
+use wire::{OllamaChatChunk, OllamaChatMessage, OllamaChatRequest, OllamaOptions, OllamaRole};
+
 use super::{
     AdapterError, AgentProviderApiType, DiscoveredModel, ListModelsPage, LocalProviderConfig,
     LocalProviderInput, ProviderAdapter, StreamDecoder, StreamIds, StreamingFormat,
     SummarizerError, SummarizerInput,
 };
-
-use request::compose_ollama_chat_request;
-use response::OllamaDecoder;
-use wire::{OllamaChatChunk, OllamaChatMessage, OllamaChatRequest, OllamaOptions, OllamaRole};
 
 pub struct OllamaAdapter;
 

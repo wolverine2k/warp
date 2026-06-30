@@ -30,7 +30,7 @@ pub enum ServerCloudObject {
     AIExecutionProfile(ServerAIExecutionProfile),
     TemplatableMCPServer(ServerTemplatableMCPServer),
     AmbientAgentEnvironment(ServerAmbientAgentEnvironment),
-    ScheduledAmbientAgent(ServerScheduledAmbientAgent),
+    ScheduledAmbientAgent(Box<ServerScheduledAmbientAgent>),
     CloudAgentConfig(ServerCloudAgentConfig),
 }
 
@@ -128,7 +128,9 @@ where
         } else if let Some(server_scheduled_ambient_agent) =
             value.downcast_ref::<ServerScheduledAmbientAgent>()
         {
-            ServerCloudObject::ScheduledAmbientAgent(server_scheduled_ambient_agent.clone())
+            ServerCloudObject::ScheduledAmbientAgent(Box::new(
+                server_scheduled_ambient_agent.clone(),
+            ))
         } else if let Some(server_cloud_agent_config) =
             value.downcast_ref::<ServerCloudAgentConfig>()
         {
@@ -314,9 +316,9 @@ fn server_gso_to_cloud_object(
             ))
         }
         warp_graphql::generic_string_object::GenericStringObjectFormat::JsonScheduledAmbientAgent => {
-            Ok(ServerCloudObject::ScheduledAmbientAgent(
+            Ok(ServerCloudObject::ScheduledAmbientAgent(Box::new(
                 GenericServerObject::<GenericStringObjectId, GenericStringModel<ScheduledAmbientAgent, JsonSerializer>>::try_from_gql(gso)?,
-            ))
+            )))
         }
         // Formats unknown to this client build (e.g. the server-only `JsonRunner`).
         // Returning an error lets callers skip the object rather than failing.

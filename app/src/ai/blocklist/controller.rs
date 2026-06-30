@@ -397,6 +397,7 @@ impl LocalClaudeWakeTrigger {
 struct InputQuery {
     which_task: WhichTask,
     input_query: InputQueryType,
+    queued_query_id: Option<QueuedQueryId>,
     /// Additional referenced attachments to include in the query
     /// (e.g. file path references from shared session file uploads).
     additional_attachments: HashMap<String, AIAgentAttachment>,
@@ -762,6 +763,7 @@ impl BlocklistAIController {
 
         let additional_attachments = input_query.additional_attachments;
         let file_attachments = input_query.file_attachments;
+        let queued_query_id = input_query.queued_query_id;
         let ai_input = match input_query.input_query {
             InputQueryType::UserSubmittedQueryFromInput {
                 static_query_type,
@@ -1014,6 +1016,7 @@ impl BlocklistAIController {
                         static_query_type,
                         running_command: Some(running_command),
                     },
+                    queued_query_id,
                     additional_attachments: HashMap::new(),
                     file_attachments,
                 },
@@ -1031,6 +1034,7 @@ impl BlocklistAIController {
                         static_query_type,
                         running_command: None,
                     },
+                    queued_query_id,
                     additional_attachments: HashMap::new(),
                     file_attachments,
                 },
@@ -1106,6 +1110,7 @@ impl BlocklistAIController {
             file_attachments,
             EntrypointType::UserInitiated,
             /*is_queued_prompt*/ false,
+            /*queued_query_id*/ None,
             ctx,
         );
     }
@@ -1128,6 +1133,7 @@ impl BlocklistAIController {
             participant_id,
             file_attachments,
             /*is_queued_prompt*/ false,
+            /*queued_query_id*/ None,
             ctx,
         );
     }
@@ -1324,6 +1330,7 @@ impl BlocklistAIController {
                     static_query_type: None,
                     running_command,
                 },
+                queued_query_id,
                 additional_attachments,
                 file_attachments,
             },
@@ -1349,6 +1356,7 @@ impl BlocklistAIController {
                     static_query_type: query_type.static_query_type(),
                     running_command: None,
                 },
+                queued_query_id: None,
                 additional_attachments: HashMap::new(),
                 file_attachments: vec![],
             },
@@ -1386,6 +1394,7 @@ impl BlocklistAIController {
             InputQuery {
                 which_task,
                 input_query: InputQueryType::AIInputType { ai_input },
+                queued_query_id: None,
                 additional_attachments: HashMap::new(),
                 file_attachments: vec![],
             },
@@ -1519,6 +1528,7 @@ impl BlocklistAIController {
                         context,
                     },
                 },
+                queued_query_id: None,
                 additional_attachments: HashMap::new(),
                 file_attachments: vec![],
             },
@@ -2355,7 +2365,7 @@ impl BlocklistAIController {
         request_input: RequestInput,
         query_metadata: Option<RequestMetadata>,
         file_attachments: Vec<ai::attachments::AgentAttachment>,
-        default_to_follow_up_on_success: bool,
+        _default_to_follow_up_on_success: bool,
         can_attempt_resume_on_error: bool,
         is_queued_prompt: bool,
         ctx: &mut ModelContext<Self>,

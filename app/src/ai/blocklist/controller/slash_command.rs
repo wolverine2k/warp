@@ -72,7 +72,9 @@ impl SlashCommandRequest {
         conversation_id_override: Option<AIConversationId>,
         ctx: &mut ModelContext<BlocklistAIController>,
     ) {
-        let conversation_id = self.conversation_id(controller, ctx);
+        let conversation_id =
+            conversation_id_override.or_else(|| self.conversation_id(controller, ctx));
+        let is_queued_prompt = queued_query_id.is_some();
 
         // Phase B-4: intercept `/compact` for local-provider conversations
         // and route through the lib auto-compactor instead of the warp.dev
