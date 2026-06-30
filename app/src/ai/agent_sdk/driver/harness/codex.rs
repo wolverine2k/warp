@@ -12,6 +12,7 @@ use serde_json::{Map, Value};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 use warp_cli::agent::Harness;
+use warp_core::features::FeatureFlag;
 use warp_managed_secrets::ManagedSecretValue;
 use warpui::{ModelHandle, ModelSpawner, SingletonEntity};
 
@@ -19,8 +20,8 @@ use super::super::terminal::{CommandHandle, TerminalDriver};
 use super::super::{AgentDriver, AgentDriverError};
 use super::claude_transcript::read_jsonl;
 use super::codex_transcript::{
-    codex_sessions_root, find_session_file, parse_session_meta, write_envelope, CodexResumeInfo,
-    CodexTranscriptEnvelope,
+    codex_sessions_root, find_session_file, parse_session_meta, rehydrate_codex_transcript,
+    CodexResumeInfo, CodexTranscriptEnvelope,
 };
 use super::json_utils::read_json_file_or_default;
 use super::{
@@ -89,7 +90,7 @@ impl ThirdPartyHarness for CodexHarness {
     }
 
     fn requires_verified_platform_plugin(&self) -> bool {
-        true
+        FeatureFlag::CodexPlugin.is_enabled()
     }
 
     /// Fetch the codex transcript for the current task's conversation and wrap it into a
@@ -240,19 +241,15 @@ impl CodexHarnessRunner {
             Some(CodexResumeInfo {
                 conversation_id,
                 session_id,
-                envelope,
+                mut envelope,
             }) => {
-                let sessions_root = codex_sessions_root().map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to resolve codex sessions root"),
-                    )
-                })?;
-                let path = write_envelope(&envelope, &sessions_root).map_err(|e| {
-                    AgentDriverError::ConfigBuildFailed(
-                        e.context("Failed to rehydrate codex transcript"),
-                    )
-                })?;
-                (Some(session_id), Some(conversation_id), Some(path))
+                let continuation = rehydrate_codex_transcript(&mut envelope, _working_dir)
+                    .map_err(AgentDriverError::ConfigBuildFailed)?;
+                (
+                    Some(session_id),
+                    Some(conversation_id),
+                    Some(continuation.transcript_path),
+                )
             }
             None => (None, None, None),
         };

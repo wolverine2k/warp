@@ -6,7 +6,7 @@ use warpui::{EntityId, UpdateView, ViewContext};
 
 use super::{group_member_indices, Workspace};
 use crate::menu::{MenuItem, MenuItemFields};
-use crate::tab::MOVE_TO_GROUP_LABEL;
+use crate::tab::{TabData, MOVE_TO_GROUP_LABEL};
 use crate::workspace::action::{TabContextMenuAnchor, WorkspaceAction};
 use crate::workspace::tab_group::{TabGroup, TabGroupId};
 use crate::workspace::util::PaneViewLocator;
@@ -105,7 +105,7 @@ impl Workspace {
     /// The active tab index is always included if any other tab is marked
     /// as selected. This is to handle the edge case where we only mark other
     /// tabs as selected via command click.
-    fn selected_tab_indices(&self) -> Vec<usize> {
+    pub(super) fn selected_tab_indices(&self) -> Vec<usize> {
         let any_flagged = self.tabs.iter().any(|tab| tab.in_multi_selection);
         // If no tab is part of the multi selection, return empty list.
         if !any_flagged {
@@ -133,7 +133,7 @@ impl Workspace {
 
     /// Gates the "Remove from group" menu item. All selected tabs
     /// must be in the same group in order to display this option.
-    fn selection_shared_group(&self) -> Option<TabGroupId> {
+    pub(super) fn selection_shared_group(&self) -> Option<TabGroupId> {
         let indices = self.selected_tab_indices();
         let mut group_ids = indices
             .iter()
@@ -146,7 +146,7 @@ impl Workspace {
     /// Re-seats `active_tab_index` so the previously-active pane group stays
     /// visually active across a tab reorder. Pass the pane group id captured
     /// before the reorder; no-op if it can't be found.
-    fn restore_active_tab_index(&mut self, pane_group_id: Option<EntityId>) {
+    pub(super) fn restore_active_tab_index(&mut self, pane_group_id: Option<EntityId>) {
         if let Some(active_id) = pane_group_id {
             if let Some(new_index) = self
                 .tabs
@@ -155,6 +155,44 @@ impl Workspace {
             {
                 self.active_tab_index = new_index;
             }
+        }
+    }
+
+    /// Context-aware "create group" entry point used by the
+    /// `workspace:new_tab_group_from_active_or_selected_tabs` keybinding. When
+    /// the multi-selection covers 2+ tabs, groups the selection; otherwise
+    /// groups just the active tab. `selected_tab_indices` already folds the
+    /// active tab into the selection, so a lone flagged active tab (or no
+    /// selection at all) takes the single-tab path.
+    pub(super) fn new_tab_group_from_active_or_selected_tabs(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::GroupedTabs.is_enabled() {
+            return;
+        }
+        if self.selected_tab_indices().len() >= 2 {
+            self.new_tab_group_from_selected_tabs(ctx);
+        } else {
+            self.new_tab_group_from_tab(self.active_tab_index, ctx);
+        }
+    }
+
+    /// Context-aware "remove from group" entry point used by the
+    /// `workspace:remove_active_or_selected_tabs_from_group` keybinding. With a
+    /// 2+ multi-selection, removes the whole selection from its group;
+    /// otherwise removes just the active tab.
+    pub(super) fn remove_active_or_selected_tabs_from_group(
+        &mut self,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        if !FeatureFlag::GroupedTabs.is_enabled() {
+            return;
+        }
+        if self.selected_tab_indices().len() >= 2 {
+            self.remove_selected_tabs_from_group(ctx);
+        } else {
+            self.remove_tab_from_group(self.active_tab_index, ctx);
         }
     }
 
@@ -203,10 +241,12 @@ impl Workspace {
         let anchor_index = selected_indices[0];
         let anchor_previous_group_id = self.tabs[anchor_index].group_id;
 
-        // Assign membership and clear flags for every selected tab.
+        // Assign membership and clear flags for every selected tab. The new
+        // group is unpinned, so any selected tab in set as unpinned.
         for &index in &selected_indices {
             let tab = &mut self.tabs[index];
             tab.group_id = Some(group_id);
+            tab.pinned = false;
             tab.in_multi_selection = false;
         }
 
@@ -242,6 +282,9 @@ impl Workspace {
                     .map(|last| last + 1)
             })
             .unwrap_or(anchor_index);
+
+        // Our insertion index for this group should be below any pinned items.
+        let insert_at = self.clamp_to_unpinned_region(&other_tabs, insert_at);
 
         other_tabs.splice(insert_at..insert_at, selected_tabs);
         self.tabs = other_tabs;
@@ -302,10 +345,13 @@ impl Workspace {
             .get(self.active_tab_index)
             .map(|tab| tab.pane_group.id());
 
-        // Assign membership and clear flags for every selected tab.
+        // Assign membership and clear flags for every selected tab. Entering
+        // the group removes any per-tab pinned flag — the destination group's
+        // own `pinned` flag now governs the member's position.
         for &index in &selected_indices {
             let tab = &mut self.tabs[index];
             tab.group_id = Some(group_id);
+            tab.pinned = false;
             tab.in_multi_selection = false;
         }
 
@@ -393,10 +439,14 @@ impl Workspace {
                 });
         // Anchor the removed block just after the group's remaining members;
         // if none remain, fall back to the pre-computed prefix position.
-        let insert_at = match rest.iter().rposition(|tab| tab.group_id == Some(group_id)) {
+        let natural_insert_at = match rest.iter().rposition(|tab| tab.group_id == Some(group_id)) {
             Some(last) => last + 1,
             None => kept_before_group,
         };
+        // The removed tabs are now unpinned (they left a possibly-pinned
+        // group); they must land past every effectively pinned tab in
+        // not just past the source group's remaining members.
+        let insert_at = self.clamp_to_unpinned_region(&rest, natural_insert_at);
         rest.splice(insert_at..insert_at, removed);
         self.tabs = rest;
 
@@ -463,6 +513,153 @@ impl Workspace {
         self.hide_move_to_group_sidecar(ctx);
         self.show_tab_selection_right_click_menu = Some((tab_index, anchor));
         ctx.focus(&self.tab_right_click_menu);
+        ctx.notify();
+    }
+
+    /// True when `tab` is positioned in the pinned region of the tab list —
+    /// either because its own `pinned` flag is set (ungrouped pinned tab) or
+    /// because it belongs to a pinned group.
+    pub(super) fn is_tab_effectively_pinned(&self, tab: &TabData) -> bool {
+        // Safety net, ensures no behavioral changes if feature flag
+        // is off and some tabs have a pinned state saved.
+        if !FeatureFlag::PinnedTabs.is_enabled() {
+            return false;
+        }
+        tab.pinned
+            || tab
+                .group_id
+                .is_some_and(|gid| self.tab_groups.get(&gid).is_some_and(|g| g.pinned))
+    }
+
+    /// Index where the unpinned region begins within `tabs`: the count of
+    /// leading tabs that belong to the pinned region.
+    pub(super) fn pinned_boundary_index(&self, tabs: &[TabData]) -> usize {
+        tabs.iter()
+            .take_while(|tab| self.is_tab_effectively_pinned(tab))
+            .count()
+    }
+
+    /// Pushes `idx` past the leading effectively-pinned tabs in `tabs` if it
+    /// falls inside that prefix.
+    pub(super) fn clamp_to_unpinned_region(&self, tabs: &[TabData], idx: usize) -> usize {
+        idx.max(self.pinned_boundary_index(tabs))
+    }
+
+    /// Returns the slot just past the last member of `group_id`, suitable as
+    /// an insert/move target that keeps the group contiguous. `None` when the
+    /// group has no members.
+    pub(super) fn index_after_group(&self, group_id: TabGroupId) -> Option<usize> {
+        group_member_indices(&self.tabs, group_id)
+            .last()
+            .map(|last| last + 1)
+    }
+
+    /// Pins the tab. Grouped tabs are extracted from their group first
+    /// regardless of whether that group itself is pinned — tab pinning and
+    /// group pinning are independent concepts.
+    pub(super) fn pin_tab(&mut self, tab_index: usize, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::PinnedTabs.is_enabled() {
+            return;
+        }
+        let Some(tab) = self.tabs.get(tab_index) else {
+            log::debug!("pin_tab: tab_index {tab_index} out of bounds");
+            return;
+        };
+        if tab.pinned {
+            log::debug!("pin_tab: tab {tab_index} is already pinned");
+            return;
+        }
+        let previous_group_id = tab.group_id;
+
+        // Identify where this newly pinned tab should land (after the last pinned item).
+        let target = self.pinned_boundary_index(&self.tabs);
+
+        self.tabs[tab_index].group_id = None;
+        self.tabs[tab_index].pinned = true;
+        self.move_tab_to_index(tab_index, target, ctx);
+
+        if let Some(prev) = previous_group_id {
+            self.prune_empty_tab_group(prev, ctx);
+        }
+
+        ctx.dispatch_global_action("workspace:save_app", ());
+        ctx.notify();
+    }
+
+    /// Unpins a pinned tab and moves it to the start of the unpinned region.
+    pub(super) fn unpin_tab(&mut self, tab_index: usize, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::PinnedTabs.is_enabled() {
+            return;
+        }
+        let Some(tab) = self.tabs.get(tab_index) else {
+            log::debug!("unpin_tab: tab_index {tab_index} out of bounds");
+            return;
+        };
+        if !tab.pinned {
+            log::debug!("unpin_tab: tab {tab_index} is not pinned");
+            return;
+        }
+
+        // This tab should land right after all pinned items.
+        let target = self.pinned_boundary_index(&self.tabs);
+
+        self.tabs[tab_index].pinned = false;
+        self.move_tab_to_index(tab_index, target, ctx);
+
+        ctx.dispatch_global_action("workspace:save_app", ());
+        ctx.notify();
+    }
+
+    /// Pins the entire tab group: flips the group's `pinned` flag and moves
+    /// its contiguous block of members to the end of the pinned region. We
+    /// don't touch individual member `tab.pinned` flags because the block
+    /// always travels as a unit, and we want to support pinning a tab even if
+    /// it already belongs to a (pinned) group.
+    pub(super) fn pin_tab_group(&mut self, group_id: TabGroupId, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::PinnedTabs.is_enabled() {
+            return;
+        }
+        let Some(group) = self.tab_groups.get(&group_id) else {
+            log::debug!("pin_tab_group: unknown group {group_id:?}");
+            return;
+        };
+        if group.pinned {
+            log::debug!("pin_tab_group: group {group_id:?} is already pinned");
+            return;
+        }
+
+        let target = self.pinned_boundary_index(&self.tabs);
+        if let Some(group) = self.tab_groups.get_mut(&group_id) {
+            group.pinned = true;
+        }
+        self.move_group_block(group_id, target, ctx);
+
+        ctx.dispatch_global_action("workspace:save_app", ());
+        ctx.notify();
+    }
+
+    /// Unpins the entire tab group: clears the group's `pinned` flag and
+    /// moves the group's block to the start of the unpinned region.
+    pub(super) fn unpin_tab_group(&mut self, group_id: TabGroupId, ctx: &mut ViewContext<Self>) {
+        if !FeatureFlag::PinnedTabs.is_enabled() {
+            return;
+        }
+        let Some(group) = self.tab_groups.get(&group_id) else {
+            log::debug!("unpin_tab_group: unknown group {group_id:?}");
+            return;
+        };
+        if !group.pinned {
+            log::debug!("unpin_tab_group: group {group_id:?} is not pinned");
+            return;
+        }
+
+        let target = self.pinned_boundary_index(&self.tabs);
+        if let Some(group) = self.tab_groups.get_mut(&group_id) {
+            group.pinned = false;
+        }
+        self.move_group_block(group_id, target, ctx);
+
+        ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
     }
 

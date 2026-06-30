@@ -135,6 +135,9 @@ pub async fn generate_multi_agent_output(
             supports_research_agent: params.research_agent_enabled,
             supports_orchestration_v2: supports_orchestration_v2(params.orchestration_enabled),
             custom_model_providers: params.custom_model_providers,
+            custom_model_routers: params.custom_model_routers,
+            // Background computer use is not supported by the local client yet.
+            supports_background_computer_use: false,
         }),
         metadata: Some(api::request::Metadata {
             logging: logging_metadata,
@@ -166,15 +169,25 @@ pub async fn generate_multi_agent_output(
         mcp_context: params.mcp_context.map(Into::into),
     };
 
-    let response_stream = server_api.generate_multi_agent_output(&request).await;
+    let response_stream =
+        warp_multi_agent_client::generate_multi_agent_output(server_api.as_ref(), &request).await;
     match response_stream {
         Ok(stream) => {
-            let output_stream = stream.take_until(cancellation_rx);
+            let output_stream = stream
+                .then(|result| async {
+                    match result {
+                        Ok(event) => Ok(event),
+                        Err(error) => Err(convert_multi_agent_client_error(error).await),
+                    }
+                })
+                .take_until(cancellation_rx);
             Ok(Box::pin(output_stream))
         }
         Err(e) => {
             let (tx, rx) = async_channel::unbounded();
-            let _ = tx.send(Err(e)).await;
+            let _ = tx
+                .send(Err(convert_multi_agent_client_error(e).await))
+                .await;
             Ok(Box::pin(rx))
         }
     }
@@ -418,6 +431,9 @@ fn get_supported_tools(params: &RequestParams) -> Vec<api::ToolType> {
 
     if params.orchestration_enabled {
         supported_tools.extend([api::ToolType::RunAgents, api::ToolType::SendMessageToAgent]);
+        // Declare client-handled wait_for_events so the server doesn't
+        // fall back to the legacy server-handled form.
+        supported_tools.push(api::ToolType::WaitForEvents);
     }
 
     if FeatureFlag::AskUserQuestion.is_enabled() && params.ask_user_question_enabled {

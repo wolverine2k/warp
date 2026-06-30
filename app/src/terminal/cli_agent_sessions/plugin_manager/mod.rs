@@ -51,6 +51,7 @@ pub(crate) struct PluginInstructions {
 /// Error returned when plugin installation fails.
 /// Carries both a short user-facing message (for the toast) and a detailed
 /// command log (for the log file the user can inspect).
+#[derive(Debug)]
 pub(crate) struct PluginInstallError {
     /// Short description shown in the toast notification.
     pub message: String,
@@ -63,6 +64,8 @@ impl fmt::Display for PluginInstallError {
         f.write_str(&self.message)
     }
 }
+
+impl std::error::Error for PluginInstallError {}
 
 impl From<io::Error> for PluginInstallError {
     fn from(err: io::Error) -> Self {
@@ -224,6 +227,7 @@ pub(crate) trait CliAgentPluginManager: Send + Sync {
     async fn install_platform_plugin(&self) -> Result<(), PluginInstallError> {
         Ok(())
     }
+
     /// Update the Oz platform plugin for this CLI agent, if one exists.
     /// Default reuses the install path because most agents do not have a
     /// platform plugin or need distinct update behavior.
@@ -293,6 +297,7 @@ pub(crate) fn plugin_manager_for_with_shell(
         | CLIAgent::Hermes
         | CLIAgent::Goose
         | CLIAgent::Vibe
+        | CLIAgent::Antigravity
         | CLIAgent::Unknown => None,
     }
 }

@@ -253,6 +253,16 @@ pub struct BlockList {
     /// The current block list selection.
     /// Do not set this value directly - use [`Self::set_selection`] and [`Self::clear_selection`] instead.
     selection: Option<BlockListSelection>,
+    /// View IDs of rich content (AI) blocks that currently have an active text
+    /// selection managed by the block itself, rather than by the point-based
+    /// [`selection`](Self::selection) above. Rich content blocks render their own
+    /// selections, so the block list can't derive this from `selection`; the
+    /// terminal view keeps this in sync (see
+    /// [`set_rich_content_selection`](Self::set_rich_content_selection) /
+    /// [`clear_rich_content_selection`](Self::clear_rich_content_selection)) so
+    /// copy/insert paths can find the selected text via
+    /// [`rich_content_blocks_in_selection`](Self::rich_content_blocks_in_selection).
+    rich_content_selections: Vec<EntityId>,
     /// If this is Some, and if smart-select is enabled, double-clicking within this range will
     /// select this range instead of the normal smart-select logic. The purpose of this is to
     /// allow double-click selection to work on the TerminalView::highlighted_link even when it
@@ -629,6 +639,7 @@ impl BlockList {
             max_grid_size_limit: sizes.max_block_scroll_limit,
             event_proxy: event_proxy.clone(),
             selection: None,
+            rich_content_selections: Vec::new(),
             smart_select_override: None,
             bootstrap_stage,
             padding: sizes.block_padding,
@@ -1610,6 +1621,11 @@ impl BlockList {
 
     pub fn agent_view_state(&self) -> &AgentViewState {
         &self.agent_view_state
+    }
+
+    /// Returns the selected conversation cached in the terminal render snapshot.
+    pub fn active_conversation_id(&self) -> Option<AIConversationId> {
+        self.agent_view_state.active_conversation_id()
     }
 
     /// Sets the agent view state for this blocklist.
@@ -2740,6 +2756,8 @@ impl BlockList {
                 .flatten(),
             None,
         );
+
+        self.active_block_mut().disable_reset_grid_checks();
     }
 
     /// Splice a background block into the blocklist. This is called once the
@@ -2975,7 +2993,10 @@ impl BlockList {
 
         if block.did_execute {
             let command = self.active_block_mut().command_to_string();
-            self.preexec(PreexecValue { command });
+            self.preexec(PreexecValue {
+                command,
+                session_id: None,
+            });
         }
 
         if block.did_execute || block.is_background {
@@ -3814,7 +3835,7 @@ impl ansi::Handler for BlockList {
     }
 
     fn handle_completed_iterm_image(&mut self, image: ITermImage) {
-        delegate_to_block!(self.handle_completed_iterm_image(image))
+        delegate!(self.handle_completed_iterm_image(image))
     }
 
     fn handle_completed_kitty_action(
@@ -3822,7 +3843,7 @@ impl ansi::Handler for BlockList {
         action: KittyAction,
         metadata: &mut HashMap<u32, StoredImageMetadata>,
     ) -> Option<KittyResponse> {
-        delegate_to_block!(self.handle_completed_kitty_action(action, metadata))
+        delegate!(self.handle_completed_kitty_action(action, metadata))
     }
 
     fn set_keyboard_enhancement_flags(

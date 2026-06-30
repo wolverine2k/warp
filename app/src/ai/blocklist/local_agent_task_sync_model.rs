@@ -1,7 +1,10 @@
+mod update_queue;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use session_sharing_protocol::common::SessionId;
+use update_queue::LocalTaskUpdateQueue;
 use warp_graphql::ai::{AgentTaskState, PlatformErrorCode};
 use warpui::{Entity, EntityId, ModelContext, SingletonEntity};
 
@@ -35,13 +38,16 @@ use crate::terminal::cli_agent_sessions::{
 /// a `terminal_view_id → task_id` mapping via `register_cli_session`.
 pub struct LocalAgentTaskSyncModel {
     ai_client: Arc<dyn AIClient>,
-    /// Maps terminal view IDs to task IDs for third-party harness sessions
-    /// that don't have conversations in `BlocklistAIHistoryModel`.
+    /// Maps terminal view IDs to task IDs for third-party harness runs that
+    /// don't have conversations in `BlocklistAIHistoryModel`. These mappings
+    /// live for the process-scoped `AgentDriver` run, which can span multiple
+    /// pane-scoped CLI agent sessions.
     cli_session_task_ids: HashMap<EntityId, AmbientAgentTaskId>,
+    /// Serializes and coalesces model-owned updates independently per task.
+    update_queue: LocalTaskUpdateQueue,
 }
 
 pub enum LocalAgentTaskSyncModelEvent {}
-
 /// Aggregated update to send via `AIClient::update_agent_task`. Field names
 /// match the server input shape so it is unambiguous which value flows to
 /// which server field.
@@ -59,6 +65,15 @@ struct LocalTaskUpdate {
     status_message: Option<TaskStatusUpdate>,
 }
 
+impl LocalTaskUpdate {
+    fn is_empty(&self) -> bool {
+        self.task_state.is_none()
+            && self.session_id.is_none()
+            && self.server_conversation_token.is_none()
+            && self.status_message.is_none()
+    }
+}
+
 impl LocalAgentTaskSyncModel {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let ai_client = ServerApiProvider::as_ref(ctx).get_ai_client();
@@ -67,18 +82,19 @@ impl LocalAgentTaskSyncModel {
 
     fn new_with_ai_client(ai_client: Arc<dyn AIClient>, ctx: &mut ModelContext<Self>) -> Self {
         let history_model = BlocklistAIHistoryModel::handle(ctx);
-        ctx.subscribe_to_model(&history_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&history_model, |me, _, event, ctx| {
             me.handle_history_event(event, ctx);
         });
 
         let cli_sessions_model = CLIAgentSessionsModel::handle(ctx);
-        ctx.subscribe_to_model(&cli_sessions_model, |me, event, ctx| {
+        ctx.subscribe_to_model(&cli_sessions_model, |me, _, event, ctx| {
             me.handle_cli_session_event(event, ctx);
         });
 
         Self {
             ai_client,
             cli_session_task_ids: HashMap::new(),
+            update_queue: LocalTaskUpdateQueue::default(),
         }
     }
 
@@ -106,7 +122,7 @@ impl LocalAgentTaskSyncModel {
         // Report IN_PROGRESS immediately because the initial
         // `register_listener` call on `CLIAgentSessionsModel` never emits a
         // `StatusChanged` event, so we must report it at registration time.
-        self.fire_update(
+        self.enqueue_update(
             task_id,
             LocalTaskUpdate {
                 task_state: Some(AgentTaskState::InProgress),
@@ -114,6 +130,24 @@ impl LocalAgentTaskSyncModel {
             },
             ctx,
         );
+    }
+
+    /// Stops reporting CLI agent status changes for a completed driver run.
+    /// Task updates accepted before unregistration remain queued until delivery
+    /// finishes.
+    #[cfg_attr(target_family = "wasm", expect(dead_code))]
+    pub fn unregister_cli_session(&mut self, terminal_view_id: EntityId) {
+        if let Some(task_id) = self.cli_session_task_ids.remove(&terminal_view_id) {
+            self.update_queue.remove_task(&task_id);
+        }
+    }
+
+    fn remove_queued_update_state_for_run_id(&mut self, run_id: Option<&str>) {
+        let Some(task_id) = run_id.and_then(|run_id| run_id.parse::<AmbientAgentTaskId>().ok())
+        else {
+            return;
+        };
+        self.update_queue.remove_task(&task_id);
     }
 
     fn handle_history_event(
@@ -146,6 +180,10 @@ impl LocalAgentTaskSyncModel {
             } => {
                 self.on_local_shared_session_established(*conversation_id, *session_id, ctx);
             }
+            BlocklistAIHistoryEvent::RemoveConversation { run_id, .. }
+            | BlocklistAIHistoryEvent::DeletedConversation { run_id, .. } => {
+                self.remove_queued_update_state_for_run_id(run_id.as_deref());
+            }
             _ => {}
         }
     }
@@ -163,17 +201,17 @@ impl LocalAgentTaskSyncModel {
             } => {
                 self.on_cli_session_status_changed(*terminal_view_id, status, ctx);
             }
-            CLIAgentSessionsModelEvent::Ended {
-                terminal_view_id, ..
-            } => {
-                self.cli_session_task_ids.remove(terminal_view_id);
-            }
-            _ => {}
+            // Pane-scoped CLI agent sessions can end between preflight, the
+            // harness, and follow-ups, but the mapping belongs to the driver run.
+            CLIAgentSessionsModelEvent::Started { .. }
+            | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
+            | CLIAgentSessionsModelEvent::Ended { .. }
+            | CLIAgentSessionsModelEvent::SessionUpdated { .. } => {}
         }
     }
 
     fn on_conversation_status_updated(
-        &self,
+        &mut self,
         conversation_id: AIConversationId,
         ctx: &mut ModelContext<Self>,
     ) {
@@ -198,11 +236,11 @@ impl LocalAgentTaskSyncModel {
             return;
         };
 
-        self.fire_update(task_id, update, ctx);
+        self.enqueue_update(task_id, update, ctx);
     }
 
     fn on_local_shared_session_established(
-        &self,
+        &mut self,
         conversation_id: AIConversationId,
         session_id: SessionId,
         ctx: &mut ModelContext<Self>,
@@ -216,11 +254,11 @@ impl LocalAgentTaskSyncModel {
             return;
         };
 
-        self.fire_update(task_id, update, ctx);
+        self.enqueue_update(task_id, update, ctx);
     }
 
     fn on_cli_session_status_changed(
-        &self,
+        &mut self,
         terminal_view_id: EntityId,
         status: &CLIAgentSessionStatus,
         ctx: &mut ModelContext<Self>,
@@ -230,7 +268,7 @@ impl LocalAgentTaskSyncModel {
         };
 
         let (task_state, status_message) = map_cli_session_status(status);
-        self.fire_update(
+        self.enqueue_update(
             task_id,
             LocalTaskUpdate {
                 task_state: Some(task_state),
@@ -241,9 +279,22 @@ impl LocalAgentTaskSyncModel {
         );
     }
 
-    /// Sends an `update_agent_task` request to the server (fire-and-forget).
-    fn fire_update(
-        &self,
+    /// Enqueues a model-owned update without blocking the event producer.
+    fn enqueue_update(
+        &mut self,
+        task_id: AmbientAgentTaskId,
+        update: LocalTaskUpdate,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if let Some(update) = self.update_queue.enqueue(task_id, update) {
+            self.send_update(task_id, update, ctx);
+        }
+    }
+
+    /// Sends the active update for a task and drains its next queued update
+    /// after completion.
+    fn send_update(
+        &mut self,
         task_id: AmbientAgentTaskId,
         update: LocalTaskUpdate,
         ctx: &mut ModelContext<Self>,
@@ -257,7 +308,7 @@ impl LocalAgentTaskSyncModel {
         } = update;
         ctx.spawn(
             async move {
-                if let Err(err) = ai_client
+                let result = ai_client
                     .update_agent_task(
                         task_id,
                         task_state,
@@ -265,16 +316,21 @@ impl LocalAgentTaskSyncModel {
                         server_conversation_token.clone(),
                         status_message,
                     )
-                    .await
-                {
+                    .await;
+                if let Err(err) = &result {
                     log::warn!(
                         "LocalAgentTaskSyncModel: failed to update task {task_id} \
                          (state={task_state:?}, session_id={session_id:?}, \
                          server_conversation_token={server_conversation_token:?}): {err:#}"
                     );
                 }
+                result
             },
-            |_, _, _| {},
+            move |me, result, ctx| {
+                if let Some(update) = me.update_queue.record_result(task_id, result.is_ok()) {
+                    me.send_update(task_id, update, ctx);
+                }
+            },
         );
     }
 }
@@ -342,7 +398,13 @@ fn map_conversation_status(
 ) -> (AgentTaskState, Option<TaskStatusUpdate>) {
     match conversation.status() {
         ConversationStatus::InProgress => (AgentTaskState::InProgress, None),
+        // Report WaitingForEvents as IN_PROGRESS so the server task state
+        // matches the local view.
+        ConversationStatus::WaitingForEvents => (AgentTaskState::InProgress, None),
         ConversationStatus::Success => (AgentTaskState::Succeeded, None),
+        // Recovery pending: stay IN_PROGRESS, no message — `update_agent_task`
+        // can't clear it later, so a "reconnecting" note would linger after resume.
+        ConversationStatus::TransientError => (AgentTaskState::InProgress, None),
         ConversationStatus::Error => {
             // Extract the specific RenderableAIError from the last exchange to
             // classify ERROR vs FAILED and provide a PlatformErrorCode.
@@ -359,13 +421,10 @@ fn map_conversation_status(
                         None
                     }
                 });
-            match renderable_error {
-                Some(error) => classify_renderable_error(error),
-                None => (
-                    AgentTaskState::Error,
-                    Some(TaskStatusUpdate::message("Agent encountered an error")),
-                ),
-            }
+            task_update_for_conversation_error(
+                renderable_error,
+                conversation.status_error_message(),
+            )
         }
         ConversationStatus::Cancelled => (
             AgentTaskState::Cancelled,
@@ -376,6 +435,31 @@ fn map_conversation_status(
             Some(TaskStatusUpdate::message(format!(
                 "The agent got stuck waiting for user confirmation on the action: {blocked_action}"
             ))),
+        ),
+    }
+}
+
+/// Maps a conversation-level error to a terminal task update. In-flight recoveries
+/// surface as `TransientError`, so an `Error` status is always terminal here — the
+/// `will_attempt_resume` rendering hint is deliberately ignored.
+///
+/// When no structured exchange error is available, falls back to `status_error_message`
+/// so that the real failure reason is visible rather than the generic
+/// "Agent encountered an error" text. This covers pre-spawn failures (quota check
+/// before any stream) where the exchange is never populated.
+fn task_update_for_conversation_error(
+    error: Option<&RenderableAIError>,
+    status_error_message: Option<&str>,
+) -> (AgentTaskState, Option<TaskStatusUpdate>) {
+    match error {
+        Some(error) => classify_renderable_error(error),
+        None => (
+            AgentTaskState::Error,
+            Some(TaskStatusUpdate::message(
+                status_error_message
+                    .unwrap_or("Agent encountered an error")
+                    .to_string(),
+            )),
         ),
     }
 }
@@ -432,13 +516,36 @@ pub(crate) fn classify_renderable_error(
                 PlatformErrorCode::AuthenticationRequired,
             )),
         ),
-        RenderableAIError::Other { error_message, .. } => (
+        RenderableAIError::TransientNetworkError { .. } => (
             AgentTaskState::Error,
             Some(TaskStatusUpdate::with_error_code(
-                error_message,
+                error.to_string(),
                 PlatformErrorCode::InternalError,
             )),
         ),
+        RenderableAIError::Other {
+            error_message,
+            is_user_error,
+            ..
+        } => {
+            if *is_user_error {
+                (
+                    AgentTaskState::Failed,
+                    Some(TaskStatusUpdate::with_error_code(
+                        error_message,
+                        PlatformErrorCode::InvalidRequest,
+                    )),
+                )
+            } else {
+                (
+                    AgentTaskState::Error,
+                    Some(TaskStatusUpdate::with_error_code(
+                        error_message,
+                        PlatformErrorCode::InternalError,
+                    )),
+                )
+            }
+        }
     }
 }
 

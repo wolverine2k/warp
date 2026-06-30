@@ -4,6 +4,7 @@
 
 mod agent_mode;
 mod ai_assistant;
+mod ai_document;
 mod block_filtering;
 mod bootstrapping;
 mod code_review;
@@ -44,6 +45,7 @@ use std::time::Duration;
 
 pub use agent_mode::*;
 pub use ai_assistant::*;
+pub use ai_document::*;
 use anyhow::{anyhow, Result};
 pub use block_filtering::*;
 pub use bootstrapping::*;
@@ -161,6 +163,7 @@ use warp::terminal::block_list_viewport::{InputMode, ScrollLines, ScrollPosition
 use warp::terminal::find::TerminalFindModel;
 use warp::terminal::input::{Input, InputSuggestionsMode};
 use warp::terminal::keys_settings::KeysSettings;
+use warp::terminal::local_tty::TerminalManager as LocalTtyTerminalManager;
 use warp::terminal::model::ansi::{Handler, InitShellValue};
 use warp::terminal::model::blocks::{BlockHeightItem, BlockHeightSummary, TotalIndex};
 use warp::terminal::model::grid::grid_handler::TermMode;
@@ -2005,7 +2008,7 @@ pub fn test_add_and_close_session() -> Builder {
                                     .expect("pane at index 0 is a terminal pane")
                                     .as_ref(ctx)
                                     .as_any()
-                                    .downcast_ref::<warp::terminal::local_tty::TerminalManager>()
+                                    .downcast_ref::<LocalTtyTerminalManager<TerminalView>>()
                                     .expect("terminal pane at index 0 contains a local session")
                                     .pid()
                                     .expect("shell should be spawned")

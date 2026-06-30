@@ -62,8 +62,8 @@ use crate::ai::skills::SkillDescriptor;
 use crate::code_review::CodeReviewTelemetryEvent;
 use crate::notebooks::NotebookId;
 use crate::persistence::model::{
-    AgentConversationData, ConversationUsageMetadata, ModelTokenUsage, PersistedAutoexecuteMode,
-    ToolUsageMetadata,
+    AgentConversationData, ContextWindowSegment, ConversationUsageMetadata, ModelTokenUsage,
+    PersistedAutoexecuteMode, ToolUsageMetadata,
 };
 use crate::persistence::ModelEvent;
 use crate::server::ids::ServerId;
@@ -713,6 +713,13 @@ impl AIConversation {
         self.conversation_usage_metadata.context_window_usage
     }
 
+    /// The per-segment breakdown of the context window (e.g. system prompt,
+    /// tool definitions, conversation history). Scaled so the segments sum to
+    /// `context_window_usage`. Empty when the server did not emit segments.
+    pub fn context_window_segments(&self) -> &[ContextWindowSegment] {
+        &self.conversation_usage_metadata.context_window_segments
+    }
+
     /// Total credits spent in the conversation, including both LLM inference
     /// and platform credits.
     pub fn credits_spent(&self) -> f32 {
@@ -911,6 +918,28 @@ impl AIConversation {
     pub fn status(&self) -> &ConversationStatus {
         &self.status
     }
+
+    /// Test-only setter for driving status-dependent logic directly.
+    #[cfg(test)]
+    pub(crate) fn set_status_for_test(&mut self, status: ConversationStatus) {
+        self.status = status;
+    }
+
+    /// Test-only setter for the status error message, used to exercise
+    /// the `status_error_message` fallback in `map_conversation_status`.
+    #[cfg(test)]
+    pub(crate) fn set_status_error_message_for_test(&mut self, msg: Option<String>) {
+        self.status_error_message = msg;
+    }
+
+    /// Test-only helper: appends an exchange to the root task so status-derivation
+    /// logic (e.g. `map_conversation_status`) can be exercised end-to-end.
+    #[cfg(test)]
+    pub(crate) fn append_root_exchange_for_test(&mut self, exchange: AIAgentExchange) {
+        self.task_store
+            .modify_root_task(|root_task| root_task.append_exchange(exchange));
+    }
+
     pub fn status_error_message(&self) -> Option<&str> {
         self.status_error_message.as_deref()
     }
@@ -918,20 +947,23 @@ impl AIConversation {
     pub fn update_status(
         &mut self,
         status: ConversationStatus,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        self.update_status_with_error_message(status, None, terminal_view_id, ctx);
+        self.update_status_with_error_message(status, None, terminal_surface_id, ctx);
     }
 
     pub fn update_status_with_error_message(
         &mut self,
         status: ConversationStatus,
         error_message: Option<String>,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
-        self.status_error_message = if matches!(&status, ConversationStatus::Error) {
+        self.status_error_message = if matches!(
+            &status,
+            ConversationStatus::Error | ConversationStatus::TransientError
+        ) {
             error_message.filter(|message| !message.trim().is_empty())
         } else {
             None
@@ -941,7 +973,7 @@ impl AIConversation {
         self.status = status;
         ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationStatus {
             conversation_id: self.id,
-            terminal_view_id,
+            terminal_surface_id,
             update: ConversationStatusUpdate::Changed { prev_status },
             new_status,
         });
@@ -1473,7 +1505,7 @@ impl AIConversation {
         &mut self,
         exchange_id: AIAgentExchangeId,
         is_hidden: bool,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
         // If the status is not being modified, return.
@@ -1488,11 +1520,11 @@ impl AIConversation {
         }
 
         // If the status is being toggled, set the persisted exchange hidden status.
-        // Find the exchange and the terminal view ID for the exchange and emit an event to update
+        // Find the exchange and its terminal surface ID, then emit an event to update
         // the exchange hidden state.
         ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
             exchange_id,
-            terminal_view_id,
+            terminal_surface_id,
             conversation_id: self.id,
             is_hidden,
         });
@@ -1573,10 +1605,8 @@ impl AIConversation {
         self.task_store.latest_skills()
     }
 
-    /// Get the auto-generated title of the given conversation
-    /// (falling back to the first query if the title is empty).
     /// Get the title of the given conversation.
-    /// Priority: auto-generated task description > initial query > fallback_display_title.
+    /// Priority: task description > initial query > fallback_display_title.
     pub fn title(&self) -> Option<String> {
         self.task_store
             .root_task()
@@ -1590,7 +1620,39 @@ impl AIConversation {
             .or_else(|| self.fallback_display_title.clone())
     }
 
-    /// Set a fallback title used when no task description or initial query exists.
+    /// Updates the conversation title and persists the conversation.
+    pub(crate) fn update_conversation_title(
+        &mut self,
+        title: String,
+        ctx: &mut ModelContext<BlocklistAIHistoryModel>,
+    ) {
+        let title_for_metadata = title.clone();
+        self.task_store
+            .modify_root_task(|root_task| root_task.update_description(title));
+        if let Some(metadata) = self.server_metadata.as_mut() {
+            metadata.title = title_for_metadata;
+        }
+        self.write_updated_conversation_state(ctx);
+    }
+
+    /// Restores a previous title snapshot and persists the conversation.
+    pub(crate) fn restore_conversation_title(
+        &mut self,
+        root_task_description: String,
+        server_metadata_title: Option<String>,
+        ctx: &mut ModelContext<BlocklistAIHistoryModel>,
+    ) {
+        self.task_store
+            .modify_root_task(|root_task| root_task.update_description(root_task_description));
+        if let (Some(metadata), Some(title)) =
+            (self.server_metadata.as_mut(), server_metadata_title)
+        {
+            metadata.title = title;
+        }
+        self.write_updated_conversation_state(ctx);
+    }
+
+    /// Sets a fallback title used when no task description or initial query exists.
     pub fn set_fallback_display_title(&mut self, title: String) {
         self.fallback_display_title = Some(title);
     }
@@ -1610,13 +1672,13 @@ impl AIConversation {
     pub fn add_artifact(
         &mut self,
         artifact: Artifact,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
         self.artifacts.push(artifact.clone());
         self.write_updated_conversation_state(ctx);
         ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
-            terminal_view_id,
+            terminal_surface_id,
             conversation_id: self.id,
             artifact,
         });
@@ -1627,7 +1689,7 @@ impl AIConversation {
         &mut self,
         document_uid: AIDocumentId,
         notebook_uid: NotebookId,
-        terminal_view_id: Option<EntityId>,
+        terminal_surface_id: Option<EntityId>,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) {
         let document_uid = document_uid.to_string();
@@ -1642,9 +1704,9 @@ impl AIConversation {
                     *nb_uid = Some(notebook_uid);
                     let updated_artifact = artifact.clone();
                     self.write_updated_conversation_state(ctx);
-                    if let Some(terminal_view_id) = terminal_view_id {
+                    if let Some(terminal_surface_id) = terminal_surface_id {
                         ctx.emit(BlocklistAIHistoryEvent::UpdatedConversationArtifacts {
-                            terminal_view_id,
+                            terminal_surface_id,
                             conversation_id: self.id,
                             artifact: updated_artifact,
                         });
@@ -1659,7 +1721,7 @@ impl AIConversation {
         self.root_task_exchanges()
             .flat_map(|exchange| exchange.input.iter())
             .find_map(|input| {
-                AIAgentInput::user_query(input)
+                AIAgentInput::display_query(input)
                     .or_else(|| AIAgentInput::auto_code_diff_query(input).map(|s| s.to_string()))
                     .or_else(|| AIAgentInput::prompt_suggestion_result(input).cloned())
             })
@@ -1668,7 +1730,7 @@ impl AIConversation {
     pub fn initial_user_query(&self) -> Option<String> {
         self.root_task_exchanges()
             .flat_map(|exchange| exchange.input.iter())
-            .find_map(AIAgentInput::user_query)
+            .find_map(AIAgentInput::display_query)
     }
 
     /// Export the conversation to markdown format.
@@ -1696,7 +1758,7 @@ impl AIConversation {
     pub fn latest_user_query(&self) -> Option<String> {
         self.exchanges_reversed().find_map(|exchange| {
             exchange.input.iter().rev().find_map(|input| {
-                AIAgentInput::user_query(input)
+                AIAgentInput::display_query(input)
                     .map(|query| query.trim().to_owned())
                     .filter(|query| !query.is_empty())
             })
@@ -1767,7 +1829,7 @@ impl AIConversation {
         &mut self,
         request_input: RequestInput,
         stream_id: ResponseStreamId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
         if let Some(request_info) = self.added_exchanges_by_response.remove(&stream_id) {
@@ -1830,7 +1892,7 @@ impl AIConversation {
             ctx.emit(BlocklistAIHistoryEvent::AppendedExchange {
                 exchange_id: new_exchange_id,
                 task_id,
-                terminal_view_id,
+                terminal_surface_id,
                 conversation_id: self.id,
                 is_hidden: should_hide,
                 response_stream_id: Some(stream_id.clone()),
@@ -1843,7 +1905,7 @@ impl AIConversation {
         &mut self,
         response_stream_id: &ResponseStreamId,
         exchange: AIAgentExchange,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
         let root_task_id = self.task_store.root_task_id().clone();
@@ -1871,7 +1933,7 @@ impl AIConversation {
 
         ctx.emit(BlocklistAIHistoryEvent::ReassignedExchange {
             exchange_id,
-            terminal_view_id,
+            terminal_surface_id,
             new_task_id: root_task_id,
             new_conversation_id: self.id,
         });
@@ -1948,7 +2010,7 @@ impl AIConversation {
         &mut self,
         stream_id: &ResponseStreamId,
         init_event: warp_multi_agent_api::response_event::StreamInit,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
         let Some(new_exchanges) = self.added_exchanges_by_response.get(stream_id).cloned() else {
@@ -1961,7 +2023,7 @@ impl AIConversation {
                 .init_output(ServerOutputId::new(request_id.clone()))?;
             ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
                 exchange_id: new_exchange_info.exchange_id,
-                terminal_view_id,
+                terminal_surface_id,
                 conversation_id: self.id,
                 is_hidden: self
                     .hidden_exchanges
@@ -2037,6 +2099,12 @@ impl AIConversation {
                 .map(Into::into)
                 .unwrap_or_default();
 
+            self.conversation_usage_metadata.context_window_segments = usage_metadata
+                .context_window_segments
+                .iter()
+                .map(Into::into)
+                .collect();
+
             // A conversation can never go from summarized to un-summarized,
             // so we only update the summarized flag if it's going from false to true.
             if usage_metadata.summarized && !self.conversation_usage_metadata.was_summarized {
@@ -2049,7 +2117,7 @@ impl AIConversation {
     pub fn mark_request_completed(
         &mut self,
         stream_id: &ResponseStreamId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
         let Some(new_exchanges) = self.added_exchanges_by_response.get(stream_id).cloned() else {
@@ -2086,7 +2154,7 @@ impl AIConversation {
 
             ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
                 exchange_id,
-                terminal_view_id,
+                terminal_surface_id,
                 conversation_id: self.id,
                 is_hidden: self.is_exchange_hidden(exchange_id),
             });
@@ -2095,7 +2163,7 @@ impl AIConversation {
 
         if !has_new_actions {
             // Update conversation-level status to success if the output has no actions.
-            self.update_status(ConversationStatus::Success, terminal_view_id, ctx);
+            self.update_status(ConversationStatus::Success, terminal_surface_id, ctx);
         }
 
         Ok(())
@@ -2104,7 +2172,7 @@ impl AIConversation {
     pub fn mark_completed_after_successful_split(
         &mut self,
         stream_id: &ResponseStreamId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
         // Remove the mapping between the response stream and this conversation, as the response stream is
@@ -2137,7 +2205,7 @@ impl AIConversation {
 
                 ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
                     exchange_id,
-                    terminal_view_id,
+                    terminal_surface_id,
                     conversation_id: self.id,
                     is_hidden: self.is_exchange_hidden(exchange_id),
                 });
@@ -2146,14 +2214,14 @@ impl AIConversation {
         self.write_updated_conversation_state(ctx);
 
         // Update conversation-level status to success if the output has no actions.
-        self.update_status(ConversationStatus::Success, terminal_view_id, ctx);
+        self.update_status(ConversationStatus::Success, terminal_surface_id, ctx);
         Ok(())
     }
 
     pub fn mark_request_cancelled(
         &mut self,
         stream_id: &ResponseStreamId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         reason: CancellationReason,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
@@ -2213,7 +2281,7 @@ impl AIConversation {
             let is_hidden = self.is_exchange_hidden(exchange_id);
             ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
                 exchange_id,
-                terminal_view_id,
+                terminal_surface_id,
                 conversation_id: self.id,
                 is_hidden,
             });
@@ -2222,30 +2290,38 @@ impl AIConversation {
         self.write_updated_conversation_state(ctx);
 
         // Don't mark the conversation as Cancelled if we're just cancelling to send a follow-up
-        // on the same conversation. The conversation will be immediately set back to InProgress.
-        if !reason.is_follow_up_for_same_conversation() {
-            self.update_status(ConversationStatus::Cancelled, terminal_view_id, ctx);
+        // on the same conversation (it will be immediately set back to InProgress), or if the
+        // user manually took over the long-running command (the conversation remains in progress
+        // and will resume once the command finishes or control is handed back).
+        if !reason.should_preserve_in_progress_status() {
+            self.update_status(ConversationStatus::Cancelled, terminal_surface_id, ctx);
         }
         Ok(())
     }
 
     pub fn mark_request_cancelled_due_to_revert(
         &mut self,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
         if self.transaction.is_some() {
             self.commit_transaction();
         }
-        self.update_status(ConversationStatus::Success, terminal_view_id, ctx);
+        self.update_status(ConversationStatus::Success, terminal_surface_id, ctx);
         Ok(())
     }
 
+    /// Marks the in-flight request's exchanges as finished with `error`.
+    ///
+    /// `recovery_pending` moves the conversation to the non-terminal `TransientError`
+    /// status instead of `Error`, so consumers don't treat it as dead while an
+    /// automatic recovery is in flight.
     pub fn mark_request_completed_with_error(
         &mut self,
         stream_id: &ResponseStreamId,
         error: RenderableAIError,
-        terminal_view_id: EntityId,
+        recovery_pending: bool,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> Result<(), UpdateConversationError> {
         let Some(added_exchanges) = self.added_exchanges_by_response.get(stream_id).cloned() else {
@@ -2268,19 +2344,12 @@ impl AIConversation {
             model_id: None,
         };
 
-        let will_attempt_to_resume = matches!(
-            &error,
-            RenderableAIError::Other {
-                will_attempt_resume: true,
-                ..
-            }
-        );
         send_telemetry_from_ctx!(
             crate::TelemetryEvent::AgentModeError {
                 identifiers,
                 error: error.to_string(),
                 is_user_visible: true,
-                will_attempt_to_resume,
+                will_attempt_to_resume: recovery_pending,
             },
             ctx
         );
@@ -2331,17 +2400,22 @@ impl AIConversation {
             let is_hidden = self.is_exchange_hidden(exchange_id);
             ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
                 exchange_id,
-                terminal_view_id,
+                terminal_surface_id,
                 conversation_id: self.id,
                 is_hidden,
             });
         }
 
         self.write_updated_conversation_state(ctx);
+        let status = if recovery_pending {
+            ConversationStatus::TransientError
+        } else {
+            ConversationStatus::Error
+        };
         self.update_status_with_error_message(
-            ConversationStatus::Error,
+            status,
             Some(error.to_string()),
-            terminal_view_id,
+            terminal_surface_id,
             ctx,
         );
         Ok(())
@@ -2431,7 +2505,7 @@ impl AIConversation {
     pub fn apply_client_action(
         &mut self,
         response_stream_id: &ResponseStreamId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         action: warp_multi_agent_api::client_action::Action,
         skill_path_origin: &SkillPathOrigin,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
@@ -2487,7 +2561,7 @@ impl AIConversation {
                         ctx.emit(BlocklistAIHistoryEvent::UpgradedTask {
                             optimistic_id: optimistic_id.clone(),
                             server_id: server_subtask.id().clone(),
-                            terminal_view_id,
+                            terminal_surface_id,
                         });
 
                         for new_exchange in self
@@ -2582,7 +2656,7 @@ impl AIConversation {
                         self.task_store.insert(subtask);
                         ctx.emit(BlocklistAIHistoryEvent::CreatedSubtask {
                             conversation_id: self.id,
-                            terminal_view_id,
+                            terminal_surface_id,
                             task_id: task_id.clone(),
                         });
 
@@ -2591,7 +2665,7 @@ impl AIConversation {
                             ctx.emit(BlocklistAIHistoryEvent::AppendedExchange {
                                 exchange_id,
                                 task_id: task_id.clone(),
-                                terminal_view_id,
+                                terminal_surface_id,
                                 conversation_id: self.id,
                                 is_hidden,
                                 response_stream_id: Some(response_stream_id.clone()),
@@ -2612,7 +2686,7 @@ impl AIConversation {
                         ctx.emit(BlocklistAIHistoryEvent::UpgradedTask {
                             optimistic_id: old_id,
                             server_id: root_task.id().clone(),
-                            terminal_view_id,
+                            terminal_surface_id,
                         });
 
                         for AddedExchange {
@@ -2651,7 +2725,7 @@ impl AIConversation {
                                     todos_op.clone(),
                                 );
                                 ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList {
-                                    terminal_view_id,
+                                    terminal_surface_id,
                                 });
                             }
                         }
@@ -2688,7 +2762,7 @@ impl AIConversation {
                                         ) => {
                                             self.add_artifact(
                                                 Artifact::from(pr.clone()),
-                                                terminal_view_id,
+                                                terminal_surface_id,
                                                 ctx,
                                             );
                                         }
@@ -2697,7 +2771,7 @@ impl AIConversation {
                                         ) => {
                                             self.add_artifact(
                                                 Artifact::from(screenshot.clone()),
-                                                terminal_view_id,
+                                                terminal_surface_id,
                                                 ctx,
                                             );
                                         }
@@ -2706,7 +2780,7 @@ impl AIConversation {
                                         ) => {
                                             self.add_artifact(
                                                 Artifact::from(file.clone()),
-                                                terminal_view_id,
+                                                terminal_surface_id,
                                                 ctx,
                                             );
                                         }
@@ -2722,7 +2796,7 @@ impl AIConversation {
                                         else {
                                             continue;
                                         };
-                                        self.add_artifact(artifact, terminal_view_id, ctx);
+                                        self.add_artifact(artifact, terminal_surface_id, ctx);
                                     }
                                 }
                                 None => {}
@@ -2756,9 +2830,13 @@ impl AIConversation {
                             }
                         }
                         Some(api::message::Message::ToolCallResult(tcr)) => {
-                            // Clean up temp directories from conversation search subagents.
-                            if let Some(api::message::tool_call_result::Result::Subagent(_)) =
-                                &tcr.result
+                            // Shared-session viewers do not own temp directories created by
+                            // conversation search subagents.
+                            if !self.is_viewing_shared_session
+                                && matches!(
+                                    &tcr.result,
+                                    Some(api::message::tool_call_result::Result::Subagent(_))
+                                )
                             {
                                 cleanup_conversation_search_temp_dir(
                                     &tcr.tool_call_id,
@@ -2768,6 +2846,10 @@ impl AIConversation {
                             }
                         }
                         Some(api::message::Message::ModelUsed(model_used)) => {
+                            let prompt_cache_expires_at = model_used
+                                .prompt_cache_expires_at
+                                .as_ref()
+                                .map(|ts| proto_timestamp_to_local_datetime(ts.seconds, ts.nanos));
                             let exchange_id = self
                                 .added_exchanges_by_response
                                 .get(response_stream_id)
@@ -2781,6 +2863,7 @@ impl AIConversation {
                                     model_id: model_used.model_id.clone().into(),
                                     display_name: model_used.model_display_name.clone(),
                                     is_fallback: model_used.is_fallback,
+                                    prompt_cache_expires_at,
                                 });
                             }
                         }
@@ -2865,14 +2948,14 @@ impl AIConversation {
                         response_stream_id: Some(response_stream_id.clone()),
                         exchange_id,
                         task_id: task_id.clone(),
-                        terminal_view_id,
+                        terminal_surface_id,
                         conversation_id: self.id,
                         is_hidden,
                     });
                 }
                 ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
                     exchange_id,
-                    terminal_view_id,
+                    terminal_surface_id,
                     conversation_id: self.id,
                     is_hidden: self.is_exchange_hidden(exchange_id),
                 });
@@ -2958,11 +3041,13 @@ impl AIConversation {
                 // Update todo list if needed
                 if let Some(todos_op) = todos_op {
                     update_todo_list_from_todo_op(&mut self.todo_lists, todos_op);
-                    ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList { terminal_view_id });
+                    ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList {
+                        terminal_surface_id,
+                    });
                 }
                 ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
                     exchange_id,
-                    terminal_view_id,
+                    terminal_surface_id,
                     conversation_id: self.id,
                     is_hidden: self.is_exchange_hidden(exchange_id),
                 });
@@ -3005,11 +3090,13 @@ impl AIConversation {
                 // Update todo list if needed
                 if let Some(todos_op) = todos_op {
                     update_todo_list_from_todo_op(&mut self.todo_lists, todos_op);
-                    ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList { terminal_view_id });
+                    ctx.emit(BlocklistAIHistoryEvent::UpdatedTodoList {
+                        terminal_surface_id,
+                    });
                 }
                 ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
                     exchange_id,
-                    terminal_view_id,
+                    terminal_surface_id,
                     conversation_id: self.id,
                     is_hidden: self.is_exchange_hidden(exchange_id),
                 });
@@ -3025,7 +3112,7 @@ impl AIConversation {
                 exchange_to_update.update_suggestions(suggestions);
                 ctx.emit(BlocklistAIHistoryEvent::UpdatedStreamingExchange {
                     exchange_id,
-                    terminal_view_id,
+                    terminal_surface_id,
                     conversation_id: self.id,
                     is_hidden: self.is_exchange_hidden(exchange_id),
                 });
@@ -3128,7 +3215,7 @@ impl AIConversation {
     pub fn create_optimistic_cli_subagent_task(
         &mut self,
         block_id: &BlockId,
-        terminal_view_id: EntityId,
+        terminal_surface_id: EntityId,
         ctx: &mut ModelContext<BlocklistAIHistoryModel>,
     ) -> TaskId {
         if self.optimistic_cli_subagent_subtask_id.take().is_some() {
@@ -3143,7 +3230,7 @@ impl AIConversation {
         self.task_store.insert(new_task);
         ctx.emit(BlocklistAIHistoryEvent::CreatedSubtask {
             conversation_id: self.id,
-            terminal_view_id,
+            terminal_surface_id,
             task_id: new_task_id.clone(),
         });
         new_task_id
@@ -4316,11 +4403,20 @@ pub enum ConversationStatus {
     /// The last turn of the agent completed with error.
     Error,
 
+    /// The last turn failed transiently and an automatic recovery (retry or resume)
+    /// is pending. Non-terminal: returns to `InProgress` when the recovery request
+    /// sends, or falls to `Error` if recovery is exhausted.
+    TransientError,
+
     /// The last turn of the agent was cancelled by the user.
     Cancelled,
 
     /// The last turn of the agent resulted in an action whose execution is blocked by the user.
     Blocked { blocked_action: String },
+
+    /// Agent yielded via wait_for_events and is listening for inbound
+    /// input. Quiescent but not terminal.
+    WaitingForEvents,
 }
 
 impl std::fmt::Display for ConversationStatus {
@@ -4329,8 +4425,10 @@ impl std::fmt::Display for ConversationStatus {
             ConversationStatus::InProgress => write!(f, "In progress"),
             ConversationStatus::Success => write!(f, "Done"),
             ConversationStatus::Error => write!(f, "Error"),
+            ConversationStatus::TransientError => write!(f, "Reconnecting"),
             ConversationStatus::Cancelled => write!(f, "Cancelled"),
             ConversationStatus::Blocked { .. } => write!(f, "Blocked"),
+            ConversationStatus::WaitingForEvents => write!(f, "Waiting"),
         }
     }
 }
@@ -4342,7 +4440,10 @@ impl ConversationStatus {
             ConversationStatus::Success => succeeded_icon(appearance),
             ConversationStatus::Blocked { .. } => yellow_stop_icon(appearance),
             ConversationStatus::Error => failed_icon(appearance),
+            // Recovery pending: keep the in-progress treatment rather than an error one.
+            ConversationStatus::TransientError => in_progress_icon(appearance),
             ConversationStatus::Cancelled => gray_stop_icon(appearance),
+            ConversationStatus::WaitingForEvents => in_progress_icon(appearance),
         }
     }
 
@@ -4373,6 +4474,13 @@ impl ConversationStatus {
                     StatusColorStyle::Cloud => theme.ansi_bg_red(),
                 },
             ),
+            ConversationStatus::TransientError => (
+                Icon::ClockLoader,
+                match color_style {
+                    StatusColorStyle::Standard => theme.ansi_fg_yellow(),
+                    StatusColorStyle::Cloud => theme.ansi_bg_yellow(),
+                },
+            ),
             ConversationStatus::Cancelled => (Icon::StopFilled, internal_colors::neutral_5(theme)),
             ConversationStatus::Blocked { .. } => (
                 Icon::StopFilled,
@@ -4381,11 +4489,23 @@ impl ConversationStatus {
                     StatusColorStyle::Cloud => theme.ansi_bg_yellow(),
                 },
             ),
+            ConversationStatus::WaitingForEvents => (
+                Icon::ClockLoader,
+                match color_style {
+                    StatusColorStyle::Standard => theme.ansi_fg_magenta(),
+                    StatusColorStyle::Cloud => theme.ansi_bg_magenta(),
+                },
+            ),
         }
     }
 
     pub fn is_in_progress(&self) -> bool {
         matches!(self, ConversationStatus::InProgress)
+    }
+
+    /// True while a transient failure is being automatically recovered.
+    pub fn is_transient_error(&self) -> bool {
+        matches!(self, ConversationStatus::TransientError)
     }
 
     pub fn is_blocked(&self) -> bool {
@@ -4396,11 +4516,18 @@ impl ConversationStatus {
         matches!(self, ConversationStatus::Cancelled)
     }
 
+    /// True iff the run is finished and cannot resume on its own.
     pub fn is_done(&self) -> bool {
         matches!(
             self,
             ConversationStatus::Success | ConversationStatus::Error | ConversationStatus::Cancelled
         )
+    }
+
+    /// True iff the agent has yielded via `wait_for_events` and is listening
+    /// for inbound input.
+    pub fn is_waiting_for_events(&self) -> bool {
+        matches!(self, ConversationStatus::WaitingForEvents)
     }
 
     pub fn is_error(&self) -> bool {

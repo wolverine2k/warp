@@ -247,6 +247,7 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             token_usage: models,
             tool_usage_metadata: tool,
             context_window_usage,
+            context_window_segments,
             ..
         } = (&gql.usage_metadata).into();
         ConversationUsageInfo {
@@ -256,6 +257,7 @@ impl From<&gql_usage::ConversationUsage> for ConversationUsageInfo {
             tool_calls: tool.total_tool_calls(),
             models,
             context_window_usage,
+            context_window_segments,
             files_changed: tool.apply_file_diff_stats.files_changed,
             lines_added: tool.apply_file_diff_stats.lines_added,
             lines_removed: tool.apply_file_diff_stats.lines_removed,
@@ -748,12 +750,10 @@ impl From<warp_graphql::workspace::LlmModelHost> for crate::ai::llms::LLMModelHo
             GqlLlmModelHost::DirectApi => Self::DirectApi,
             GqlLlmModelHost::AwsBedrock => Self::AwsBedrock,
             GqlLlmModelHost::CustomEndpoint => Self::CustomEndpoint,
+            GqlLlmModelHost::GeminiEnterprise => Self::GeminiEnterprise,
             GqlLlmModelHost::Other(value) => {
-                report_error!(
-                    anyhow!(
-                        "Unknown LlmModelHost '{value}'. Make sure to update client GraphQL types!"
-                    ),
-                    warp_core::errors::ReportErrorLogMode::OncePerRun
+                log::warn!(
+                    "Unknown LlmModelHost '{value}'. Make sure to update client GraphQL types!"
                 );
                 Self::Unknown
             }
@@ -769,6 +769,8 @@ impl From<warp_graphql::workspace::LlmHostSettings> for super::workspace::LlmHos
                 .enablement_setting
                 .map(Into::into)
                 .unwrap_or_default(),
+            gcp_audience: gql_settings.gcp_audience,
+            gcp_sa_email: gql_settings.gcp_sa_email,
         }
     }
 }

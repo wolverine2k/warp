@@ -6,15 +6,16 @@ use parking_lot::FairMutex;
 use pathfinder_geometry::vector::Vector2F;
 use session_sharing_protocol::common::{
     ActivePrompt, AddGuestsResponse, CLIAgentSessionState, CommandExecutionFailureReason,
-    LinkAccessLevelUpdateResponse, RemoveGuestResponse, SelectedAgentModel, SessionId,
-    TeamAccessLevelUpdateResponse, UniversalDeveloperInputContextUpdate,
-    UpdatePendingUserRoleResponse,
+    LinkAccessLevelUpdateResponse, LongRunningCommandAgentInteraction, RemoveGuestResponse,
+    SelectedAgentModel, SessionId, TeamAccessLevelUpdateResponse,
+    UniversalDeveloperInputContextUpdate, UpdatePendingUserRoleResponse,
 };
 use session_sharing_protocol::sharer::SessionSourceType;
 use session_sharing_protocol::viewer::SessionEndedReason;
 use settings::Setting as _;
 use warpui::{
-    AppContext, ModelContext, ModelHandle, SingletonEntity, ViewHandle, WeakViewHandle, WindowId,
+    AppContext, ModelContext, ModelHandle, SingletonEntity, ViewContext, ViewHandle,
+    WeakViewHandle, WindowId,
 };
 
 use super::event_loop::SharedSessionInitialLoadMode;
@@ -109,6 +110,10 @@ pub struct TerminalManager {
     /// transitive `ancestor_run_id` filter.
     enable_orchestration_polling: bool,
 }
+pub struct TerminalManagerInit {
+    pub(crate) manager: TerminalManager,
+    pub(crate) view: ViewHandle<TerminalView>,
+}
 
 impl TerminalManager {
     fn send_selected_conversation_update_for_viewer_to_current_network(
@@ -170,6 +175,28 @@ impl TerminalManager {
         });
     }
 
+    /// Handles a failed viewer command request and clears any queued-command dispatch state.
+    fn handle_command_execution_request_failed(
+        terminal_view: &mut TerminalView,
+        reason: &CommandExecutionFailureReason,
+        ctx: &mut ViewContext<TerminalView>,
+    ) {
+        let reason_string = command_execution_failure_reason_string(reason);
+        terminal_view.show_persistent_toast(reason_string, ToastFlavor::Error, ctx);
+        terminal_view.clear_queued_command_in_flight(ctx);
+
+        // On command execution request, the input is frozen and set to a loading state.
+        // We only need to restore the input for errors that aren't the result of a new buffer.
+        if matches!(
+            reason,
+            CommandExecutionFailureReason::InsufficientPermissions
+        ) {
+            terminal_view.input().update(ctx, |input, ctx| {
+                input.on_execute_command_for_shared_session_participant_failure(ctx);
+            })
+        }
+    }
+
     /// Internal constructor that creates all the models for viewing a shared session. This does not rely on the shared session existing yet.
     fn new_internal(
         resources: TerminalViewResources,
@@ -178,7 +205,7 @@ impl TerminalManager {
         enable_orchestration_polling: bool,
         is_cloud_mode: bool,
         ctx: &mut AppContext,
-    ) -> Self {
+    ) -> TerminalManagerInit {
         // Create all the necessary channels we need for communication.
         let (wakeups_tx, wakeups_rx) = async_channel::unbounded();
         let (events_tx, events_rx) = async_channel::unbounded();
@@ -278,7 +305,8 @@ impl TerminalManager {
             );
         });
 
-        Self {
+        let terminal_view = view.clone();
+        let manager = Self {
             model,
             _model_events: model_events,
             view,
@@ -293,6 +321,10 @@ impl TerminalManager {
             outbound_handlers_registered: false,
             orchestration_viewer_model: Arc::new(FairMutex::new(None)),
             enable_orchestration_polling,
+        };
+        TerminalManagerInit {
+            manager,
+            view: terminal_view,
         }
     }
 
@@ -305,6 +337,7 @@ impl TerminalManager {
     /// orchestration parent agent, so the snapshot/restore path can emit a
     /// `LeafContents::AmbientAgent` rather than falling through to an empty
     /// terminal pane.
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(
         session_id: SessionId,
         resources: TerminalViewResources,
@@ -313,8 +346,11 @@ impl TerminalManager {
         enable_orchestration_polling: bool,
         is_cloud_mode: bool,
         ctx: &mut AppContext,
-    ) -> Self {
-        let mut terminal_manager = Self::new_internal(
+    ) -> TerminalManagerInit {
+        let TerminalManagerInit {
+            manager: mut terminal_manager,
+            view: terminal_view,
+        } = Self::new_internal(
             resources,
             initial_size,
             window_id,
@@ -329,7 +365,10 @@ impl TerminalManager {
             ctx,
         );
 
-        terminal_manager
+        TerminalManagerInit {
+            manager: terminal_manager,
+            view: terminal_view,
+        }
     }
 
     /// Create a new terminal manager for eventually viewing a cloud mode
@@ -341,7 +380,7 @@ impl TerminalManager {
         window_id: WindowId,
         enable_orchestration_polling: bool,
         ctx: &mut AppContext,
-    ) -> Self {
+    ) -> TerminalManagerInit {
         Self::new_internal(
             resources,
             initial_size,
@@ -466,6 +505,7 @@ impl TerminalManager {
                 self.model.clone(),
                 write_to_pty_events_rx,
                 initial_load_mode,
+                self.viewer_remote_update_guard.clone(),
                 ctx,
             )
         });
@@ -628,9 +668,9 @@ impl TerminalManager {
                     #[allow(clippy::single_match)]
                     match event {
                         BlocklistAIHistoryEvent::UpdatedAutoexecuteOverride {
-                            terminal_view_id,
+                            terminal_surface_id,
                         } => {
-                            if *terminal_view_id != view_id_for_auto {
+                            if *terminal_surface_id != view_id_for_auto {
                                 return;
                             }
 
@@ -772,6 +812,9 @@ impl TerminalManager {
                             ctx,
                         );
                     }
+                    // TODO(roland): we do not apply universal_developer_input_context.long_running_command_agent_interaction here
+                    // because the block it should apply to won't exist yet, until the `OrderedTerminalEvents` that come after are processed.
+                    // We should try to apply it after catching up to the latest state.
                 }
                 let Some(view) = weak_view_handle.upgrade(ctx) else {
                     return;
@@ -785,7 +828,7 @@ impl TerminalManager {
                 if matches!(&source.source_type, SessionSourceType::AmbientAgent { .. }) {
                     let terminal_view_id = view.id();
                     BlocklistAIHistoryModel::handle(ctx).update(ctx, |history, _ctx| {
-                        history.mark_terminal_view_as_ambient_agent_session_view(terminal_view_id);
+                        history.mark_terminal_surface_as_ambient_agent_session_view(terminal_view_id);
                     });
 
                     // Register this ambient session as active for conversation list tracking.
@@ -984,13 +1027,24 @@ impl TerminalManager {
                     .active_block()
                     .is_active_and_long_running()
                 {
-                    if let Some(interaction_state) =
+                    if let Some(interaction) =
+                        context_update.long_running_command_agent_interaction.clone()
+                    {
+                        if let Some(view) = weak_view_handle.upgrade(ctx) {
+                            view.update(ctx, |view, ctx| {
+                                view.apply_long_running_command_agent_interaction(interaction, ctx);
+                            });
+                        }
+                    } else if let Some(interaction_state) =
                         context_update.long_running_command_agent_interaction_state
                     {
+                        // TODO (roland): this is kept around for backward compatibility. Remove after 6 weeks (around Jul 23, 2026) 
+                        // once clients have updated to use context_update.long_running_command_agent_interaction above.
                         if let Some(view) = weak_view_handle.upgrade(ctx) {
                             view.update(ctx, |view, ctx| {
                                 view.apply_long_running_command_agent_interaction_state(
                                     interaction_state,
+                                    None,
                                     ctx,
                                 );
                             });
@@ -1134,19 +1188,7 @@ impl TerminalManager {
                     return;
                 };
                 view.update(ctx, |terminal_view, ctx| {
-                    let reason_string = command_execution_failure_reason_string(reason);
-                    terminal_view.show_persistent_toast(reason_string, ToastFlavor::Error, ctx);
-
-                    // On command execution request, the input is frozen and set to a loading state.
-                    // We only need to restore the input for errors that aren't the result of a new buffer.
-                    if matches!(
-                        reason,
-                        CommandExecutionFailureReason::InsufficientPermissions
-                    ) {
-                        terminal_view.input().update(ctx, |input, ctx| {
-                            input.on_execute_command_for_shared_session_participant_failure(ctx);
-                        })
-                    }
+                    Self::handle_command_execution_request_failed(terminal_view, reason, ctx);
                 });
             }
             NetworkEvent::WriteToPtyRequestFailed { reason } => {
@@ -1163,8 +1205,13 @@ impl TerminalManager {
                     return;
                 };
                 view.update(ctx, |terminal_view, ctx| {
+                    // Restore frozen visual state. optimistically_show_empty=true creates
+                    // a display-only empty ephemeral for immediate UX feedback. Unlike a
+                    // regular ephemeral, this one discards its content on materialization
+                    // instead of restoring it to the regular buffer, so no spurious CRDT
+                    // delete ops are generated for concurrent edits by other viewers.
                     terminal_view.input().update(ctx, |input, ctx| {
-                        input.unfreeze_and_clear_agent_input(ctx);
+                        input.unfreeze_agent_input(true, ctx);
                     });
                 });
             }
@@ -1176,8 +1223,11 @@ impl TerminalManager {
                     let reason_string = agent_prompt_failure_reason_string(reason);
                     terminal_view.show_persistent_toast(reason_string, ToastFlavor::Error, ctx);
 
+                    // Restore frozen visual state without clearing the buffer — the prompt
+                    // failed so no CRDT delete ops were sent, and the user should be able
+                    // to retry with their original text.
                     terminal_view.input().update(ctx, |input, ctx| {
-                        input.unfreeze_and_clear_agent_input(ctx);
+                        input.unfreeze_agent_input(false, ctx);
                     });
                 });
             }
@@ -1527,13 +1577,24 @@ impl TerminalManager {
                     network.send_report_terminal_size(*window_size);
                 });
             }
-            TerminalViewEvent::LongRunningCommandAgentInteractionStateChanged { state } => {
+            TerminalViewEvent::LongRunningCommandAgentInteractionStateChanged {
+                state,
+                block_id,
+            } => {
+                let interaction =
+                    block_id
+                        .clone()
+                        .map(|block_id| LongRunningCommandAgentInteraction {
+                            block_id: block_id.into(),
+                            state: *state,
+                        });
                 Self::send_input_context_update_to_current_network(
                     &viewer_remote_update_guard,
                     &model,
                     &current_network,
                     UniversalDeveloperInputContextUpdate {
                         long_running_command_agent_interaction_state: Some(*state),
+                        long_running_command_agent_interaction: interaction,
                         ..Default::default()
                     },
                     ctx,
@@ -1654,7 +1715,7 @@ impl TerminalManager {
         // When a shared session ends for a viewer, cancel any in-progress conversations.
         BlocklistAIHistoryModel::handle(ctx).update(ctx, |history_model, ctx| {
             history_model
-                .all_live_conversations_for_terminal_view(terminal_view_id)
+                .all_live_conversations_for_terminal_surface(terminal_view_id)
                 .filter(|conversation| conversation.status().is_in_progress())
                 .map(|conversation| conversation.id())
                 .collect::<Vec<_>>()
@@ -1739,10 +1800,6 @@ impl TerminalManager {
 impl crate::terminal::TerminalManager for TerminalManager {
     fn model(&self) -> Arc<FairMutex<TerminalModel>> {
         self.model.clone()
-    }
-
-    fn view(&self) -> ViewHandle<TerminalView> {
-        self.view.clone()
     }
 
     fn on_view_detached(&self, detach_type: DetachType, app: &mut AppContext) {
