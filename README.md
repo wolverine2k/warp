@@ -29,18 +29,25 @@
 
 <h1></h1>
 
-## About
+# Local-Warp
 
-[Warp](https://www.warp.dev) is an agentic development environment, born out of the terminal. Use Warp's built-in coding agent, or bring your own CLI agent (Claude Code, Codex, Gemini CLI, and others).
+Local-Warp is a fork of Warp/OpenWarp focused on provider autonomy for agentic development. It keeps Warp's terminal-native coding workflow, then adds **Bring Your Own Key (BYOK)** and **Bring Your Own Provider (BYOP)** so you can choose where inference runs and which credentials are used.
 
-## Bring Your Own Provider (BYOP)
+Use Local-Warp with the built-in agent surfaces, external CLI agents such as Claude Code, Codex, Gemini CLI, and OpenCode, or your own OpenAI-compatible, Anthropic, Gemini, DeepSeek, and Ollama endpoints.
+
+## BYOK and BYOP
 
 <a href="https://www.naresh.se">
     <img width="1024" alt="Multi-Local LLM Support" src="images/multiLocal.jpg" />
 </a>
 &nbsp;
 
-Warp's Agent Mode supports **custom AI providers** alongside the built-in Warp cloud models. Configure multiple providers simultaneously and pick a specific provider and model per conversation — all from **Settings > AI > Custom AI Providers**.
+Local-Warp's Agent Mode supports **custom AI providers** alongside upstream Warp cloud models. Configure multiple providers simultaneously and pick a specific provider and model per conversation — all from **Settings > AI > Custom AI Providers**.
+
+- **BYOK: Bring Your Own Key** — use your own provider API keys instead of a shared managed credential. Keys are stored locally in the OS keychain and are resolved at dispatch time.
+- **BYOP: Bring Your Own Provider** — point Local-Warp at your own provider endpoint, including localhost models, self-hosted OpenAI-compatible servers, vendor APIs, and remote inference gateways.
+- **Provider-level routing** — model IDs use the `byop:<provider_id>:<model_id>` format so each conversation can target a precise provider/model pair without changing cloud-model behavior.
+- **Local and external-agent orchestration** — opted-in BYOP models can be exposed to Local Native orchestration and supported local child harnesses, with Remote BYOP forwarding prepared through managed-secret metadata.
 
 ### Supported Providers
 
@@ -56,7 +63,9 @@ Any OpenAI-compatible endpoint (LM Studio, vLLM, text-generation-inference, Loca
 
 ### Key Features
 
+- **Local-Warp branding** — package metadata, desktop entries, and the About page identify the app as Local-Warp while preserving stable channel IDs where they are needed for app data and update compatibility.
 - **Multiple providers at once** — run Ollama locally, Anthropic in the cloud, and a remote OpenAI-compatible box side by side. Each conversation picks its own provider and model.
+- **Private key handling** — provider API keys live in the OS keychain; docs, logs, telemetry, and crash reports should never include raw keys or bearer tokens.
 - **One-click model discovery** — the **Fetch models** button queries each provider's upstream model-list endpoint; the **Browse catalog** modal pre-fills metadata from the open-source [models.dev](https://models.dev) catalog.
 - **Multimodal attachments** — attach images, PDFs, and audio files to agent turns via the file-picker button, drag-and-drop, or paste-from-clipboard. Each adapter translates attachments into the provider's native wire format. Per-model capability chips (image / pdf / audio) in settings control which modalities are allowed.
 - **Dedicated compaction model** — route conversation summarization to a separate, cheaper model (e.g., Haiku or a local Ollama model) while the primary agent model handles reasoning and tool use. Configure via the **Summarization model** dropdown in the BYOP settings section.
@@ -65,11 +74,18 @@ Any OpenAI-compatible endpoint (LM Studio, vLLM, text-generation-inference, Loca
 
 ### Configuration
 
-Providers are stored in `settings.toml` under `agents.warp_agent.providers`. API keys are stored in the OS keychain. See [`specs/multi-local-llm/design.md`](https://github.com/wolverine2k/warp/blob/multi-local-llm/specs/multi-local-llm/design.md) for the full architecture and [`specs/multi-local-llm/README.md`](https://github.com/wolverine2k/warp/blob/multi-local-llm/specs/multi-local-llm/README.md) for per-phase implementation status.
+Providers are stored in `settings.toml` under `agents.warp_agent.providers`. API keys are stored in the OS keychain via `AgentProviderSecrets`. See [`specs/multi-local-llm/design.md`](specs/multi-local-llm/design.md) for the full architecture and [`specs/multi-local-llm/README.md`](specs/multi-local-llm/README.md) for per-phase implementation status.
 
 ## Installation
 
-You can [download Warp](https://www.warp.dev/download) and [read our docs](https://docs.warp.dev/) for platform-specific instructions.
+Local-Warp can be built from this branch with the standard repository scripts:
+
+```bash
+./script/bootstrap
+./script/run
+```
+
+Packaged local/OSS builds use the visible **Local-Warp** name. Upstream Warp installation docs remain useful for platform prerequisites, but Local-Warp-specific BYOK/BYOP behavior is documented in [`specs/multi-local-llm/`](specs/multi-local-llm/).
 
 ## Warp Contributions Overview Dashboard
 
@@ -87,13 +103,13 @@ Oz for OSS is our partner program for bringing the same agentic open-source mana
 
 ## Licensing
 
-Warp's UI framework (the `warpui_core` and `warpui` crates) are licensed under the [MIT license](LICENSE-MIT).
+Local-Warp inherits Warp's licensing model. Warp's UI framework (the `warpui_core` and `warpui` crates) are licensed under the [MIT license](LICENSE-MIT).
 
 The rest of the code in this repository is licensed under the [AGPL v3](LICENSE-AGPL).
 
 ## Open Source & Contributing
 
-Warp's client codebase is open source and lives in this repository. We welcome community contributions and have designed a lightweight workflow to help new contributors get started. For the full contribution flow, read our [CONTRIBUTING.md](CONTRIBUTING.md) guide.
+Local-Warp's client codebase is open source and lives in this repository. We welcome community contributions, especially improvements to BYOK/BYOP provider support, native adapters, local orchestration, packaging, and security hardening around provider secrets. For the full contribution flow, read our [CONTRIBUTING.md](CONTRIBUTING.md) guide.
 
 > [!TIP]
 > **Chat with contributors and the Warp team** in the [`#oss-contributors`](https://warpcommunity.slack.com/archives/C0B0LM8N4DB) Slack channel — a good place for ad-hoc questions, design discussion, and pairing with maintainers. New here? [Join the Warp Slack community](https://go.warp.dev/join-preview) first, then jump into `#oss-contributors`.
@@ -106,11 +122,11 @@ Once filed, a Warp maintainer reviews the issue and may apply a readiness label:
 
 ### Building the Repo Locally
 
-To build and run Warp from source:
+To build and run Local-Warp from source:
 
 ```bash
 ./script/bootstrap   # platform-specific setup
-./script/run         # build and run Warp
+./script/run         # build and run Local-Warp
 ./script/presubmit   # fmt, clippy, and tests
 ```
 
@@ -123,13 +139,13 @@ Interested in joining the team? See our [open roles](https://www.warp.dev/career
 ## Support and Questions
 
 1. See our [docs](https://docs.warp.dev/) for a comprehensive guide to Warp's features.
-2. Join our [Slack Community](https://go.warp.dev/join-preview) to connect with other users and get help from the Warp team — contributors hang out in [`#oss-contributors`](https://warpcommunity.slack.com/archives/C0B0LM8N4DB).
-3. Try our [Preview build](https://www.warp.dev/download-preview) to test the latest experimental features.
+2. Read [`specs/multi-local-llm/`](specs/multi-local-llm/) for Local-Warp BYOK/BYOP implementation notes and current smoke-test gates.
+3. Join the [Warp Slack Community](https://go.warp.dev/join-preview) to connect with other users and contributors — contributors hang out in [`#oss-contributors`](https://warpcommunity.slack.com/archives/C0B0LM8N4DB).
 4. Mention **@oss-maintainers** on any issue to escalate to the team — for example, if you encounter problems with the automated agents.
 
 ## Code of Conduct
 
-We ask everyone to be respectful and empathetic. Warp follows the [Code of Conduct](CODE_OF_CONDUCT.md). To report violations, email warp-coc at warp.dev.
+We ask everyone to be respectful and empathetic. Local-Warp follows the [Code of Conduct](CODE_OF_CONDUCT.md). To report violations, email warp-coc at warp.dev.
 
 ## Open Source Dependencies
 

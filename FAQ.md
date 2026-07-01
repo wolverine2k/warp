@@ -1,6 +1,24 @@
 # Frequently Asked Questions
 
-This FAQ covers the questions we hear most often about contributing to the Warp client, working with agents in this repository, and how this repo fits into Warp the product. For the full contribution flow, see [CONTRIBUTING.md](CONTRIBUTING.md). For engineering details — build setup, code style, testing — see [AGENTS.md](AGENTS.md).
+This FAQ covers the questions we hear most often about Local-Warp, contributing to the Warp client fork, working with agents in this repository, and how this repo fits into Warp/OpenWarp. For the full contribution flow, see [CONTRIBUTING.md](CONTRIBUTING.md). For engineering details — build setup, code style, testing — see [AGENTS.md](AGENTS.md).
+
+## Local-Warp, BYOK, and BYOP
+
+### What is Local-Warp?
+
+Local-Warp is a fork of Warp/OpenWarp focused on provider autonomy. It keeps the terminal-native agent workflow and adds **Bring Your Own Key (BYOK)** and **Bring Your Own Provider (BYOP)** so users can route agent traffic through their own credentials and endpoints.
+
+### What does BYOK mean in Local-Warp?
+
+**Bring Your Own Key** means provider credentials are supplied by the user instead of by a shared managed provider account. Local-Warp stores provider API keys in the OS keychain through `AgentProviderSecrets` and resolves them only when dispatching a request.
+
+### What does BYOP mean in Local-Warp?
+
+**Bring Your Own Provider** means the user can configure one or more provider endpoints under `agents.warp_agent.providers`, including local Ollama/LM Studio/vLLM-style servers, OpenAI-compatible gateways, Anthropic, Gemini, DeepSeek, and other supported API types. Conversations and orchestration runs can target a concrete `byop:<provider_id>:<model_id>` model.
+
+### Are provider keys sent to Warp?
+
+Interactive BYOK/BYOP dispatch uses the configured provider endpoint and the user's key for that provider. Remote-worker BYOP support forwards provider metadata and managed-secret names so workers can resolve credentials without embedding raw keys in request payloads. Raw API keys should never be committed, logged, pasted into issues, or included in screenshots.
 
 ## Contributing
 
@@ -26,11 +44,11 @@ Anyone can pick up a labeled issue. Mention **@oss-maintainers** on an issue if 
 
 Specs make scope, behavior, and architecture reviewable on their own, before someone writes code that may need to be thrown away. Each spec PR adds a `product.md` (desired behavior) and a `tech.md` (implementation plan) under `specs/GH<issue-number>/`. See [Opening a Spec PR](CONTRIBUTING.md#opening-a-spec-pr) for what each document should contain.
 
-### How do I build and run Warp from source?
+### How do I build and run Local-Warp from source?
 
 ```bash
 ./script/bootstrap   # platform-specific setup
-cargo run            # build and run Warp
+./script/run         # build and run Local-Warp
 ./script/presubmit   # fmt, clippy, and tests
 ```
 
@@ -60,13 +78,9 @@ Contributors with several merged PRs may be invited to become collaborators. The
 
 Yes. Use whatever you like — Warp's built-in agent, Claude Code, Codex, Gemini CLI, Cursor, others, or no agent at all. The repo ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`AGENTS.md`](AGENTS.md)) that any harness supporting these formats can pick up.
 
-### Can I use Codex or Claude models with my existing subscriptions in Warp, or submit a PR to add that?
+### Can I use Codex, Claude, Gemini, or other provider credentials in Local-Warp?
 
-Not today. Warp's built-in agent harness runs server-side and isn't open in this repo today.
-
-That said, we plan to support [ACP (agent client protocol)](https://agentclientprotocol.com/) in Warp, so you could connect other models or subscriptions directly and get a native Warp experience for your coding agent of choice.
-
-[This is tracked on our roadmap](https://github.com/warpdotdev/warp/issues/9233), and we will update the community as we explore this.
+Yes, where the provider or harness exposes a supported API path. BYOK/BYOP settings let you add Anthropic, OpenAI-compatible, Gemini, DeepSeek, and Ollama-style providers, and Local-Warp can route supported local child harnesses at selected BYOP endpoints. See [`specs/multi-local-llm/README.md`](specs/multi-local-llm/README.md) for the current support matrix and smoke-test gates.
 
 ### How can I get Oz to implement an issue for me?
 
@@ -98,9 +112,9 @@ The Warp **client** is open source: the app and most crates are licensed under [
 
 **Not in this repo:** the server, the Drive backend, hosted authentication, and Oz orchestration.
 
-### Can I run Warp without signing in or using Warp's cloud?
+### Can I run Local-Warp without signing in or using Warp's cloud?
 
-Some functionality works fully locally; other features (Drive sync, hosted-model agents, team features) require Warp's backend. We're working to make the locally-runnable surface clearer over time, including more explicit controls in onboarding.
+Some functionality works fully locally, and BYOK/BYOP is designed to expand the locally-runnable agent surface by routing inference to user-configured providers. Other features, including Drive sync, hosted-model agents, team features, and some Remote-worker paths, still depend on Warp backend services.
 
 ### Will the server or Oz ever be open-sourced?
 
@@ -118,17 +132,17 @@ For the **UI framework crates** (`warpui_core`, `warpui`), we chose [MIT](LICENS
 
 In short: AGPL where we want derivatives to stay open, MIT where we want maximum reuse.
 
-### Can I use Warp at my company under AGPL?
+### Can I use Local-Warp at my company under AGPL?
 
-Yes. Using Warp as your terminal or development environment doesn't trigger AGPL's network or distribution obligations. AGPL applies if you modify the client *and* distribute or host that modified version for others.
+Yes. Using Local-Warp as your terminal or development environment doesn't trigger AGPL's network or distribution obligations. AGPL applies if you modify the client *and* distribute or host that modified version for others.
 
 ### Why is there a CLA?
 
 The CLA grants Warp the rights it needs to redistribute contributions under this project's licenses (AGPL and MIT) and to address future licensing and compliance needs. It does not change the license of code contributed to this repo.
 
-### Can someone fork Warp?
+### Can someone fork Local-Warp or Warp?
 
-Yes — that's what AGPL is for. The license prevents fully-proprietary relaunches; open derivatives are welcome.
+Yes — that's what AGPL is for. Local-Warp itself is a fork focused on BYOK/BYOP. The license prevents fully-proprietary relaunches; open derivatives are welcome.
 
 ## Help and security
 

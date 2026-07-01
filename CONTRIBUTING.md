@@ -1,6 +1,6 @@
-# Contributing to Warp
+# Contributing to Local-Warp
 
-Thanks for helping improve Warp! This guide explains how to open issues, propose changes, and get your work reviewed.
+Thanks for helping improve Local-Warp, a Warp/OpenWarp fork focused on **Bring Your Own Key (BYOK)** and **Bring Your Own Provider (BYOP)** agent workflows. This guide explains how to open issues, propose changes, and get your work reviewed.
 
 > [!TIP]
 > **Chat with us in Slack.** Connect with other contributors and the Warp team in the [`#oss-contributors`](https://warpcommunity.slack.com/archives/C0B0LM8N4DB) channel — a good place for ad-hoc questions, design discussion, and pairing with maintainers as you work through an issue or PR. New here? [Join the Warp Slack community](https://go.warp.dev/join-preview) first, then hop into `#oss-contributors`.
@@ -13,10 +13,11 @@ Thanks for helping improve Warp! This guide explains how to open issues, propose
 - Specs are the place where technical and design discussion on larger issues happen.
 - Oz automatically triages incoming issues and reviews open PRs.
 - Implementation PRs must include proof of manual testing.
+- BYOK/BYOP changes must keep provider secrets out of logs, tests, screenshots, and docs; update [`README.md`](README.md), [`FAQ.md`](FAQ.md), and [`specs/multi-local-llm/`](specs/multi-local-llm/) when behavior or support matrices change.
 
-## How Contributing to Warp Works
+## How Contributing to Local-Warp Works
 
-Warp's contribution model is shaped by [Oz](https://oz.warp.dev), an agent that automates parts of triage, spec writing, implementation, and review. Compared with a typical open-source repository, a few things work differently here:
+Local-Warp inherits Warp's contribution model, shaped by [Oz](https://oz.warp.dev), an agent that automates parts of triage, spec writing, implementation, and review. Compared with a typical open-source repository, a few things work differently here:
 
 - **Issues are the starting point for everything.** Discussion, scoping, and design happen on the issue before any PR is opened.
 - **Feature requests differ from bug fixes:**
@@ -71,6 +72,7 @@ A good bug report includes:
 - Expected vs. actual behavior.
 - Warp version and OS (see `Settings → About`).
 - Logs, screenshots, or screen recordings when relevant.
+- For BYOK/BYOP bugs, include the provider API type, model id, execution mode, and whether the endpoint is local or remote. Do not include raw API keys, bearer tokens, or private endpoint credentials.
 
 Once an issue is triaged as an actionable bug (by Oz's triage agent or a maintainer), it may be labeled **`ready-to-implement`** so you can pick it up and open a code PR.
 
@@ -138,7 +140,9 @@ Then, **ensure your PR passes code review and includes relevant tests** per our 
 
 ## Using a Coding Agent
 
-You can use **any coding agent** to implement a contribution — for example, Warp's built-in agent, Claude Code, Codex, Gemini CLI, or others — or no agent at all. This repository ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`AGENTS.md`](AGENTS.md)) that any harness supporting these formats can pick up.
+You can use **any coding agent** to implement a contribution — for example, Local-Warp's built-in agent surfaces, Claude Code, Codex, Gemini CLI, OpenCode, or others — or no agent at all. This repository ships agent-readable context (skills under [`.agents/skills/`](.agents/skills/), specs under [`specs/`](specs/), and [`AGENTS.md`](AGENTS.md)) that any harness supporting these formats can pick up.
+
+Local-Warp's BYOK/BYOP path is also a useful test target for agent contributors: configure a provider in **Settings > AI > Custom AI Providers**, choose a BYOP model, and verify that traffic goes to the intended endpoint with the intended key source.
 
 If you'd rather have an **Oz cloud agent** implement a ready issue for you, mention **@oss-maintainers** on the issue to request it. Approved requests run **for free** on complimentary Oz credits — you don't need to set up your own Oz account or pay for compute.
 
@@ -169,7 +173,7 @@ See [README.md](README.md) and [AGENTS.md](AGENTS.md) for the full engineering g
 
 ```bash
 ./script/bootstrap   # platform-specific setup
-cargo run            # build and run Warp
+./script/run         # build and run Local-Warp
 ./script/presubmit   # fmt, clippy, and tests
 ```
 

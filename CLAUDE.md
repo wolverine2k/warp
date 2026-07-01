@@ -2,13 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+This checkout builds **Local-Warp**, a Warp/OpenWarp fork focused on **Bring Your Own Key (BYOK)** and **Bring Your Own Provider (BYOP)** support. When touching agent settings, provider routing, local harness launches, packaging, or docs, preserve the Local-Warp branding and keep provider secrets out of logs, fixtures, and generated artifacts.
+
 [`WARP.md`](WARP.md) is the canonical engineering guide for this repo — read it for full coding-style, testing, feature-flag, and platform-specific guidance. This file calls out the parts most likely to bite Claude and the workflows specific to this codebase.
 
 ## Commands
 
 Build / run:
 - `./script/bootstrap` — platform-specific setup (run once per machine)
-- `cargo run` — build and run the Warp client locally
+- `./script/run` — build and run the Local-Warp client locally
+- `cargo run` — build and run the Warp/Local-Warp client directly through Cargo
 - `cargo run --features with_local_server` — run against a local `warp-server` (override with `SERVER_ROOT_URL` / `WS_SERVER_URL`)
 - `cargo bundle --bin warp` — produce a bundled app
 
@@ -29,7 +32,7 @@ Presubmit (must pass before pushing a PR):
 
 Cargo workspace under `crates/` (~60 crates) plus the main binary in `app/`.
 
-- `app/` — main Warp binary. Houses terminal emulation, AI/Agent Mode, Drive (cloud sync), auth, settings, workspace/session management. `app/src/persistence/schema.rs` is the Diesel/SQLite schema; migrations live alongside.
+- `app/` — main Local-Warp/Warp binary. Houses terminal emulation, AI/Agent Mode, BYOK/BYOP settings, Drive (cloud sync), auth, workspace/session management. `app/src/persistence/schema.rs` is the Diesel/SQLite schema; migrations live alongside.
 - `crates/warpui/` and `crates/warpui_core/` — custom Entity-Component-Handle UI framework (the *only* MIT-licensed code; everything else is AGPL-3.0). Global `App` owns entities; views hold `ViewHandle<T>` references; `AppContext` provides temporary access during render/events. Elements describe layout (Flutter-inspired).
 - `crates/warp_core/` — core utilities, platform abstractions, and `FeatureFlag` plumbing (`crates/warp_core/src/features.rs`).
 - `crates/warp_features/` — feature-flag definitions consumed by client code.
@@ -53,6 +56,7 @@ These are easy mistakes that aren't obvious from the code:
 - **Unused params get deleted, not `_`-prefixed.** Update the signature and all call sites.
 - **Don't churn unrelated comments.** Only modify a comment if the logic it describes changed.
 - **Unit-test layout.** Place tests in a sibling `${filename}_tests.rs` (or `mod_test.rs`) and re-include via `#[cfg(test)] #[path = "filename_tests.rs"] mod tests;` at the bottom of the module — not inline `#[cfg(test)] mod tests { … }` blocks.
+- **BYOK/BYOP secrets.** Never log raw provider API keys, managed-secret values, bearer tokens, or private endpoint credentials. Use fake keys in tests and redact screenshots/docs.
 
 ## Contribution flow
 

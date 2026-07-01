@@ -1,8 +1,9 @@
 use warpui::assets::asset_cache::AssetSource;
 use warpui::elements::{
     Align, CacheOption, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Image,
-    MainAxisAlignment, MouseStateHandle, ParentElement, Wrap,
+    MainAxisAlignment, MouseStateHandle, ParentElement, Text, Wrap,
 };
+use warpui::fonts::{Properties, Weight};
 use warpui::ui_components::components::UiComponent;
 use warpui::{AppContext, Entity, View, ViewContext, ViewHandle};
 
@@ -15,6 +16,29 @@ use crate::appearance::Appearance;
 use crate::channel::ChannelState;
 use crate::themes::theme::ColorScheme;
 use crate::workspace::WorkspaceAction;
+
+const LOCAL_WARP_PRODUCT_NAME: &str = "Local-Warp";
+const ABOUT_VERSION_PLACEHOLDER: &str = "v#.##.###";
+const LOCAL_WARP_TAGLINE: &str = "A fork of warp/openwarp supporting Bring Your Own Key (BYOK) and Bring Your Own Provider (BYOP).";
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct AboutBranding<'a> {
+    product_name: &'static str,
+    tagline: &'static str,
+    version: &'a str,
+    copyright: &'static str,
+}
+
+impl<'a> AboutBranding<'a> {
+    fn for_version(version: Option<&'a str>) -> Self {
+        Self {
+            product_name: LOCAL_WARP_PRODUCT_NAME,
+            tagline: LOCAL_WARP_TAGLINE,
+            version: version.unwrap_or(ABOUT_VERSION_PLACEHOLDER),
+            copyright: "Copyright 2026 Local-Warp",
+        }
+    }
+}
 
 pub struct AboutPageView {
     page: PageType<Self>,
@@ -64,12 +88,47 @@ impl SettingsWidget for AboutPageWidget {
         let ui_builder = appearance.ui_builder();
 
         let image_path = if theme.inferred_color_scheme() == ColorScheme::LightOnDark {
-            "bundled/svg/warp-logo-with-light-title.svg"
+            "bundled/svg/warp-logo-light.svg"
         } else {
-            "bundled/svg/warp-logo-with-dark-title.svg"
+            "bundled/svg/warp-logo-dark.svg"
         };
 
-        let version = ChannelState::app_version().unwrap_or("v#.##.###");
+        let branding = AboutBranding::for_version(ChannelState::app_version());
+        let version = branding.version;
+
+        let brand_mark = ConstrainedBox::new(
+            Image::new(
+                AssetSource::Bundled { path: image_path },
+                CacheOption::BySize,
+            )
+            .finish(),
+        )
+        .with_max_height(92.)
+        .with_max_width(118.)
+        .finish();
+
+        let brand_name = Text::new_inline(branding.product_name, appearance.ui_font_family(), 64.)
+            .with_color(theme.active_ui_text_color().into())
+            .with_style(Properties::default().weight(Weight::Normal))
+            .finish();
+
+        let brand_row = Wrap::row()
+            .with_main_axis_alignment(MainAxisAlignment::Center)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_children([
+                brand_mark,
+                Container::new(brand_name).with_padding_left(24.).finish(),
+            ]);
+
+        let tagline_text = ConstrainedBox::new(
+            ui_builder
+                .span(branding.tagline)
+                .with_soft_wrap()
+                .build()
+                .finish(),
+        )
+        .with_max_width(620.)
+        .finish();
 
         let version_text = ui_builder
             .span(version.to_string())
@@ -100,22 +159,12 @@ impl SettingsWidget for AboutPageWidget {
         Align::new(
             Flex::column()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_child(
-                    ConstrainedBox::new(
-                        Image::new(
-                            AssetSource::Bundled { path: image_path },
-                            CacheOption::BySize,
-                        )
-                        .finish(),
-                    )
-                    .with_max_height(100.)
-                    .with_max_width(350.)
-                    .finish(),
-                )
+                .with_child(brand_row.finish())
+                .with_child(Container::new(tagline_text).with_margin_top(16.).finish())
                 .with_child(version_row.finish())
                 .with_child(
                     ui_builder
-                        .span("Copyright 2026 Warp")
+                        .span(branding.copyright)
                         .build()
                         .with_margin_top(16.)
                         .finish(),
@@ -153,3 +202,7 @@ impl From<ViewHandle<AboutPageView>> for SettingsPageViewHandle {
         SettingsPageViewHandle::About(view_handle)
     }
 }
+
+#[cfg(test)]
+#[path = "about_page_tests.rs"]
+mod tests;

@@ -508,7 +508,7 @@ BEGIN
             VALUE "LegalCopyright",   "© 2025, Denver Technologies, Inc\0"
             VALUE "InternalName",     "\0"
             VALUE "OriginalFilename", "\0"
-            VALUE "ProductName",      "Warp\0"
+            VALUE "ProductName",      "{app_name}\0"
             VALUE "ProductVersion",   "{version}\0"
         END
     END

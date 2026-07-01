@@ -7,6 +7,10 @@ publishing an uncurated commit dump.
 
 ## Unreleased
 
+#### Improvements
+- Updated public README, FAQ, contributor, security, and Local-Warp BYOK/BYOP spec docs to highlight Bring Your Own Key and Bring Your Own Provider support.
+- Clarified Local-Warp branding expectations while preserving channel IDs and data-path identifiers where they remain compatibility surfaces.
+
 ## v1.4.0
 #### New Features
 - Added Gemini CLI as a supported local child harness, including BYOP API key and endpoint injection through Gemini `settings.json`.

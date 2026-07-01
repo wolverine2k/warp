@@ -1,8 +1,14 @@
-# Multi-Local-LLM (BYOP) — Specs Index
+# Local-Warp BYOK/BYOP — Specs Index
 
-Bring Your Own Provider for the Agent Mode dispatcher. This directory holds the design, phased implementation plans, and operational gating notes for the **multi-local-LLM** initiative on the `multi-local-llm` branch.
+Bring Your Own Key and Bring Your Own Provider for Local-Warp's Agent Mode dispatcher. This directory holds the design, phased implementation plans, and operational gating notes for the **multi-local-LLM** initiative on the `multi-local-llm` branch.
 
-The work extends the single-local-provider scaffolding from `nmehta/local-llm-provider` (the `local:`-prefixed picker entry, OpenAI-compatible wire code, and compaction pipeline) into a `Vec<AgentProvider>` that lets a user configure **multiple endpoints simultaneously** (Ollama + LM Studio + a remote OpenAI-compatible host + …) and pick a specific *provider × model* per conversation. Cloud-Warp models continue to dispatch through the warp.dev path; the override is scoped to BYOP-flagged LLMIds (`byop:<provider_id>:<model_id>`) so picking a cloud model is unaffected.
+Local-Warp is a fork of Warp/OpenWarp focused on provider autonomy. The BYOK/BYOP work extends the single-local-provider scaffolding from `nmehta/local-llm-provider` (the `local:`-prefixed picker entry, OpenAI-compatible wire code, and compaction pipeline) into a `Vec<AgentProvider>` that lets a user configure **multiple endpoints simultaneously** (Ollama + LM Studio + a remote OpenAI-compatible host + vendor APIs) and pick a specific *provider × model* per conversation. Cloud-Warp models continue to dispatch through the warp.dev path; the override is scoped to BYOP-flagged LLMIds (`byop:<provider_id>:<model_id>`) so picking a cloud model is unaffected.
+
+## Terminology
+
+- **BYOK (Bring Your Own Key):** users provide provider API keys. Local-Warp stores those keys in the OS keychain through `AgentProviderSecrets`; raw keys must not appear in settings files, logs, telemetry, screenshots, or documentation.
+- **BYOP (Bring Your Own Provider):** users configure provider endpoints and API types. Supported paths include local model servers, OpenAI-compatible gateways, Anthropic, Gemini, DeepSeek, and Ollama-native adapters.
+- **Local-Warp branding:** user-facing app metadata should say Local-Warp. Channel IDs, bundle identifiers, desktop IDs, and legacy data paths may retain `WarpLocal` / `WarpOss` where they are identity surfaces rather than branding.
 
 ## Status
 
@@ -186,6 +192,8 @@ Each gets its own design + plan when started:
 ## Operational notes
 
 - The legacy `LocalLlmProvider` feature flag continues to gate the entire feature; renaming it is intentionally not part of any phase to avoid churn in flag rollout configs.
+- BYOK/BYOP secrets must stay in `AgentProviderSecrets` or managed-secret references. Do not add raw keys to TOML examples, fixture payloads, screenshots, logs, crash reports, or release notes.
+- Visible product copy should use Local-Warp when describing the fork. Use Warp/OpenWarp only when referring to upstream behavior, compatibility, or historical branch lineage.
 - The `agents.warp_agent.migration.legacy_local_provider_migrated` setting marker prevents re-running migration on subsequent launches. After Phase 1b-4 it stays as `#[allow(dead_code)]` for telemetry/forensics.
 - Tag [`v0.1.0`](https://github.com/wolverine2k/warp/releases/tag/v0.1.0) marks the end of Phase 1b-3 (post-dispatch-scoping fix); tag `v0.2.0` will mark the end of Phase 1b-4 cleanup.
 

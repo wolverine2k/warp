@@ -4,8 +4,9 @@ Version=1.0
 
 Type=Application
 
-Name=WarpLocal
+Name=Local-Warp
 GenericName=TerminalEmulator
+Comment=A fork of warp/openwarp supporting Bring Your Own Key (BYOK) and Bring Your Own Provider (BYOP).
 
 Exec=warp-terminal-local %U
 StartupWMClass=dev.warp.WarpLocal

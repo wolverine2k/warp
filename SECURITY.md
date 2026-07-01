@@ -1,6 +1,15 @@
 # Security Policy
 
-We take security seriously at Warp and appreciate the efforts of security researchers who help keep our users safe.
+We take security seriously at Local-Warp and appreciate the efforts of security researchers who help keep users safe.
+
+## BYOK/BYOP Secret Handling
+
+Local-Warp's BYOK/BYOP features let users provide their own API keys and provider endpoints. Treat these as sensitive:
+
+- Do not paste raw provider API keys, bearer tokens, managed-secret values, or private endpoint credentials into GitHub issues, PRs, logs, screenshots, or documentation.
+- Provider API keys are expected to live in the OS keychain through `AgentProviderSecrets`, not in tracked files.
+- Test fixtures should use fake keys and local mock endpoints.
+- Security reports involving provider-key leakage, incorrect endpoint routing, or Remote BYOP credential forwarding should be reported privately through the channels below.
 
 ## Reporting a Vulnerability
 

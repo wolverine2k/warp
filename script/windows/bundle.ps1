@@ -83,15 +83,16 @@ $BUNDLE_ID = "dev.warp.$app_name"
 
 # Update parameters based on the target release channel.
 #
-# APP_NAME here must match the value used in Rust as the
-# application name; see app/src/channel.rs.
+# APP_ID_NAME must match the Rust application name used for channel identity.
+# APP_NAME is the visible installer/resource name.
 #
 # WARP_BIN is the name of the binary produced by cargo;
 # BINARY_NAME is the desired name of the binary in the final package.
 if ("$CHANNEL" -eq 'local') {
     $WARP_BIN = 'warp'
     $BINARY_NAME = 'warp.exe'
-    $APP_NAME = 'WarpLocal'
+    $APP_ID_NAME = 'WarpLocal'
+    $APP_NAME = 'Local-Warp'
 } elseif ("$CHANNEL" -eq 'dev') {
     $WARP_BIN = 'dev'
     $BINARY_NAME = 'dev.exe'
@@ -109,17 +110,19 @@ if ("$CHANNEL" -eq 'local') {
 } elseif ("$CHANNEL" -eq 'oss') {
     $WARP_BIN = 'warp-oss'
     $BINARY_NAME = 'warp-oss.exe'
-    $APP_NAME = 'WarpOss'
+    $APP_ID_NAME = 'WarpOss'
+    $APP_NAME = 'Local-Warp'
     # The OSS channel does not ship Sentry, so drop the crash_reporting feature
     # (which would otherwise pull in the Sentry SDK as a dependency).
     $FEATURES = 'release_bundle,gui'
 }
+$APP_ID_NAME = if ($APP_ID_NAME) { $APP_ID_NAME } else { $APP_NAME }
 
 # All channels ship the v3 classifier and v2 heuristic.
 $FEATURES = "$FEATURES,nld_classifier_v3,nld_heuristic_v2"
 
 $BINARY_PATH = "$CARGO_TARGET_OUTPUT_DIR\$BINARY_NAME"
-$BUNDLE_ID = "dev.warp.$APP_NAME"
+$BUNDLE_ID = "dev.warp.$APP_ID_NAME"
 $INSTALLER_OUTPUT_DIR = "$WINDOWS_INSTALLER_DIR\Output"
 $INSTALLER_NAME = "$($APP_NAME)$($FILE_ENDING)"
 $INSTALLER_PATH = "$($INSTALLER_OUTPUT_DIR)\$($INSTALLER_NAME).exe"
@@ -139,19 +142,19 @@ if ($DEBUG_BUILD) {
 if ($CHECK_ONLY) {
     cargo check -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" --target $PLATFORM_TARGET
     if (-Not $?) {
-        Write-Error "Failed to verify Warp $WARP_BIN compilation with profile $CARGO_PROFILE"
+        Write-Error "Failed to verify $APP_NAME $WARP_BIN compilation with profile $CARGO_PROFILE"
         exit 1
     }
     exit 0
 }
 
 if (-Not $SKIP_BUILD_BINARY) {
-    Write-Output "Building Warp for channel $CHANNEL and bundle id $BUNDLE_ID"
+    Write-Output "Building $APP_NAME for channel $CHANNEL and bundle id $BUNDLE_ID"
     $env:CARGO_BIN_NAME = $CHANNEL
     $env:WARP_APP_NAME = $APP_NAME
     cargo build -p warp --profile "$CARGO_PROFILE" --bin "$WARP_BIN" --features "$FEATURES" --target $PLATFORM_TARGET
     if (-Not $?) {
-        Write-Error "Failed to build Warp $WARP_BIN binary with profile $CARGO_PROFILE"
+        Write-Error "Failed to build $APP_NAME $WARP_BIN binary with profile $CARGO_PROFILE"
         exit 1
     }
 
@@ -186,13 +189,14 @@ if (-Not $?) {
     exit 1
 }
 
-Write-Output 'Building Warp installer'
+Write-Output "Building $APP_NAME installer"
 $ISCC_ARGS = @(
     "$WINDOWS_INSTALLER_DIR\windows-installer.iss",
     "/DReleaseChannel=$CHANNEL",
     "/DMyAppExeName=$BINARY_NAME",
     "/DTargetProfileDir=$CARGO_TARGET_OUTPUT_DIR",
     "/DMyAppName=$APP_NAME",
+    "/DAppIdentityName=$APP_ID_NAME",
     "/DMyAppVersion=$env:GIT_RELEASE_TAG",
     "/DArch=$ARCH",
     "/DOutputName=$INSTALLER_NAME"

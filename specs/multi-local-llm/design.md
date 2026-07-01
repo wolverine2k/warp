@@ -1,4 +1,4 @@
-# Multi-Local-LLM Provider Support — Design
+# Local-Warp BYOK/BYOP Provider Support — Design
 
 **Status:** ✅ **Phase 1 complete** (tagged `v0.1.0`, 2026-05-08). Phases 1a / 1b-1 / 1b-2 / 1b-3 shipped end-to-end; Phase 1b-4 cleanup is drafted and queued. Phases 2 / 3 / 4 (provider-adapter trait, native non-OpenAI adapters, polish) remain future work — each gets its own design + plan when started.
 **Author:** nmehta
@@ -8,7 +8,15 @@
 
 ## Goal
 
-Allow a Warp user to configure **multiple local-LLM providers** simultaneously (e.g. Ollama on localhost:11434, LM Studio on localhost:1234, a remote OpenAI-compatible box, plus eventually an Anthropic key, a Gemini key, a DeepSeek key) and pick a specific *provider × model* per conversation. The single-provider scaffolding already on `nmehta/local-llm-provider` (config struct, OpenAI-compatible wire code, compaction, multi-turn agent loop) is preserved and extended; existing user configs auto-migrate intact.
+Allow a Local-Warp user to configure **multiple local or remote LLM providers** simultaneously (e.g. Ollama on localhost:11434, LM Studio on localhost:1234, a remote OpenAI-compatible box, plus Anthropic, Gemini, and DeepSeek keys) and pick a specific *provider × model* per conversation. The single-provider scaffolding already on `nmehta/local-llm-provider` (config struct, OpenAI-compatible wire code, compaction, multi-turn agent loop) is preserved and extended; existing user configs auto-migrate intact.
+
+## Product Positioning
+
+Local-Warp is a fork of Warp/OpenWarp that foregrounds provider autonomy:
+
+- **BYOK (Bring Your Own Key):** users supply their own provider API keys, stored in the OS keychain and resolved only for dispatch.
+- **BYOP (Bring Your Own Provider):** users supply the provider endpoint, API type, and model list, allowing local model servers, self-hosted gateways, and vendor APIs to coexist.
+- **Compatibility-first branding:** user-visible surfaces should say Local-Warp, while bundle IDs, desktop IDs, keychain names, and data paths may keep existing Warp-derived identifiers where changing them would migrate or orphan user state.
 
 ## Non-goals
 
