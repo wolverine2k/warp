@@ -15,10 +15,16 @@ concurrency:
   group: package-tag-${{ github.ref_name }}
   cancel-in-progress: false
 
+# Optional repository variables for prewarmed release runners:
+# - WARP_RELEASE_{LINUX,MACOS,WINDOWS}_RUNNER overrides the hosted runner label.
+# - WARP_RELEASE_{LINUX,MACOS,WINDOWS}_SELF_HOSTED=true disables hosted-only setup.
+# - WARP_RELEASE_SKIP_TOOL_INSTALL=true skips dependency/tool installation when
+#   the selected runner image already provides the release toolchain.
+
 jobs:
   resolve:
     name: Resolve tag inputs
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.WARP_RELEASE_LINUX_RUNNER || 'ubuntu-latest' }}
     outputs:
       tag: ${{ steps.resolve.outputs.tag }}
       artifact_tag: ${{ steps.resolve.outputs.artifact_tag }}
@@ -61,7 +67,7 @@ jobs:
 
   ensure_release:
     name: Ensure GitHub release exists
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.WARP_RELEASE_LINUX_RUNNER || 'ubuntu-latest' }}
     needs: resolve
     steps:
       - name: Checkout tag
@@ -92,10 +98,88 @@ jobs:
           generate_release_notes: false
           token: ${{ secrets.GITHUB_TOKEN }}
 
+  prepare_release_resources:
+    name: Prepare release resources
+    runs-on: ${{ vars.WARP_RELEASE_LINUX_RUNNER || 'ubuntu-latest' }}
+    needs: [resolve, ensure_release]
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+
+      - name: Prepare environment
+        uses: ./.github/actions/prepare_environment
+        with:
+          target_os: linux
+          cache_key: release-resources-linux
+          is_self_hosted: ${{ vars.WARP_RELEASE_LINUX_SELF_HOSTED == 'true' }}
+          install_release_deps: true
+          enable_sccache: true
+          skip_tool_install: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL == 'true' }}
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      - name: Validate preinstalled release tools
+        if: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for tool in cargo cargo-about protoc; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              missing+=("$tool")
+            fi
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing preinstalled release tool: %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
+
+      - name: Build common and Windows release resources
+        shell: bash
+        env:
+          CHANNEL: ${{ needs.resolve.outputs.channel }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          RESOURCES_ROOT: ${{ runner.temp }}/release-resources
+          SETTINGS_SCHEMA_CACHE: ${{ runner.temp }}/settings_schema.json
+        run: |
+          set -euo pipefail
+
+          common_dir="$RESOURCES_ROOT/common"
+          windows_dir="$RESOURCES_ROOT/windows"
+          archive_dir="$RESOURCES_ROOT/archives"
+
+          GIT_RELEASE_TAG="$RELEASE_TAG" \
+            script/prepare_bundled_resources "$common_dir" "$CHANNEL" release-lto
+
+          GIT_RELEASE_TAG="$RELEASE_TAG" \
+          INCLUDE_WINDOWS_LICENSES=1 \
+            script/prepare_bundled_resources "$windows_dir" "$CHANNEL" release-lto
+
+          mkdir -p "$archive_dir"
+          tar -C "$common_dir" -czf "$archive_dir/common.tar.gz" .
+          tar -C "$windows_dir" -czf "$archive_dir/windows.tar.gz" .
+
+      - name: Upload common release resources
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-resources-common-${{ needs.resolve.outputs.artifact_tag }}
+          path: ${{ runner.temp }}/release-resources/archives/common.tar.gz
+          if-no-files-found: error
+
+      - name: Upload Windows release resources
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-resources-windows-${{ needs.resolve.outputs.artifact_tag }}
+          path: ${{ runner.temp }}/release-resources/archives/windows.tar.gz
+          if-no-files-found: error
+
   package_linux:
     name: Package Linux
-    runs-on: ubuntu-latest
-    needs: [resolve, ensure_release]
+    runs-on: ${{ vars.WARP_RELEASE_LINUX_RUNNER || 'ubuntu-latest' }}
+    needs: [resolve, ensure_release, prepare_release_resources]
     timeout-minutes: 120
     env:
       APPIMAGE_EXTRACT_AND_RUN: "1"
@@ -110,16 +194,66 @@ jobs:
         uses: ./.github/actions/prepare_environment
         with:
           target_os: linux
-          is_self_hosted: false
-          install_release_deps: true
+          is_self_hosted: ${{ vars.WARP_RELEASE_LINUX_SELF_HOSTED == 'true' }}
+          install_release_deps: false
+          enable_sccache: true
+          skip_tool_install: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL == 'true' }}
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
 
-      - name: Install Linux packaging tools
+      - name: Download common release resources
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: release-resources-common-${{ needs.resolve.outputs.artifact_tag }}
+          path: ${{ runner.temp }}/release-resource-archive
+
+      - name: Extract common release resources
         shell: bash
         run: |
-          sudo apt-get update -y
-          sudo apt-get install -y fakeroot rpm
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/prepared-bundled-resources"
+          mkdir -p "$RUNNER_TEMP/prepared-bundled-resources"
+          tar -xzf "$RUNNER_TEMP/release-resource-archive/common.tar.gz" -C "$RUNNER_TEMP/prepared-bundled-resources"
+
+      - name: Install Linux packaging tools
+        if: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL != 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          missing_packages=()
+          if ! command -v fakeroot >/dev/null 2>&1; then
+            missing_packages+=(fakeroot)
+          fi
+          if ! command -v rpmbuild >/dev/null 2>&1 || \
+             ! command -v rpm >/dev/null 2>&1 || \
+             ! command -v rpmsign >/dev/null 2>&1; then
+            missing_packages+=(rpm)
+          fi
+
+          if (( ${#missing_packages[@]} > 0 )); then
+            sudo apt-get update -y
+            sudo apt-get install -y "${missing_packages[@]}"
+          fi
+
           script/linux/install_linuxdeploy
+
+      - name: Validate preinstalled Linux packaging tools
+        if: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for tool in dpkg-deb fakeroot linuxdeploy rpm rpmbuild rpmsign; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              missing+=("$tool")
+            fi
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing preinstalled Linux packaging tool: %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
 
       - name: Build Linux packages
         id: bundle
@@ -127,6 +261,7 @@ jobs:
         env:
           CHANNEL: ${{ needs.resolve.outputs.channel }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          PREPARED_BUNDLED_RESOURCES_DIR: ${{ runner.temp }}/prepared-bundled-resources
         run: |
           script/bundle \
             --channel "$CHANNEL" \
@@ -150,8 +285,8 @@ jobs:
 
   package_macos:
     name: Package macOS
-    runs-on: macos-latest
-    needs: [resolve, ensure_release]
+    runs-on: ${{ vars.WARP_RELEASE_MACOS_RUNNER || 'macos-latest' }}
+    needs: [resolve, ensure_release, prepare_release_resources]
     timeout-minutes: 120
     steps:
       - name: Checkout tag
@@ -163,17 +298,56 @@ jobs:
         uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
-          is_self_hosted: false
-          install_release_deps: true
+          is_self_hosted: ${{ vars.WARP_RELEASE_MACOS_SELF_HOSTED == 'true' }}
+          install_release_deps: false
+          enable_sccache: true
+          skip_tool_install: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL == 'true' }}
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
 
+      - name: Download common release resources
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: release-resources-common-${{ needs.resolve.outputs.artifact_tag }}
+          path: ${{ runner.temp }}/release-resource-archive
+
+      - name: Extract common release resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/prepared-bundled-resources"
+          mkdir -p "$RUNNER_TEMP/prepared-bundled-resources"
+          tar -xzf "$RUNNER_TEMP/release-resource-archive/common.tar.gz" -C "$RUNNER_TEMP/prepared-bundled-resources"
+
       - name: Install cargo-bundle
+        if: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL != 'true' }}
         run: script/install_cargo_bundle
         shell: bash
 
       - name: Install create-dmg
-        run: brew install create-dmg
+        if: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL != 'true' }}
+        run: |
+          if ! command -v create-dmg >/dev/null 2>&1; then
+            brew install create-dmg
+          fi
         shell: bash
+
+      - name: Validate preinstalled macOS packaging tools
+        if: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for tool in cargo-bundle create-dmg; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              missing+=("$tool")
+            fi
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing preinstalled macOS packaging tool: %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
 
       - name: Build unsigned macOS package
         id: bundle
@@ -181,6 +355,7 @@ jobs:
         env:
           CHANNEL: ${{ needs.resolve.outputs.channel }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          PREPARED_BUNDLED_RESOURCES_DIR: ${{ runner.temp }}/prepared-bundled-resources
         run: |
           script/bundle \
             --channel "$CHANNEL" \
@@ -205,8 +380,8 @@ jobs:
 
   package_windows:
     name: Package Windows
-    runs-on: windows-latest
-    needs: [resolve, ensure_release]
+    runs-on: ${{ vars.WARP_RELEASE_WINDOWS_RUNNER || 'windows-latest' }}
+    needs: [resolve, ensure_release, prepare_release_resources]
     timeout-minutes: 150
     steps:
       - name: Checkout tag
@@ -219,11 +394,30 @@ jobs:
         with:
           target_os: windows
           cache_key: windows-x64
-          is_self_hosted: false
-          install_release_deps: true
+          is_self_hosted: ${{ vars.WARP_RELEASE_WINDOWS_SELF_HOSTED == 'true' }}
+          install_release_deps: false
+          enable_sccache: true
+          skip_tool_install: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL == 'true' }}
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
 
+      - name: Download Windows release resources
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: release-resources-windows-${{ needs.resolve.outputs.artifact_tag }}
+          path: ${{ runner.temp }}/release-resource-archive
+
+      - name: Extract Windows release resources
+        shell: pwsh
+        run: |
+          $destination = Join-Path $env:RUNNER_TEMP "prepared-bundled-resources"
+          if (Test-Path $destination) {
+              Remove-Item -Path $destination -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $destination -Force | Out-Null
+          tar -xzf (Join-Path $env:RUNNER_TEMP "release-resource-archive/windows.tar.gz") -C $destination
+
       - name: Install Inno Setup
+        if: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL != 'true' }}
         shell: pwsh
         run: |
           if (-not (Get-Command ISCC -ErrorAction SilentlyContinue)) {
@@ -240,12 +434,21 @@ jobs:
             throw "ISCC was not found after installing Inno Setup."
           }
 
+      - name: Validate preinstalled Windows packaging tools
+        if: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL == 'true' }}
+        shell: pwsh
+        run: |
+          if (-not (Get-Command ISCC -ErrorAction SilentlyContinue)) {
+              throw "Missing preinstalled Windows packaging tool: ISCC"
+          }
+
       - name: Build unsigned Windows installer
         id: bundle
         shell: pwsh
         env:
           CHANNEL: ${{ needs.resolve.outputs.channel }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          PREPARED_BUNDLED_RESOURCES_DIR: ${{ runner.temp }}/prepared-bundled-resources
         run: |
           .\script\windows\bundle.ps1 `
             -CHANNEL "$env:CHANNEL" `

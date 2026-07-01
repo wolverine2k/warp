@@ -83,6 +83,23 @@ cleanup_dmg_source_dir() {
     fi
 }
 
+prepare_or_copy_bundled_resources() {
+  local destination="$1"
+
+  if [[ -n "${PREPARED_BUNDLED_RESOURCES_DIR:-}" ]]; then
+    if [[ ! -d "$PREPARED_BUNDLED_RESOURCES_DIR" ]]; then
+      echo "Prepared bundled resources directory not found: $PREPARED_BUNDLED_RESOURCES_DIR" >&2
+      exit 1
+    fi
+    echo "Copying prepared bundled resources from $PREPARED_BUNDLED_RESOURCES_DIR to $destination"
+    rm -rf "$destination"
+    mkdir -p "$(dirname "$destination")"
+    cp -R "$PREPARED_BUNDLED_RESOURCES_DIR" "$destination"
+  else
+    "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$destination" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+  fi
+}
+
 # Clean up the temporary codesigning keychain.
 cleanup_codesign_keychain() {
     if [[ "${CODESIGN:-false}" = true && -n "${CODESIGN_KEYCHAIN_NAME:-}" ]]; then
@@ -530,7 +547,7 @@ if [[ "$ARTIFACT" == "app" ]]; then
 
   BUNDLED_RESOURCES_DIR="$BUNDLE_DIR/$WARP_APP_NAME.app/Contents/Resources"
   echo "Preparing bundled resources..."
-  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+  prepare_or_copy_bundled_resources "$BUNDLED_RESOURCES_DIR"
 
   "$WORKSPACE_ROOT_DIR/script/compile_icon" "$RELEASE_CHANNEL" "$BUNDLE_DIR/$WARP_APP_NAME.app"
 
@@ -630,7 +647,7 @@ elif [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
 
   echo "Preparing CLI resources directory"
   BUNDLED_RESOURCES_DIR="$OUT_DIR/resources"
-  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+  prepare_or_copy_bundled_resources "$BUNDLED_RESOURCES_DIR"
 
 
   # Set the primary binary path to output.

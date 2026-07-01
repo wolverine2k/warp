@@ -100,6 +100,13 @@ ADDITIONAL_LICENSES=(
     "GitHub Desktop|MIT|app/src/code_review/GITHUB-DESKTOP-LICENSE"
 )
 
+if [ "${INCLUDE_WINDOWS_LICENSES:-}" = "1" ]; then
+  ADDITIONAL_LICENSES+=(
+      "OpenConsole / ConPTY (Windows Terminal)|MIT|app/assets/windows/LICENSE-WINDOWS-TERMINAL"
+      "DirectX Shader Compiler|NCSA|app/assets/windows/LICENSE-DXC"
+  )
+fi
+
 # Build the third-party licenses file unless the NO_LICENSES envvar is set.
 if [ -z "$NO_LICENSES" ]; then
   LICENSES_OUTPUT="$DEST_DIR/THIRD_PARTY_LICENSES.txt"

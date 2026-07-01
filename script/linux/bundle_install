@@ -44,4 +44,16 @@ if [[ "$ARTIFACT" == "app" ]]; then
 fi
 
 # Prepare the bundled resources directory.
-"$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "${TARGET_DIR}/${OPT_DIR}/resources" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+RESOURCES_DEST="${TARGET_DIR}/${OPT_DIR}/resources"
+if [[ -n "${PREPARED_BUNDLED_RESOURCES_DIR:-}" ]]; then
+  if [[ ! -d "$PREPARED_BUNDLED_RESOURCES_DIR" ]]; then
+    echo "Prepared bundled resources directory not found: $PREPARED_BUNDLED_RESOURCES_DIR" >&2
+    exit 1
+  fi
+  echo "Copying prepared bundled resources from $PREPARED_BUNDLED_RESOURCES_DIR to $RESOURCES_DEST"
+  rm -rf "$RESOURCES_DEST"
+  mkdir -p "$(dirname "$RESOURCES_DEST")"
+  cp -R "$PREPARED_BUNDLED_RESOURCES_DIR" "$RESOURCES_DEST"
+else
+  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$RESOURCES_DEST" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+fi

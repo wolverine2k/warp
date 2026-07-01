@@ -300,7 +300,16 @@ fi
 if [[ "$ARTIFACT" == "cli" || "$ARTIFACT" == "warpctrl" ]]; then
   echo "Preparing CLI resources directory"
   BUNDLED_RESOURCES_DIR="$OUT_DIR/resources"
-  "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+  if [[ -n "${PREPARED_BUNDLED_RESOURCES_DIR:-}" ]]; then
+    if [[ ! -d "$PREPARED_BUNDLED_RESOURCES_DIR" ]]; then
+      echo "Prepared bundled resources directory not found: $PREPARED_BUNDLED_RESOURCES_DIR" >&2
+      exit 1
+    fi
+    rm -rf "$BUNDLED_RESOURCES_DIR"
+    cp -R "$PREPARED_BUNDLED_RESOURCES_DIR" "$BUNDLED_RESOURCES_DIR"
+  else
+    "$WORKSPACE_ROOT_DIR/script/prepare_bundled_resources" "$BUNDLED_RESOURCES_DIR" "$RELEASE_CHANNEL" "$CARGO_PROFILE"
+  fi
 fi
 
 

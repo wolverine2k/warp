@@ -15,6 +15,12 @@ inputs:
     description: If true, dependencies needed for building release artifacts will be installed (e.g., cargo-about for license generation).
   cache_key:
     description: If set, the cache key to use.  If unset, the cache key will be derived from the target OS.
+  enable_sccache:
+    description: If true, configure sccache as RUSTC_WRAPPER using the GitHub Actions cache backend.
+    default: "false"
+  skip_tool_install:
+    description: If true, assume the runner image already has release tools installed and skip package/tool setup.
+    default: "false"
   ssh_key:
     description: SSH private key used to clone the private warp-channel-config repository. Only consumed when running in warpdotdev/warp-internal.
 
@@ -75,9 +81,22 @@ runs:
         # Make sure x86_64-unknown-linux-gnu and wasm32-unknown-unknown builds
         # don't share a cache, despite running on the same _host_ architecture.
         key: ${{ inputs.cache_key != '' && inputs.cache_key || inputs.target_os }}
-        # Only cache runs on the master branch (caches on feature branches
-        # are not reusable).
-        save-if: ${{ github.ref == 'refs/heads/master' }}
+        # Keep release-branch caches warm for tag packaging retries and future
+        # multi-local-llm release work. The cache action still keys by Rust
+        # environment, Cargo manifests, profile-sensitive env vars, and target.
+        save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/multi-local-llm' || startsWith(github.ref, 'refs/tags/v0.') }}
+
+    - name: Install sccache
+      if: ${{ inputs.enable_sccache == 'true' && inputs.is_self_hosted != 'true' && !startsWith(runner.name, 'nsc-runner') }}
+      uses: mozilla-actions/sccache-action@1583d6b38d7be47f593cb472781bbb21cab4321e # v0.0.10
+
+    - name: Enable sccache for Rust builds
+      if: ${{ inputs.enable_sccache == 'true' && inputs.is_self_hosted != 'true' && !startsWith(runner.name, 'nsc-runner') }}
+      shell: bash
+      run: |
+        echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+        echo "SCCACHE_GHA_VERSION=release-v1" >> "$GITHUB_ENV"
+        echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
 
     - name: Set up Namespace cache
       if: ${{ startsWith(runner.name, 'nsc-runner') }}
@@ -88,6 +107,7 @@ runs:
           ${{ inputs.target_os == 'macos' && 'brew' || '' }}
 
     - name: Install cargo-binstall
+      if: ${{ inputs.skip_tool_install != 'true' }}
       uses: cargo-bins/cargo-binstall@dc19f1e48450eefe5a29b8da6c6b00a87d730b37 # v1.18.1
       env:
         BINSTALL_VERSION: 1.14.4
@@ -102,6 +122,7 @@ runs:
         ssh-private-key: ${{ inputs.ssh_key }}
 
     - name: Install dependencies
+      if: ${{ inputs.skip_tool_install != 'true' }}
       shell: bash
       run: |
         cd "${{ steps.repo-root.outputs.path }}"
@@ -143,6 +164,7 @@ runs:
         fi
 
     - name: Install Node
+      if: ${{ inputs.skip_tool_install != 'true' }}
       uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
       with:
         node-version: 20.9.0
@@ -150,12 +172,14 @@ runs:
     - name: Enable Corepack
       # Enables NodeJS's Corepack tool, which is necessary to use the right version of `yarn` to
       # build TS command signatures.
+      if: ${{ inputs.skip_tool_install != 'true' }}
       shell: bash
       run: corepack enable
 
     - name: Install protoc for generating rust bindings of protobuf APIs
       id: install_protoc
       # Install protoc for generating rust bindings of protobuf APIs.
+      if: ${{ inputs.skip_tool_install != 'true' }}
       uses: ConorMacBride/install-package@3e7ad059e07782ee54fa35f827df52aae0626f30 # v1
       # Don't fail the job here so the winget fallback below has a chance to run on Windows.
       continue-on-error: true
@@ -164,23 +188,23 @@ runs:
         choco: protoc
 
     - name: Install protoc via winget (fallback for Windows)
-      if: ${{ inputs.target_os == 'windows' && steps.install_protoc.outcome == 'failure' }}
+      if: ${{ inputs.skip_tool_install != 'true' && inputs.target_os == 'windows' && steps.install_protoc.outcome == 'failure' }}
       shell: pwsh
       run: winget install Google.Protobuf
 
     - name: Fail if protoc install did not succeed
-      if: ${{ inputs.target_os != 'windows' && steps.install_protoc.outcome == 'failure' }}
+      if: ${{ inputs.skip_tool_install != 'true' && inputs.target_os != 'windows' && steps.install_protoc.outcome == 'failure' }}
       shell: bash
       run: |
         echo "::error::protoc install step failed on ${{ inputs.target_os }}"
         exit 1
 
     - uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
-      if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
+      if: ${{ inputs.skip_tool_install != 'true' && inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
       with:
         xcode-version: '26'
 
     - name: Download Metal Toolchain
-      if: ${{ inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
+      if: ${{ inputs.skip_tool_install != 'true' && inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
       shell: bash
       run: xcodebuild -downloadComponent MetalToolchain

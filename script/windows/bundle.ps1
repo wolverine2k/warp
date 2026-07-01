@@ -183,10 +183,22 @@ Write-Output "Built for $ARCH with executable at $BINARY_PATH"
 # Prepare bundled resources
 $BUNDLED_RESOURCES_DIR = "$CARGO_TARGET_OUTPUT_DIR\resources"
 Write-Output "Preparing bundled resources..."
-& "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL" -CargoProfile "$CARGO_PROFILE"
-if (-Not $?) {
-    Write-Error "Failed to prepare bundled resources"
-    exit 1
+if ($env:PREPARED_BUNDLED_RESOURCES_DIR) {
+    if (-Not (Test-Path $env:PREPARED_BUNDLED_RESOURCES_DIR -PathType Container)) {
+        Write-Error "Prepared bundled resources directory not found: $env:PREPARED_BUNDLED_RESOURCES_DIR"
+        exit 1
+    }
+    if (Test-Path $BUNDLED_RESOURCES_DIR) {
+        Remove-Item -Path $BUNDLED_RESOURCES_DIR -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $BUNDLED_RESOURCES_DIR) -Force | Out-Null
+    Copy-Item -Path $env:PREPARED_BUNDLED_RESOURCES_DIR -Destination $BUNDLED_RESOURCES_DIR -Recurse -Force
+} else {
+    & "$WINDOWS_INSTALLER_DIR\prepare_bundled_resources.ps1" -DestinationDir "$BUNDLED_RESOURCES_DIR" -Channel "$CHANNEL" -CargoProfile "$CARGO_PROFILE"
+    if (-Not $?) {
+        Write-Error "Failed to prepare bundled resources"
+        exit 1
+    }
 }
 
 Write-Output "Building $APP_NAME installer"
