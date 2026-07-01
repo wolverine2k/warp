@@ -62,6 +62,7 @@ while (( "$#" )); do
       ;;
     --release-tag)
       if [ -n "$2" ] && [ "${2:0:1}" != "-" ]; then
+        "$WORKSPACE_ROOT_DIR/script/validate_release_tag" "$2"
         echo "Setting release tag to $2"
         export GIT_RELEASE_TAG=$2
         shift 2

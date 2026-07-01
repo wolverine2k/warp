@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+validator="$repo_root/script/validate_release_tag"
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+expect_valid() {
+  local tag="$1"
+  "$validator" "$tag" || fail "expected valid release tag: $tag"
+}
+
+expect_invalid() {
+  local tag="$1"
+  if "$validator" "$tag" >/tmp/validate_release_tag_stdout 2>/tmp/validate_release_tag_stderr; then
+    fail "expected invalid release tag: $tag"
+  fi
+  if ! grep -Fq "Expected format: vN.YYYY.MM.DD.HH.MM.channel_NN" /tmp/validate_release_tag_stderr; then
+    fail "expected invalid release tag message to explain the required format"
+  fi
+}
+
+expect_valid "v0.2026.07.01.00.00.oss_00"
+expect_valid "v1.2026.12.31.23.59.stable_09"
+expect_valid "v12.2026.01.02.03.04.preview_10"
+expect_valid "v2.2026.01.02.03.04.dev_99"
+
+expect_invalid "multi-local-llm-2026-06-30"
+expect_invalid "v1.4.0"
+expect_invalid "v0.2026.07.01.00.00.oss"
+expect_invalid "v0.2026.07.01.00.00.beta_00"
+expect_invalid "0.2026.07.01.00.00.oss_00"
+
+printf 'release tag validation tests passed\n'

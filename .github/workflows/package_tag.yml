@@ -26,11 +26,16 @@ jobs:
       channel: ${{ steps.resolve.outputs.channel }}
       create_release: ${{ steps.resolve.outputs.create_release }}
     steps:
+      - name: Checkout tag validation script
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
       - name: Resolve tag, channel, and release mode
         id: resolve
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME}"
+          tag="${tag#refs/tags/}"
+          script/validate_release_tag "$tag"
           if [[ "$tag" =~ \.([A-Za-z]+)_ ]]; then
             channel="${BASH_REMATCH[1]}"
           else
@@ -42,7 +47,6 @@ jobs:
           esac
           create_release="true"
 
-          tag="${tag#refs/tags/}"
           artifact_tag="$(printf '%s' "$tag" | sed 's#[/\\:*?"<>| ]#-#g')"
           if [[ -z "$tag" ]]; then
             echo "::error::A git tag is required."

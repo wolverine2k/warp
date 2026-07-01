@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+tag="${1:-}"
+pattern='^v[0-9]+\.[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.(oss|stable|preview|dev)_[0-9]{2}$'
+
+if [[ "$tag" =~ $pattern ]]; then
+  exit 0
+fi
+
+cat >&2 <<'EOF'
+Invalid release tag.
+Expected format: vN.YYYY.MM.DD.HH.MM.channel_NN
+Allowed channels: oss, stable, preview, dev
+Example: v0.2026.07.01.00.00.oss_00
+EOF
+if [[ -n "$tag" ]]; then
+  printf 'Received: %s\n' "$tag" >&2
+else
+  printf 'Received an empty tag.\n' >&2
+fi
+exit 1
