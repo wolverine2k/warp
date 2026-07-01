@@ -130,7 +130,7 @@ if [[ ! "$changelog_section" =~ [^[:space:]] ]] && is_semver_tag; then
 fi
 
 {
-  printf '# Warp %s\n\n' "$tag"
+  printf '# Local-Warp %s\n\n' "$tag"
   printf '### Release\n'
   printf -- '- Channel: `%s`\n' "$channel"
   if [[ -n "$previous_tag" ]]; then
@@ -146,9 +146,15 @@ fi
   else
     printf '### Changelog\n'
 
-    mapfile -t commits < <(git log --no-merges --format='%h%x09%s' "$commit_range")
+    commits=()
+    while IFS= read -r entry; do
+      commits+=("$entry")
+    done < <(git log --no-merges --format='%h%x09%s' "$commit_range")
     if (( ${#commits[@]} == 0 )); then
-      mapfile -t commits < <(git log --format='%h%x09%s' "$commit_range")
+      commits=()
+      while IFS= read -r entry; do
+        commits+=("$entry")
+      done < <(git log --format='%h%x09%s' "$commit_range")
     fi
 
     if (( ${#commits[@]} == 0 )); then
