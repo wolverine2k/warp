@@ -139,7 +139,7 @@ $AdditionalLicenses += @(
 
 $LicensesOutput = Join-Path $DestinationDir 'THIRD_PARTY_LICENSES.txt'
 Write-Output "Generating third-party licenses at $LicensesOutput"
-cargo about generate --workspace --manifest-path "$RepoRoot\Cargo.toml" -c "$RepoRoot\about.toml" -o "$LicensesOutput" "$RepoRoot\about.hbs"
+cargo about -L off generate --workspace --manifest-path "$RepoRoot\Cargo.toml" -c "$RepoRoot\about.toml" -o "$LicensesOutput" "$RepoRoot\about.hbs"
 if (-Not $?) {
     Write-Error 'Failed to generate third-party licenses'
     exit 1

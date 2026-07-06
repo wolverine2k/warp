@@ -8,7 +8,7 @@
 //! per-generator registration list to keep in sync.
 //!
 //! Usage:
-//!   cargo run --example generate_default_settings -- [--channel dev|preview|stable] <output_path>
+//!   cargo run --example generate_default_settings -- [--channel dev|preview|stable|oss] <output_path>
 //!
 //! Example:
 //!   cargo run --example generate_default_settings -- ./default_settings.toml
@@ -36,7 +36,7 @@ fn active_flags_for_channel(channel: &str) -> HashSet<FeatureFlag> {
     let mut flags = HashSet::new();
 
     let flag_lists: &[&[FeatureFlag]] = match channel {
-        "stable" => &[RELEASE_FLAGS],
+        "stable" | "oss" | "warp-oss" => &[RELEASE_FLAGS],
         "preview" => &[RELEASE_FLAGS, PREVIEW_FLAGS],
         "dev" => &[RELEASE_FLAGS, PREVIEW_FLAGS, DOGFOOD_FLAGS, DEBUG_FLAGS],
         other => {
@@ -52,6 +52,19 @@ fn active_flags_for_channel(channel: &str) -> HashSet<FeatureFlag> {
     }
 
     flags
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oss_channel_uses_release_flags() {
+        assert!(
+            active_flags_for_channel("oss") == active_flags_for_channel("stable"),
+            "oss should expose the same settings as the stable release channel"
+        );
+    }
 }
 
 fn main() {
@@ -82,7 +95,9 @@ fn main() {
     }
 
     let Some(output_path) = output_path else {
-        eprintln!("Usage: generate_default_settings [--channel dev|preview|stable] <output_path>");
+        eprintln!(
+            "Usage: generate_default_settings [--channel dev|preview|stable|oss] <output_path>"
+        );
         std::process::exit(1);
     };
 

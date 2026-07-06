@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+fail() {
+  printf 'FAIL: %s\n' "$*" >&2
+  exit 1
+}
+
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+
+fake_bin="$tmp_dir/bin"
+mkdir -p "$fake_bin"
+
+cargo_invocations="$tmp_dir/cargo-invocations"
+
+cat > "$fake_bin/cargo" <<'FAKE_CARGO'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf '%s\n' "$*" >> "$CARGO_INVOCATIONS"
+
+if [ "$#" -ge 4 ] \
+  && [ "$1" = "about" ] \
+  && [ "$2" = "-L" ] \
+  && [ "$3" = "off" ] \
+  && [ "$4" = "generate" ]; then
+  output=""
+  previous=""
+  for arg in "$@"; do
+    if [ "$previous" = "-o" ]; then
+      output="$arg"
+      break
+    fi
+    previous="$arg"
+  done
+
+  if [ -z "$output" ]; then
+    printf 'missing cargo about output path\n' >&2
+    exit 1
+  fi
+
+  mkdir -p "$(dirname "$output")"
+  printf 'fake third-party licenses\n' > "$output"
+  exit 0
+fi
+
+printf 'unexpected cargo invocation: %s\n' "$*" >&2
+exit 97
+FAKE_CARGO
+chmod +x "$fake_bin/cargo"
+
+if ! CARGO_INVOCATIONS="$cargo_invocations" \
+  PATH="$fake_bin:$PATH" \
+  SKIP_SETTINGS_SCHEMA=1 \
+  "$repo_root/script/prepare_bundled_resources" "$tmp_dir/out" oss \
+  >"$tmp_dir/stdout" 2>"$tmp_dir/stderr"; then
+  cat "$tmp_dir/stdout" >&2
+  cat "$tmp_dir/stderr" >&2
+  fail "prepare_bundled_resources should call cargo about with quiet logging"
+fi
+
+if ! grep -Fq 'about -L off generate' "$cargo_invocations"; then
+  fail "expected cargo about invocation to include '-L off generate'"
+fi
+
+if [ ! -s "$tmp_dir/out/THIRD_PARTY_LICENSES.txt" ]; then
+  fail "expected third-party license output to be written"
+fi
+
+printf 'prepare bundled resources tests passed\n'

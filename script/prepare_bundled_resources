@@ -111,7 +111,7 @@ fi
 if [ -z "$NO_LICENSES" ]; then
   LICENSES_OUTPUT="$DEST_DIR/THIRD_PARTY_LICENSES.txt"
   echo "Generating third-party licenses at $LICENSES_OUTPUT"
-  cargo about generate \
+  cargo about -L off generate \
       --workspace \
       --manifest-path "$REPO_ROOT/Cargo.toml" \
       -c "$REPO_ROOT/about.toml" \
