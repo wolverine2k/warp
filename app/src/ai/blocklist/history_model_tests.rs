@@ -2625,6 +2625,94 @@ fn test_initialize_output_for_response_stream_persists_updated_conversation_stat
 }
 
 #[test]
+fn test_initialize_output_for_response_stream_ignores_synthetic_local_conversation_token() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let mut global_resource_handles = GlobalResourceHandles::mock(&mut app);
+        global_resource_handles.model_event_sender = Some(sender);
+        app.add_singleton_model(|_| GlobalResourceHandlesProvider::new(global_resource_handles));
+
+        let history_model = app.add_singleton_model(|_| BlocklistAIHistoryModel::new_for_test());
+        let terminal_view_id = EntityId::new();
+        let now = Local::now();
+
+        let conversation_id = history_model.update(&mut app, |history_model, ctx| {
+            history_model.start_new_conversation(terminal_view_id, false, false, false, ctx)
+        });
+
+        let stream_id = ResponseStreamId::new_for_test();
+        history_model.update(&mut app, |history_model, ctx| {
+            let exchange = create_exchange_with_query("query", now, None);
+            let task_id = history_model
+                .conversation(&conversation_id)
+                .expect("conversation should exist")
+                .get_root_task_id()
+                .clone();
+            let request_input = RequestInput {
+                conversation_id,
+                input_messages: std::collections::HashMap::from([(task_id, exchange.input)]),
+                working_directory: exchange.working_directory,
+                model_id: exchange.model_id,
+                coding_model_id: exchange.coding_model_id,
+                cli_agent_model_id: exchange.cli_agent_model_id,
+                computer_use_model_id: exchange.computer_use_model_id,
+                shared_session_response_initiator: exchange.response_initiator,
+                request_start_ts: exchange.start_time,
+                supported_tools_override: None,
+            };
+            history_model
+                .update_conversation_for_new_request_input(
+                    request_input,
+                    stream_id.clone(),
+                    terminal_view_id,
+                    ctx,
+                )
+                .unwrap();
+        });
+
+        let local_token = "local:9f403ee0-1fb2-4801-b8f8-9de6e57cb8a7".to_string();
+        let run_id = Uuid::new_v4().to_string();
+        history_model.update(&mut app, |history_model, ctx| {
+            history_model.initialize_output_for_response_stream(
+                &stream_id,
+                conversation_id,
+                terminal_view_id,
+                warp_multi_agent_api::response_event::StreamInit {
+                    request_id: "request-1".to_string(),
+                    conversation_id: local_token.clone(),
+                    run_id: run_id.clone(),
+                },
+                ctx,
+            );
+        });
+
+        let persisted_conversation = persisted_agent_conversation_from_update_event(
+            receiver
+                .recv_timeout(Duration::from_secs(1))
+                .expect("stream init should persist conversation state"),
+        );
+        let restored =
+            convert_persisted_conversation_to_ai_conversation_with_metadata(persisted_conversation)
+                .expect("persisted StreamInit conversation should be restorable");
+        let token = ServerConversationToken::new(local_token);
+
+        assert_eq!(restored.server_conversation_token(), None);
+        assert_eq!(restored.run_id().as_deref(), Some(run_id.as_str()));
+        history_model.read(&app, |model, _| {
+            assert_eq!(
+                model
+                    .conversation(&conversation_id)
+                    .and_then(|conversation| conversation.server_conversation_token()),
+                None,
+            );
+            assert_eq!(model.find_conversation_id_by_server_token(&token), None);
+        });
+    });
+}
+
+#[test]
 fn test_assign_run_id_for_conversation_persists_updated_conversation_state() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);

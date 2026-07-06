@@ -75,6 +75,8 @@ use crate::ui_components::icons::Icon;
 use crate::workspaces::user_profiles::UserProfileWithUID;
 use crate::{BlocklistAIHistoryModel, GlobalResourceHandlesProvider};
 
+const SYNTHETIC_LOCAL_CONVERSATION_TOKEN_PREFIX: &str = "local:";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TodoStatus {
     Pending,
@@ -2031,8 +2033,12 @@ impl AIConversation {
             });
         }
 
-        self.server_conversation_token =
-            Some(ServerConversationToken::new(init_event.conversation_id));
+        // Local provider streams synthesize `local:<uuid>` ids for StreamInit.
+        // They are not server tokens and cannot be resumed or shared remotely.
+        if !is_synthetic_local_conversation_token(&init_event.conversation_id) {
+            self.server_conversation_token =
+                Some(ServerConversationToken::new(init_event.conversation_id));
+        }
         let run_id = Some(init_event.run_id).filter(|s| !s.is_empty());
         self.task_id = run_id.as_deref().and_then(|id| id.parse().ok());
         Ok(())
@@ -4533,6 +4539,10 @@ impl ConversationStatus {
     pub fn is_error(&self) -> bool {
         matches!(self, ConversationStatus::Error)
     }
+}
+
+fn is_synthetic_local_conversation_token(token: &str) -> bool {
+    token.starts_with(SYNTHETIC_LOCAL_CONVERSATION_TOKEN_PREFIX)
 }
 
 #[cfg(test)]
