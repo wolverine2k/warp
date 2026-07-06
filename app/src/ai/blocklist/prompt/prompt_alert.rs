@@ -5,9 +5,12 @@ use warpui::elements::{
     ConstrainedBox, Container, CrossAxisAlignment, Flex, FormattedTextElement,
     HighlightedHyperlink, HyperlinkLens, MainAxisAlignment, MainAxisSize, ParentElement,
 };
-use warpui::{AppContext, Element, Entity, SingletonEntity, TypedActionView, View, ViewContext};
+use warpui::{
+    AppContext, Element, Entity, EntityId, SingletonEntity, TypedActionView, View, ViewContext,
+};
 
 use crate::ai::blocklist::error_color;
+use crate::ai::llms::{LLMPreferences, LLMPreferencesEvent};
 use crate::ai::AIRequestUsageModel;
 use crate::auth::AuthStateProvider;
 use crate::network::NetworkStatus;
@@ -75,43 +78,60 @@ pub enum PromptAlertState {
 
 pub struct PromptAlertView {
     state: PromptAlertState,
+    terminal_view_id: Option<EntityId>,
     action_hyperlink: HighlightedHyperlink,
 }
 
 impl PromptAlertView {
-    pub fn new(ctx: &mut ViewContext<Self>) -> Self {
+    pub fn new(terminal_view_id: Option<EntityId>, ctx: &mut ViewContext<Self>) -> Self {
         let request_usage_model = AIRequestUsageModel::handle(ctx);
         let user_workspaces = UserWorkspaces::handle(ctx);
         let network_status = NetworkStatus::handle(ctx);
         let api_key_manager = ApiKeyManager::handle(ctx);
+        let llm_preferences = LLMPreferences::handle(ctx);
 
         ctx.subscribe_to_model(&request_usage_model, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
+            me.state = Self::determine_state(ctx, me.terminal_view_id);
             ctx.notify();
         });
 
         ctx.subscribe_to_model(&user_workspaces, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
+            me.state = Self::determine_state(ctx, me.terminal_view_id);
             ctx.notify();
         });
 
         ctx.subscribe_to_model(&network_status, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
+            me.state = Self::determine_state(ctx, me.terminal_view_id);
             ctx.notify();
         });
 
         ctx.subscribe_to_model(&api_key_manager, |me, _, _, ctx| {
-            me.state = Self::determine_state(ctx);
+            me.state = Self::determine_state(ctx, me.terminal_view_id);
             ctx.notify();
         });
 
+        ctx.subscribe_to_model(&llm_preferences, |me, _, event, ctx| {
+            if matches!(
+                event,
+                LLMPreferencesEvent::UpdatedActiveAgentModeLLM
+                    | LLMPreferencesEvent::UpdatedAvailableLLMs
+            ) {
+                me.state = Self::determine_state(ctx, me.terminal_view_id);
+                ctx.notify();
+            }
+        });
+
         Self {
-            state: Self::determine_state(ctx),
+            state: Self::determine_state(ctx, terminal_view_id),
+            terminal_view_id,
             action_hyperlink: Default::default(),
         }
     }
 
-    pub fn determine_state(app: &AppContext) -> PromptAlertState {
+    pub fn determine_state(
+        app: &AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> PromptAlertState {
         // First, if the user is offline, no AI features will work.
         if !NetworkStatus::as_ref(app).is_online() {
             return PromptAlertState::NoConnection;
@@ -143,8 +163,15 @@ impl PromptAlertView {
             return PromptAlertState::DelinquentDueToPaymentIssue;
         }
 
+        let active_model_id = terminal_view_id.map(|terminal_view_id| {
+            LLMPreferences::as_ref(app)
+                .get_active_base_model(app, Some(terminal_view_id))
+                .id
+                .clone()
+        });
+
         // If there is ever any ai remaining, no alert
-        if request_usage_model.has_any_ai_remaining(app) {
+        if request_usage_model.has_any_ai_remaining_for_model(app, active_model_id.as_ref()) {
             return PromptAlertState::NoAlert;
         }
 
@@ -175,8 +202,11 @@ impl PromptAlertView {
         &self.state
     }
 
-    pub fn does_alert_block_ai_requests(app: &AppContext) -> bool {
-        does_alert_block_ai_requests(&Self::determine_state(app))
+    pub fn does_alert_block_ai_requests(
+        app: &AppContext,
+        terminal_view_id: Option<EntityId>,
+    ) -> bool {
+        does_alert_block_ai_requests(&Self::determine_state(app, terminal_view_id))
     }
 
     fn primary_text(
@@ -363,7 +393,7 @@ impl View for PromptAlertView {
 
     fn render(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let state = Self::determine_state(app);
+        let state = Self::determine_state(app, self.terminal_view_id);
         let mut text_fragments = vec![];
 
         self.primary_text(&state, &mut text_fragments);

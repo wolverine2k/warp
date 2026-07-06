@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn prompt_alert_keeps_model_selector_available() {
+    let right_items = vec![
+        AgentToolbarItemKind::ContextChip(ContextChipKind::AgentPlanAndTodoList),
+        AgentToolbarItemKind::ContextWindowUsage,
+        AgentToolbarItemKind::ModelSelector,
+        AgentToolbarItemKind::VoiceInput,
+        AgentToolbarItemKind::FileAttach,
+        AgentToolbarItemKind::AttachmentPicker,
+    ];
+
+    let visible_with_alert = right_items
+        .into_iter()
+        .filter(should_render_right_toolbar_item_with_prompt_alert)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        visible_with_alert,
+        vec![AgentToolbarItemKind::ModelSelector]
+    );
+}
+
+#[test]
 fn picker_filter_image_only_returns_image_extensions() {
     // llava is an Ollama vision model; heuristic resolves image=true,
     // pdf=false, audio=false when all settings are None (auto).

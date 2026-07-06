@@ -491,17 +491,16 @@ pub(super) fn maybe_add_buy_credits_banner(
     // and either:
     // 1. OutOfCredits: for users that are not auto-reload enabled
     // 2. MonthlyLimitReached: Auto-reload enabled and is blocked by monthly limit
+    let active_model =
+        LLMPreferences::as_ref(app).get_active_base_model(app, Some(terminal_view_id));
     let ai_request_usage = AIRequestUsageModel::as_ref(app);
     let should_show_banner = !matches!(
-        ai_request_usage.compute_buy_addon_credits_banner_display_state(app),
+        ai_request_usage
+            .compute_buy_addon_credits_banner_display_state_for_model(app, Some(&active_model.id)),
         BuyCreditsBannerDisplayState::Hidden
     );
-    let is_using_api_key_for_current_model = is_using_api_key_for_provider(
-        &LLMPreferences::as_ref(app)
-            .get_active_base_model(app, Some(terminal_view_id))
-            .provider,
-        app,
-    );
+    let is_using_api_key_for_current_model =
+        is_using_api_key_for_provider(&active_model.provider, app);
     if can_purchase_addon_credits
         && is_focused
         && should_show_banner

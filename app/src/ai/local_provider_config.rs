@@ -117,7 +117,7 @@ pub fn snapshot_for_request(ctx: &AppContext, model: &LLMId) -> Option<LocalProv
             },
             base_url: provider.base_url.clone(),
             model_id: model_id.clone(),
-            api_key: Some(api_key),
+            api_key: (!api_key.is_empty()).then_some(api_key),
             supports_tools: model_entry.tool_call,
             context_window,
             // Phase 2: thread the provider's wire-protocol selector through
@@ -175,6 +175,12 @@ pub fn synthetic_llm_info(cfg: &LocalProviderConfig) -> LLMInfo {
 /// The dispatch router uses this to decide between server and local paths.
 pub fn is_local_llm_id(id: &LLMId) -> bool {
     id.as_str().starts_with("local:")
+}
+
+/// Returns true when the given LLMId must be handled by the local-provider
+/// dispatcher rather than the warp.dev MultiAgent path.
+pub fn is_local_provider_llm_id(id: &LLMId) -> bool {
+    is_local_llm_id(id) || ai::local_provider::llm_id::is_byop(id)
 }
 
 /// Snapshot the local-provider compaction config from `AISettings`.
@@ -265,3 +271,7 @@ pub fn inject_local_provider_choice(
         models.coding.choices_mut().push(info);
     }
 }
+
+#[cfg(test)]
+#[path = "local_provider_config_tests.rs"]
+mod tests;

@@ -369,6 +369,51 @@ fn test_has_any_ai_remaining_false_when_no_requests_or_bonus() {
 }
 
 #[test]
+fn test_has_any_ai_remaining_true_with_local_provider_model_selected() {
+    App::test((), |mut app| async move {
+        app.add_singleton_model(UserWorkspaces::default_mock);
+        let request_usage_model = add_request_usage_model(&mut app);
+        let model_id = ai::local_provider::llm_id::encode("provider-1", "llama3.2");
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert!(
+                model.has_any_ai_remaining_for_model(ctx, Some(&model_id)),
+                "expected local-provider models to bypass Warp credit availability",
+            );
+        });
+    });
+}
+
+#[test]
+fn test_buy_credits_banner_hidden_with_local_provider_model_selected() {
+    App::test((), |mut app| async move {
+        let (_uid, mut workspace) = create_test_workspace();
+        workspace
+            .billing_metadata
+            .tier
+            .purchase_add_on_credits_policy = Some(PurchaseAddOnCreditsPolicy { enabled: true });
+
+        add_user_workspaces_with_workspace(&mut app, workspace);
+        let request_usage_model = add_request_usage_model(&mut app);
+        let model_id = ai::LLMId::from("local:llama3.2");
+
+        request_usage_model.update(&mut app, |model, ctx| {
+            model.request_limit_info = RequestLimitInfo::new_for_test(10, 10);
+            model.bonus_grants.clear();
+
+            assert_eq!(
+                model
+                    .compute_buy_addon_credits_banner_display_state_for_model(ctx, Some(&model_id)),
+                BuyCreditsBannerDisplayState::Hidden,
+            );
+        });
+    });
+}
+
+#[test]
 fn test_has_any_ai_remaining_true_with_user_bonus_credits() {
     App::test((), |mut app| async move {
         app.add_singleton_model(UserWorkspaces::default_mock);

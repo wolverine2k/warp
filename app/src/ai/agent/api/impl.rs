@@ -48,14 +48,15 @@ pub async fn generate_multi_agent_output(
     if let Some(cfg) = params.local_provider_config.take() {
         return route_to_local_provider(params, cfg, cancellation_rx).await;
     }
-    if crate::ai::local_provider_config::is_local_llm_id(&params.model) {
+    if crate::ai::local_provider_config::is_local_provider_llm_id(&params.model) {
         // Stale local id but no active config (user disabled the provider
-        // but their saved profile still references it). Surface a
-        // one-shot error stream so the controller's existing toast path
-        // fires; the user can re-select a Warp model.
+        // but their saved profile still references it), or unresolved BYOP
+        // config (deleted provider / missing required key / invalid URL).
+        // Surface a one-shot error stream so the controller's existing toast
+        // path fires; the user can re-select or repair the provider.
         let (tx, rx) = async_channel::unbounded();
         let err = AIApiError::Other(anyhow::anyhow!(
-            "Local provider is no longer configured. Re-enable it in settings, or pick a Warp model."
+            "Local provider is no longer configured. Re-enable or repair it in settings, or pick a Warp model."
         ));
         let _ = tx.send(Err(Arc::new(err))).await;
         return Ok(Box::pin(rx));

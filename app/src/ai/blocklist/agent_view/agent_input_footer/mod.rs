@@ -727,7 +727,8 @@ impl AgentInputFooter {
             },
         );
 
-        let prompt_alert = ctx.add_typed_action_view(PromptAlertView::new);
+        let prompt_alert =
+            ctx.add_typed_action_view(|ctx| PromptAlertView::new(Some(terminal_view_id), ctx));
         ctx.subscribe_to_view(&prompt_alert, |_, _, event, ctx| {
             ctx.emit(AgentInputFooterEvent::PromptAlert(event.clone()));
         });
@@ -2705,17 +2706,20 @@ impl View for AgentInputFooter {
                 )
                 .finish(),
             );
-        } else {
-            for item in &right_items {
-                if let Some(element) = self.render_toolbar_item(
-                    item,
-                    shared_status,
-                    is_cloud_context,
-                    is_conversation_transcript_context,
-                    app,
-                ) {
-                    right_buttons.add_child(element);
-                }
+        }
+
+        for item in &right_items {
+            if has_prompt_alert && !should_render_right_toolbar_item_with_prompt_alert(item) {
+                continue;
+            }
+            if let Some(element) = self.render_toolbar_item(
+                item,
+                shared_status,
+                is_cloud_context,
+                is_conversation_transcript_context,
+                app,
+            ) {
+                right_buttons.add_child(element);
             }
         }
 
@@ -2769,6 +2773,10 @@ impl View for AgentInputFooter {
         // dragged onto the footer dispatch DragAndDropFiles.
         Box::new(drop_target_element::AttachmentDropTargetElement::new(inner))
     }
+}
+
+fn should_render_right_toolbar_item_with_prompt_alert(item: &AgentToolbarItemKind) -> bool {
+    matches!(item, AgentToolbarItemKind::ModelSelector)
 }
 
 #[derive(Debug, Clone)]

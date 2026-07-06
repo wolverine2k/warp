@@ -14126,16 +14126,21 @@ impl Input {
             return;
         }
 
+        let active_model_id = LLMPreferences::as_ref(ctx)
+            .get_active_base_model(ctx, Some(self.terminal_view_id))
+            .id
+            .clone();
         let has_requests_remaining = AIRequestUsageModel::as_ref(ctx).has_requests_remaining();
 
-        let has_any_ai = AIRequestUsageModel::as_ref(ctx).has_any_ai_remaining(ctx);
+        let has_any_ai = AIRequestUsageModel::as_ref(ctx)
+            .has_any_ai_remaining_for_model(ctx, Some(&active_model_id));
         if !has_any_ai {
             AIRequestUsageModel::handle(ctx).update(ctx, |model, ctx| {
                 model.enable_buy_credits_banner(ctx);
             });
         }
 
-        if PromptAlertView::does_alert_block_ai_requests(ctx) {
+        if PromptAlertView::does_alert_block_ai_requests(ctx, Some(self.terminal_view_id)) {
             if !has_requests_remaining {
                 send_telemetry_from_ctx!(
                     TelemetryEvent::AgentModeUserAttemptedQueryAtRequestLimit {

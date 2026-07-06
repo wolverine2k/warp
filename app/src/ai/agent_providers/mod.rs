@@ -23,11 +23,11 @@ use crate::settings::{AISettings, AgentProvider};
 /// Build the list of valid `(provider, model)` LLMInfos for the picker.
 ///
 /// "Valid" = provider has a non-empty `base_url`, at least one model, and
-/// has an API key in `AgentProviderSecrets`. Invalid providers are silently
-/// skipped — the user can spot them via the (Phase 1b-3) settings widget.
+/// has any API key required by its adapter. Ollama is commonly unauthenticated,
+/// so it stays selectable without a key. Invalid providers are silently
+/// skipped — the user can spot them via the settings widget.
 pub fn build_byop_llm_infos(app: &AppContext) -> Vec<LLMInfo> {
     let providers = AISettings::as_ref(app).agent_providers.value().clone();
-    let secrets = AgentProviderSecrets::as_ref(app);
     let mut out = Vec::new();
 
     for provider in providers {
@@ -37,11 +37,7 @@ pub fn build_byop_llm_infos(app: &AppContext) -> Vec<LLMInfo> {
         if provider.models.is_empty() {
             continue;
         }
-        let has_key = secrets
-            .get(&provider.id)
-            .map(|k| !k.is_empty())
-            .unwrap_or(false);
-        if !has_key {
+        if !provider_has_required_api_key(app, &provider) {
             continue;
         }
 
@@ -97,7 +93,6 @@ pub fn build_byop_llm_infos(app: &AppContext) -> Vec<LLMInfo> {
 /// Gated on `FeatureFlag::LocalLlmProvider` at the call site.
 pub fn build_byop_orchestration_llm_infos(app: &AppContext) -> Vec<LLMInfo> {
     let providers = AISettings::as_ref(app).agent_providers.value().clone();
-    let secrets = AgentProviderSecrets::as_ref(app);
     let mut out = Vec::new();
 
     for provider in providers {
@@ -110,11 +105,7 @@ pub fn build_byop_orchestration_llm_infos(app: &AppContext) -> Vec<LLMInfo> {
         if provider.models.is_empty() {
             continue;
         }
-        let has_key = secrets
-            .get(&provider.id)
-            .map(|k| !k.is_empty())
-            .unwrap_or(false);
-        if !has_key {
+        if !provider_has_required_api_key(app, &provider) {
             continue;
         }
 
@@ -211,14 +202,25 @@ pub fn build_byop_models_by_feature(app: &AppContext) -> ModelsByFeature {
 }
 
 /// Shared BYOP resolution: decode → look up provider → fetch + validate
-/// api_key. Returns `None` for non-BYOP ids, malformed ids, missing
-/// providers, missing keys, or empty keys.
+/// the provider secret when that adapter requires one. Returns `None` for
+/// non-BYOP ids, malformed ids, missing providers, or missing/empty required
+/// keys. Ollama may resolve with an empty key because local Ollama instances
+/// are commonly unauthenticated.
 ///
 /// Both `lookup_byop` and `resolve_byop_for_local_child` delegate to this
 /// helper. The only difference between the two public entry points is the
 /// input type — `lookup_byop` accepts `&ai::LLMId` (already-decoded type)
 /// while `resolve_byop_for_local_child` accepts `&str` (raw model_id from
 /// the orchestration submit path).
+fn provider_has_required_api_key(app: &AppContext, provider: &AgentProvider) -> bool {
+    if provider.api_type == ai::local_provider::AgentProviderApiType::Ollama {
+        return true;
+    }
+    AgentProviderSecrets::as_ref(app)
+        .get(&provider.id)
+        .is_some_and(|api_key| !api_key.is_empty())
+}
+
 fn resolve_byop_inner(
     app: &AppContext,
     llm_id: &ai::LLMId,
@@ -229,9 +231,10 @@ fn resolve_byop_inner(
     let provider = providers.into_iter().find(|p| p.id == provider_id)?;
 
     let api_key = AgentProviderSecrets::as_ref(app)
-        .get(&provider.id)?
+        .get(&provider.id)
+        .unwrap_or_default()
         .to_string();
-    if api_key.is_empty() {
+    if api_key.is_empty() && provider.api_type != ai::local_provider::AgentProviderApiType::Ollama {
         return None;
     }
 
@@ -240,10 +243,10 @@ fn resolve_byop_inner(
 
 /// Resolve a `byop:<provider_id>:<model_id>` `LLMId` to its
 /// `(provider, api_key, model_id)` triple. Returns `None` if the LLMId is
-/// not BYOP-encoded, the provider has been deleted, no API key is
-/// configured, or the API key is empty. Callers should map `None` to a
-/// structured "provider unavailable" error so the conversation pane can
-/// surface a recoverable banner instead of a hard crash.
+/// not BYOP-encoded, the provider has been deleted, or a required API key is
+/// missing/empty. Ollama may return `Some` with an empty `api_key`. Callers
+/// should map `None` to a structured "provider unavailable" error so the
+/// conversation pane can surface a recoverable banner instead of a hard crash.
 pub fn lookup_byop(app: &AppContext, id: &ai::LLMId) -> Option<(AgentProvider, String, String)> {
     resolve_byop_inner(app, id)
 }
@@ -254,8 +257,8 @@ pub fn lookup_byop(app: &AppContext, id: &ai::LLMId) -> Option<(AgentProvider, S
 /// - Non-BYOP model IDs (caller should treat this as "no env vars to inject").
 /// - BYOP IDs that don't decode (malformed).
 /// - Provider IDs that aren't in settings.
-/// - Providers missing an API key in `AgentProviderSecrets`.
-/// - Providers with an empty API key in `AgentProviderSecrets`.
+/// - Providers missing a required API key in `AgentProviderSecrets`.
+/// - Providers with an empty required API key in `AgentProviderSecrets`.
 ///
 /// The model_id returned is the user-side model id (the part after the
 /// `byop:<provider_id>:` prefix), suitable for passing as `OPENAI_MODEL` /

@@ -525,7 +525,7 @@ impl UniversalDeveloperInputButtonBar {
             ctx.notify();
         });
 
-        let prompt_alert = ctx.add_typed_action_view(PromptAlertView::new);
+        let prompt_alert = ctx.add_typed_action_view(|ctx| PromptAlertView::new(None, ctx));
         ctx.subscribe_to_view(&prompt_alert, |_, _, event, ctx| {
             ctx.emit(UniversalDeveloperInputButtonBarEvent::PromptAlert(
                 event.clone(),

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use ai::api_keys::ApiKeyManager;
+use ai::LLMId;
 use chrono::{DateTime, Local, Utc};
 use instant::Instant;
 use serde::{Deserialize, Serialize};
@@ -449,6 +450,18 @@ impl AIRequestUsageModel {
             || has_byo_credentials
     }
 
+    pub fn has_any_ai_remaining_for_model(
+        &self,
+        ctx: &AppContext,
+        selected_model: Option<&LLMId>,
+    ) -> bool {
+        if selected_model.is_some_and(crate::ai::local_provider_config::is_local_provider_llm_id) {
+            return true;
+        }
+
+        self.has_any_ai_remaining(ctx)
+    }
+
     pub fn requests_used(&self) -> usize {
         if self.next_refresh_time() <= Utc::now() {
             return 0;
@@ -640,6 +653,18 @@ impl AIRequestUsageModel {
         } else {
             BuyCreditsBannerDisplayState::Hidden
         }
+    }
+
+    pub fn compute_buy_addon_credits_banner_display_state_for_model(
+        &self,
+        ctx: &AppContext,
+        selected_model: Option<&LLMId>,
+    ) -> BuyCreditsBannerDisplayState {
+        if selected_model.is_some_and(crate::ai::local_provider_config::is_local_provider_llm_id) {
+            return BuyCreditsBannerDisplayState::Hidden;
+        }
+
+        self.compute_buy_addon_credits_banner_display_state(ctx)
     }
 
     pub fn dismiss_buy_credits_banner(&mut self, ctx: &mut ModelContext<Self>) {
