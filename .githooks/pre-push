@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+validator="$repo_root/script/validate_release_tag"
+zero_oid="0000000000000000000000000000000000000000"
+
+while read -r local_ref local_oid remote_ref remote_oid; do
+  if [[ "$remote_ref" != refs/tags/* ]]; then
+    continue
+  fi
+
+  # Permit tag deletion so invalid legacy tags can be removed.
+  if [[ "$local_oid" == "$zero_oid" ]]; then
+    continue
+  fi
+
+  tag="${remote_ref#refs/tags/}"
+  if ! "$validator" "$tag"; then
+    cat >&2 <<EOF
+
+Rejected push of invalid tag: $tag
+Only release tags matching the repository release format may be pushed.
+EOF
+    exit 1
+  fi
+done
+

@@ -35,4 +35,31 @@ expect_invalid "v0.2026.07.01.00.00.oss"
 expect_invalid "v0.2026.07.01.00.00.beta_00"
 expect_invalid "0.2026.07.01.00.00.oss_00"
 
+valid_tag="v0.2026.07.01.00.00.oss_00"
+invalid_tag="github"
+zero_oid="0000000000000000000000000000000000000000"
+valid_oid="1111111111111111111111111111111111111111"
+
+printf 'refs/tags/%s %s refs/tags/%s %s\n' "$valid_tag" "$valid_oid" "$valid_tag" "$zero_oid" \
+  | "$repo_root/.githooks/pre-push"
+
+if printf 'refs/tags/%s %s refs/tags/%s %s\n' "$invalid_tag" "$valid_oid" "$invalid_tag" "$zero_oid" \
+  | "$repo_root/.githooks/pre-push" >/tmp/validate_release_tag_stdout 2>/tmp/validate_release_tag_stderr; then
+  fail "expected pre-push hook to reject invalid tag: $invalid_tag"
+fi
+
+printf 'refs/tags/%s %s refs/tags/%s %s\n' "$invalid_tag" "$zero_oid" "$invalid_tag" "$valid_oid" \
+  | "$repo_root/.githooks/pre-push"
+
+printf '%s %s refs/tags/%s\n' "$zero_oid" "$valid_oid" "$valid_tag" \
+  | "$repo_root/.githooks/reference-transaction" prepared
+
+if printf '%s %s refs/tags/%s\n' "$zero_oid" "$valid_oid" "$invalid_tag" \
+  | "$repo_root/.githooks/reference-transaction" prepared >/tmp/validate_release_tag_stdout 2>/tmp/validate_release_tag_stderr; then
+  fail "expected reference-transaction hook to reject invalid tag: $invalid_tag"
+fi
+
+printf '%s %s refs/tags/%s\n' "$valid_oid" "$zero_oid" "$invalid_tag" \
+  | "$repo_root/.githooks/reference-transaction" prepared
+
 printf 'release tag validation tests passed\n'

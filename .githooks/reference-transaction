@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+state="${1:-}"
+repo_root="$(git rev-parse --show-toplevel)"
+validator="$repo_root/script/validate_release_tag"
+zero_oid="0000000000000000000000000000000000000000"
+
+if [[ "$state" != "prepared" ]]; then
+  exit 0
+fi
+
+while read -r old_oid new_oid ref_name; do
+  if [[ "$ref_name" != refs/tags/* ]]; then
+    continue
+  fi
+
+  # Permit tag deletion so invalid legacy tags can be removed.
+  if [[ "$new_oid" == "$zero_oid" ]]; then
+    continue
+  fi
+
+  tag="${ref_name#refs/tags/}"
+  if ! "$validator" "$tag"; then
+    cat >&2 <<EOF
+
+Rejected invalid tag: $tag
+Only release tags matching the repository release format may be created or updated.
+EOF
+    exit 1
+  fi
+done
+

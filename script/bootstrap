@@ -131,6 +131,10 @@ maybe_install_common_skills() {
   fi
 }
 
+install_git_hooks() {
+  git config --local core.hooksPath .githooks
+}
+
 # This repository requires Git LFS; ensure it is installed and initialized
 # for this checkout.
 ensure_git_lfs() {
@@ -150,6 +154,7 @@ ensure_git_lfs() {
   git lfs pull
 }
 
+install_git_hooks
 ensure_git_lfs
 
 if [[ "$OS_TYPE" = "Darwin" ]]; then
