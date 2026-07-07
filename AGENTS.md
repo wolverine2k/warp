@@ -192,3 +192,7 @@ if FeatureFlag::YourNewFeature.is_enabled() {
 ### Exhaustive Matching
 
 When adding/editing match statements, avoid using the wildcard _ when at all possible. Exhaustive matching is helpful for ensuring that all variants are handled, especially when adding new variants to enums in the future.
+
+### Agent Orchestration
+
+- The repository owner grants standing permission to spawn Codex native subagents for independent, bounded repository work when doing so improves throughput, coverage, or verification quality. Do not ask for separate subagent permission; use normal judgment about scope, shared-file conflicts, and destructive actions.
