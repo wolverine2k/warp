@@ -112,6 +112,15 @@ runs:
       env:
         BINSTALL_VERSION: 1.14.4
 
+    - name: Remove untrusted Homebrew taps from hosted macOS image
+      if: ${{ inputs.skip_tool_install != 'true' && inputs.target_os == 'macos' && inputs.is_self_hosted != 'true' }}
+      shell: bash
+      run: |
+        # The hosted macOS image currently includes aws/tap, but Homebrew ignores
+        # untrusted taps and emits workflow warnings before every brew install.
+        # Release packaging uses only homebrew/core formulae here.
+        brew untap aws/tap || true
+
     # Load the SSH key needed to clone the private warp-channel-config repo. Only
     # run in warpdotdev/warp-internal; elsewhere (mirrors, fork PRs) this is a no-op
     # and install_channel_config falls back gracefully.

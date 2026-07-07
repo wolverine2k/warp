@@ -201,7 +201,7 @@ jobs:
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
 
       - name: Download common release resources
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-resources-common-${{ needs.resolve.outputs.artifact_tag }}
           path: ${{ runner.temp }}/release-resource-archive
@@ -285,7 +285,7 @@ jobs:
 
   package_macos:
     name: Package macOS
-    runs-on: ${{ vars.WARP_RELEASE_MACOS_RUNNER || 'macos-latest' }}
+    runs-on: ${{ vars.WARP_RELEASE_MACOS_RUNNER || 'macos-26' }}
     needs: [resolve, ensure_release, prepare_release_resources]
     timeout-minutes: 120
     steps:
@@ -305,7 +305,7 @@ jobs:
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
 
       - name: Download common release resources
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-resources-common-${{ needs.resolve.outputs.artifact_tag }}
           path: ${{ runner.temp }}/release-resource-archive
@@ -401,7 +401,7 @@ jobs:
           ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
 
       - name: Download Windows release resources
-        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-resources-windows-${{ needs.resolve.outputs.artifact_tag }}
           path: ${{ runner.temp }}/release-resource-archive

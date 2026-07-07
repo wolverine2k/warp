@@ -533,8 +533,8 @@ impl Scene {
         }
     }
 
+    #[cfg(debug_assertions)]
     fn validate_rect(rect: &RectF, location: Option<&'static std::panic::Location<'static>>) {
-        #[cfg(debug_assertions)]
         let location_info = location
             .map(|loc| {
                 format!(
@@ -545,8 +545,6 @@ impl Scene {
                 )
             })
             .unwrap_or_default();
-        #[cfg(not(debug_assertions))]
-        let location_info = "";
         debug_assert!(
             !rect.origin().y().is_infinite(),
             "!rect.origin().y().is_infinite(){location_info}"
@@ -573,6 +571,9 @@ impl Scene {
             "!rect.size().y().is_nan(){location_info}"
         );
     }
+
+    #[cfg(not(debug_assertions))]
+    fn validate_rect(_: &RectF, _: Option<&'static std::panic::Location<'static>>) {}
 
     /// This method draws a rectangle without recording any information about it in the current
     /// layer. Note this should be used with caution. In most cases, what you need is
