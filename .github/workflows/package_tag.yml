@@ -298,6 +298,9 @@ jobs:
         uses: ./.github/actions/prepare_environment
         with:
           target_os: macos
+          cache_key: macos-release
+          cache_shared_key: macos-release
+          cache_save_if: "false"
           is_self_hosted: ${{ vars.WARP_RELEASE_MACOS_SELF_HOSTED == 'true' }}
           install_release_deps: false
           enable_sccache: true
@@ -349,6 +352,24 @@ jobs:
             exit 1
           fi
 
+      - name: Show sccache stats before macOS build
+        if: ${{ vars.WARP_RELEASE_MACOS_SELF_HOSTED != 'true' && !startsWith(runner.name, 'nsc-runner') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "### sccache before macOS package build"
+            echo '```text'
+            if command -v sccache >/dev/null 2>&1; then
+              sccache --show-stats 2>&1 || true
+              sccache --zero-stats 2>&1 || true
+            else
+              echo "sccache is not installed on this runner."
+            fi
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Build unsigned macOS package
         id: bundle
         shell: bash
@@ -357,11 +378,44 @@ jobs:
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           PREPARED_BUNDLED_RESOURCES_DIR: ${{ runner.temp }}/prepared-bundled-resources
         run: |
+          set -u
+
+          start_epoch=$(date +%s)
+          set +e
           script/bundle \
             --channel "$CHANNEL" \
             --release-tag "$RELEASE_TAG" \
             --nosign \
             --nouniversal
+          status=$?
+          end_epoch=$(date +%s)
+          duration=$((end_epoch - start_epoch))
+
+          echo "bundle_seconds=$duration" >> "$GITHUB_OUTPUT"
+          {
+            echo "### macOS package timing"
+            echo "- bundle_seconds: $duration"
+            echo "- status: $status"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$status"
+
+      - name: Show sccache stats after macOS build
+        if: ${{ always() && vars.WARP_RELEASE_MACOS_SELF_HOSTED != 'true' && !startsWith(runner.name, 'nsc-runner') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "### sccache after macOS package build"
+            echo '```text'
+            if command -v sccache >/dev/null 2>&1; then
+              sccache --show-stats 2>&1 || true
+            else
+              echo "sccache is not installed on this runner."
+            fi
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload macOS package as workflow artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

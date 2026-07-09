@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -e
+
+workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+temp_dir="$(mktemp -d)"
+trap 'rm -rf "$temp_dir"' EXIT
+
+mkdir -p "$temp_dir/bin"
+cat > "$temp_dir/bin/cargo" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$APPIMAGE_NAME" > "$APPIMAGE_NAME_FILE"
+printf '%s\n' "$@" > "$CARGO_ARGS_FILE"
+EOF
+chmod +x "$temp_dir/bin/cargo"
+
+case "$(uname -m)" in
+  arm64|aarch64)
+    arch="aarch64"
+    ;;
+  x86_64|amd64)
+    arch="x86_64"
+    ;;
+  *)
+    echo "Unsupported architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
+PATH="$temp_dir/bin:$PATH" \
+  APPIMAGE_NAME_FILE="$temp_dir/appimage-name" \
+  CARGO_ARGS_FILE="$temp_dir/cargo-args" \
+  CARGO_TARGET_DIR="$temp_dir/target" \
+  "$workspace_root/script/linux/bundle" \
+  --check-only \
+  --channel oss \
+  --arch "$arch"
+
+grep -qx -- "LocalWarp-$arch.AppImage" "$temp_dir/appimage-name"
+grep -qx -- '--bin' "$temp_dir/cargo-args"
+grep -qx -- 'warp-oss' "$temp_dir/cargo-args"
+grep -qx -- '--features' "$temp_dir/cargo-args"
+grep -qx -- 'release_bundle,gui,nld_classifier_v3,nld_heuristic_v2' "$temp_dir/cargo-args"

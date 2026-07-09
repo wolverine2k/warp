@@ -180,7 +180,7 @@ if [[ $RELEASE_CHANNEL = "local" ]]; then
   WARP_BIN="warp"
   BINARY_NAME="warp-local"
   APP_NAME="WarpLocal"
-  APP_DISPLAY_NAME="Local-Warp"
+  APP_DISPLAY_NAME="LocalWarp"
   FEATURES="$FEATURES,agent_mode_debug"
   export HANDLE_MARKDOWN=1
 elif [[ $RELEASE_CHANNEL = "dev" ]]; then
@@ -206,7 +206,7 @@ elif [[ $RELEASE_CHANNEL = "oss" ]]; then
   WARP_BIN="warp-oss"
   BINARY_NAME="warp-oss"
   APP_NAME="WarpOss"
-  APP_DISPLAY_NAME="Local-Warp"
+  APP_DISPLAY_NAME="LocalWarp"
   # The OSS channel does not ship Sentry, so drop the crash_reporting feature
   # (which would otherwise pull in the Sentry SDK as a dependency).
   FEATURES="release_bundle"

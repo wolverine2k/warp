@@ -5,7 +5,7 @@ use std::{env, fmt};
 
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use url::Url;
-use warp_core::channel::ChannelState;
+use warp_core::channel::{Channel, ChannelState};
 use warp_core::features::FeatureFlag;
 
 use crate::agent::OutputFormat;
@@ -45,6 +45,9 @@ pub const OZ_HARNESS_ENV: &str = "OZ_HARNESS";
 pub const SERVER_ROOT_URL_OVERRIDE_ENV: &str = "WARP_SERVER_ROOT_URL";
 pub const WS_SERVER_URL_OVERRIDE_ENV: &str = "WARP_WS_SERVER_URL";
 pub const SESSION_SHARING_SERVER_URL_OVERRIDE_ENV: &str = "WARP_SESSION_SHARING_SERVER_URL";
+
+const LOCAL_WARP_DISPLAY_NAME: &str = "Local-Warp";
+const LOCAL_WARP_ABOUT: &str = "Local-Warp is a fork of warp/openwarp supporting Bring Your Own Key (BYOK) and Bring Your Own Provider (BYOP).";
 
 /// Options related to the parent process that spawned this Warp instance.
 #[derive(Debug, Default, Clone, clap::Args)]
@@ -378,6 +381,8 @@ impl Args {
             command = command.mut_subcommand("api-key", |c| c.hide(true));
         }
 
+        command = apply_channel_branding(command);
+
         // Wire up `--version` / `-V` using the same version metadata used elsewhere in the
         // app, so the CLI reports the build's release tag.
         command = command.version(version_string());
@@ -446,6 +451,21 @@ impl Args {
 
     pub fn session_sharing_server_url(&self) -> Option<&str> {
         self.session_sharing_server_url.as_deref()
+    }
+}
+
+fn apply_channel_branding(command: clap::Command) -> clap::Command {
+    match ChannelState::channel() {
+        Channel::Oss => command
+            .name(Channel::Oss.cli_command_name())
+            .display_name(LOCAL_WARP_DISPLAY_NAME)
+            .about(LOCAL_WARP_ABOUT)
+            .long_about(LOCAL_WARP_ABOUT),
+        Channel::Stable
+        | Channel::Preview
+        | Channel::Dev
+        | Channel::Local
+        | Channel::Integration => command,
     }
 }
 

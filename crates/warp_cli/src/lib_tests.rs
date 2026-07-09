@@ -1041,6 +1041,19 @@ fn artifact_help_hides_upload_but_keeps_download_visible() {
 }
 
 #[test]
+fn oss_help_uses_local_warp_branding() {
+    warp_core::features::mark_initialized();
+
+    let mut command = Args::clap_command();
+    let help = command.render_help().to_string();
+
+    assert!(help.contains("Local-Warp"));
+    assert!(help.contains("Usage: warp-oss"));
+    assert!(!help.contains("The orchestration platform for cloud agents"));
+    assert!(!help.contains("The Oz CLI"));
+}
+
+#[test]
 fn raw_command_keeps_message_visible_before_runtime_help_customization() {
     let mut command = <Args as clap::CommandFactory>::command();
     command.build();

@@ -15,6 +15,10 @@ inputs:
     description: If true, dependencies needed for building release artifacts will be installed (e.g., cargo-about for license generation).
   cache_key:
     description: If set, the cache key to use.  If unset, the cache key will be derived from the target OS.
+  cache_shared_key:
+    description: If set, use this stable rust-cache key across jobs and workflows instead of the default job-scoped key.
+  cache_save_if:
+    description: If set, override the rust-cache save-if condition.
   enable_sccache:
     description: If true, configure sccache as RUSTC_WRAPPER using the GitHub Actions cache backend.
     default: "false"
@@ -75,16 +79,32 @@ runs:
         cd "${{ steps.repo-root.outputs.path }}"
         git lfs ls-files --size
 
-    - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+    - id: rust-cache
+      uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       if: ${{ inputs.is_self_hosted != 'true' && !startsWith(runner.name, 'nsc-runner') }}
       with:
         # Make sure x86_64-unknown-linux-gnu and wasm32-unknown-unknown builds
         # don't share a cache, despite running on the same _host_ architecture.
+        shared-key: ${{ inputs.cache_shared_key }}
         key: ${{ inputs.cache_key != '' && inputs.cache_key || inputs.target_os }}
         # Keep release-branch caches warm for tag packaging retries and future
         # multi-local-llm release work. The cache action still keys by Rust
         # environment, Cargo manifests, profile-sensitive env vars, and target.
-        save-if: ${{ github.ref == 'refs/heads/master' || github.ref == 'refs/heads/multi-local-llm' || startsWith(github.ref, 'refs/tags/v0.') }}
+        save-if: ${{ inputs.cache_save_if != '' && inputs.cache_save_if || (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/multi-local-llm' || startsWith(github.ref, 'refs/tags/v0.')) }}
+
+    - name: Report Rust cache status
+      if: ${{ inputs.is_self_hosted != 'true' && !startsWith(runner.name, 'nsc-runner') }}
+      shell: bash
+      run: |
+        {
+          echo "### Rust cache"
+          echo "- target_os: ${{ inputs.target_os }}"
+          echo "- key: ${{ inputs.cache_key != '' && inputs.cache_key || inputs.target_os }}"
+          echo "- shared_key: ${{ inputs.cache_shared_key }}"
+          echo "- save_if: ${{ inputs.cache_save_if != '' && inputs.cache_save_if || (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/multi-local-llm' || startsWith(github.ref, 'refs/tags/v0.')) }}"
+          echo "- exact_hit: ${{ steps.rust-cache.outputs.cache-hit }}"
+          echo "- ref: ${{ github.ref }}"
+        } >> "$GITHUB_STEP_SUMMARY"
 
     - name: Install sccache
       if: ${{ inputs.enable_sccache == 'true' && inputs.is_self_hosted != 'true' && !startsWith(runner.name, 'nsc-runner') }}

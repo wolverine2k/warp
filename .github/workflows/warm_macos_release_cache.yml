@@ -1,0 +1,169 @@
+name: Warm macOS Release Cache
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel feature set to warm.
+        required: true
+        type: choice
+        default: oss
+        options:
+          - oss
+          - stable
+          - preview
+          - dev
+  schedule:
+    # Keep the default-branch macOS release cache alive before GitHub's
+    # seven-day inactivity eviction window, without running on every push.
+    - cron: "17 5 * * 1"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CHANNEL: ${{ github.event.inputs.channel || 'oss' }}
+  RELEASE_TAG: cache-warm-${{ github.run_id }}
+
+concurrency:
+  group: warm-macos-release-cache-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  warm_macos_release_cache:
+    name: Warm macOS release cache
+    # Scheduled cache warming is only intended for the trusted release repo.
+    # Forks can still run this manually with workflow_dispatch when needed.
+    if: ${{ github.event_name != 'schedule' || github.repository == 'warpdotdev/warp-internal' }}
+    runs-on: ${{ vars.WARP_RELEASE_MACOS_RUNNER || 'macos-26' }}
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Prepare environment
+        uses: ./.github/actions/prepare_environment
+        with:
+          target_os: macos
+          cache_key: macos-release
+          cache_shared_key: macos-release
+          cache_save_if: "true"
+          is_self_hosted: ${{ vars.WARP_RELEASE_MACOS_SELF_HOSTED == 'true' }}
+          install_release_deps: false
+          enable_sccache: true
+          skip_tool_install: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL == 'true' }}
+          ssh_key: ${{ secrets.WARP_CHANNEL_CONFIG_ACCESS_SSH_KEY }}
+
+      - name: Install cargo-bundle
+        if: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL != 'true' }}
+        run: script/install_cargo_bundle
+        shell: bash
+
+      - name: Install create-dmg
+        if: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL != 'true' }}
+        run: |
+          if ! command -v create-dmg >/dev/null 2>&1; then
+            brew install create-dmg
+          fi
+        shell: bash
+
+      - name: Validate preinstalled macOS packaging tools
+        if: ${{ vars.WARP_RELEASE_SKIP_TOOL_INSTALL == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for tool in cargo-bundle create-dmg; do
+            if ! command -v "$tool" >/dev/null 2>&1; then
+              missing+=("$tool")
+            fi
+          done
+
+          if (( ${#missing[@]} > 0 )); then
+            printf 'Missing preinstalled macOS packaging tool: %s\n' "${missing[@]}" >&2
+            exit 1
+          fi
+
+      - name: Prepare bundled resources for cache warm
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          prepared_dir="$RUNNER_TEMP/prepared-bundled-resources"
+          echo "PREPARED_BUNDLED_RESOURCES_DIR=$prepared_dir" >> "$GITHUB_ENV"
+
+          rm -rf "$prepared_dir"
+          mkdir -p "$prepared_dir"
+
+          NO_LICENSES=1 \
+          SKIP_SETTINGS_SCHEMA=1 \
+          GIT_RELEASE_TAG="$RELEASE_TAG" \
+            script/prepare_bundled_resources \
+              "$prepared_dir" \
+              "$CHANNEL" \
+              release-lto
+
+      - name: Show sccache stats before cache warm
+        if: ${{ vars.WARP_RELEASE_MACOS_SELF_HOSTED != 'true' && !startsWith(runner.name, 'nsc-runner') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "### sccache before macOS release cache warm"
+            echo '```text'
+            if command -v sccache >/dev/null 2>&1; then
+              sccache --show-stats 2>&1 || true
+              sccache --zero-stats 2>&1 || true
+            else
+              echo "sccache is not installed on this runner."
+            fi
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Warm macOS release cache
+        id: bundle
+        shell: bash
+        run: |
+          set -u
+
+          start_epoch=$(date +%s)
+          set +e
+          script/bundle \
+            --channel "$CHANNEL" \
+            --release-tag "$RELEASE_TAG" \
+            --dmg-name-suffix cache-warm \
+            --nosign \
+            --nouniversal
+          status=$?
+          end_epoch=$(date +%s)
+          duration=$((end_epoch - start_epoch))
+
+          echo "bundle_seconds=$duration" >> "$GITHUB_OUTPUT"
+          {
+            echo "### macOS release cache warm timing"
+            echo "- channel: $CHANNEL"
+            echo "- bundle_seconds: $duration"
+            echo "- status: $status"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          exit "$status"
+
+      - name: Show sccache stats after cache warm
+        if: ${{ always() && vars.WARP_RELEASE_MACOS_SELF_HOSTED != 'true' && !startsWith(runner.name, 'nsc-runner') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "### sccache after macOS release cache warm"
+            echo '```text'
+            if command -v sccache >/dev/null 2>&1; then
+              sccache --show-stats 2>&1 || true
+            else
+              echo "sccache is not installed on this runner."
+            fi
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
