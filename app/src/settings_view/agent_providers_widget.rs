@@ -167,10 +167,26 @@ struct FetchModalHandles {
     cancel_state: MouseStateHandle,
     commit_state: MouseStateHandle,
     row_states: Vec<MouseStateHandle>,
+    search_editor: ViewHandle<EditorView>,
 }
 
 impl FetchModalHandles {
-    fn new() -> Self {
+    fn new(ctx: &mut ViewContext<AISettingsPageView>) -> Self {
+        let search_editor = ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::handle(ctx).as_ref(ctx);
+            let options = single_line_editor_options(appearance, false);
+            let mut editor = EditorView::single_line(options, ctx);
+            editor.set_placeholder_text("Search provider models", ctx);
+            editor
+        });
+        ctx.subscribe_to_view(&search_editor, move |_, editor, event, ctx| {
+            if matches!(event, EditorEvent::Edited(_)) {
+                let text = editor.as_ref(ctx).buffer_text(ctx);
+                ctx.dispatch_typed_action_deferred(
+                    AISettingsPageAction::SetFetchedModelsModalSearch { text },
+                );
+            }
+        });
         Self {
             select_all_state: MouseStateHandle::default(),
             select_none_state: MouseStateHandle::default(),
@@ -179,6 +195,7 @@ impl FetchModalHandles {
             row_states: (0..FETCH_MODELS_MAX_ENTRIES)
                 .map(|_| MouseStateHandle::default())
                 .collect(),
+            search_editor,
         }
     }
 }
@@ -206,7 +223,7 @@ impl CatalogModalHandles {
             editor
         });
         ctx.subscribe_to_view(&search_editor, move |_, editor, event, ctx| {
-            if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+            if matches!(event, EditorEvent::Edited(_)) {
                 let text = editor.as_ref(ctx).buffer_text(ctx);
                 ctx.dispatch_typed_action_deferred(AISettingsPageAction::SetCatalogModalSearch {
                     text,
@@ -248,7 +265,7 @@ impl AgentProvidersWidget {
         Self {
             add_button_state: MouseStateHandle::default(),
             cards,
-            fetch_modal: FetchModalHandles::new(),
+            fetch_modal: FetchModalHandles::new(ctx),
             catalog_modal: CatalogModalHandles::new(ctx),
             compaction_dropdown,
         }
@@ -801,18 +818,30 @@ impl AgentProvidersWidget {
             .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
             .with_child(header_node);
 
+        let search_input = Container::new(ChildView::new(&self.fetch_modal.search_editor).finish())
+            .with_margin_bottom(8.)
+            .finish();
+        column = column.with_child(search_input);
+
         // Caption: empty / truncation / count summary. Plain text, dim.
+        let visible_models: Vec<&ai::local_provider::adapters::DiscoveredModel> = modal
+            .fetched
+            .iter()
+            .filter(|m| modal.matches_search(m))
+            .collect();
         let caption_text = if modal.fetched.is_empty() {
             Some("Upstream returned 0 models.".to_string())
+        } else if visible_models.is_empty() {
+            Some("No fetched models match this search.".to_string())
         } else if modal.fetched.len() >= FETCH_MODELS_MAX_ENTRIES {
             Some(format!(
-                "Showing first {} models — narrow your provider's catalog or wait for Phase 4b.",
+                "Showing up to {} matching models. Keep typing to search deeper in the provider catalog.",
                 FETCH_MODELS_MAX_ENTRIES
             ))
         } else {
             Some(format!(
-                "{} model(s) returned. {} already on this provider.",
-                modal.fetched.len(),
+                "{} model(s) match. {} already on this provider.",
+                visible_models.len(),
                 modal.already_added.len()
             ))
         };
@@ -832,7 +861,7 @@ impl AgentProvidersWidget {
         // Row list. Each row is a Secondary-themed button labeled
         // "[☐/☑] {id}  {display}  {metadata}". Already-added rows
         // render as a flat Container (no on_click) labeled "✓ {id}".
-        for (row_index, model) in modal.fetched.iter().enumerate() {
+        for (row_index, model) in visible_models.into_iter().enumerate() {
             let is_already = modal.already_added.contains(&model.id);
             let is_checked = modal.checked.contains(&model.id);
             let display_part = match model.display_name.as_deref() {
@@ -1529,7 +1558,7 @@ impl AgentProvidersWidget {
         // the last attempt errored (re-click retries), else "Fetch models".
         // A truncated failure reason rides along to make the cause readable
         // without a tooltip.
-        let fetch_models_label = if view.fetch_models_in_flight.contains(&provider_index) {
+        let fetch_models_label = if view.fetch_models_in_flight.contains_key(&provider_index) {
             "Fetching…".to_string()
         } else if let Some(reason) = view.last_fetch_failure.get(&provider_index) {
             let excerpt: String = reason
@@ -1548,7 +1577,10 @@ impl AgentProvidersWidget {
         let fetch_models_button = Self::render_card_button(
             fetch_models_label,
             card.fetch_models_button_state.clone(),
-            AISettingsPageAction::FetchAgentProviderModels { provider_index },
+            AISettingsPageAction::FetchAgentProviderModels {
+                provider_index,
+                query: String::new(),
+            },
             appearance,
         );
         let browse_catalog_button = Self::render_card_button(

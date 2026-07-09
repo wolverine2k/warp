@@ -24,6 +24,7 @@ pub struct FetchedModelsModalState {
     #[allow(dead_code)]
     pub provider_id: String,
     pub fetched: Vec<DiscoveredModel>,
+    pub search: String,
     /// Model ids currently checked. Defaults to "all rows not in
     /// `already_added`" — the user only has to uncheck what they
     /// don't want.
@@ -49,6 +50,7 @@ impl FetchedModelsModalState {
             provider_index,
             provider_id,
             fetched,
+            search: String::new(),
             checked,
             already_added,
         }
@@ -79,6 +81,23 @@ impl FetchedModelsModalState {
         } else {
             self.checked.clear();
         }
+    }
+
+    pub fn set_search(&mut self, search: String) {
+        self.search = search;
+    }
+
+    pub fn matches_search(&self, model: &DiscoveredModel) -> bool {
+        let query = self.search.trim().to_lowercase();
+        if query.is_empty() {
+            return true;
+        }
+        model.id.to_lowercase().contains(&query)
+            || model
+                .display_name
+                .as_deref()
+                .map(|name| name.to_lowercase().contains(&query))
+                .unwrap_or(false)
     }
 
     /// Build the `AgentProviderModel` rows to append on Commit. Filters

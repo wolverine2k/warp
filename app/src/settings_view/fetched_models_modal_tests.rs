@@ -144,6 +144,27 @@ fn committed_rows_filters_unchecked() {
 }
 
 #[test]
+fn search_matches_model_id_and_display_name_case_insensitively() {
+    let mut state = FetchedModelsModalState::new_from_fetched(
+        0,
+        "prov-1".into(),
+        vec![
+            discovered_full("claude-3-opus", "Claude Opus", 200000, 4096),
+            discovered_full("gemini-2-flash", "Gemini Flash", 1000000, 8192),
+        ],
+        HashSet::new(),
+    );
+
+    state.set_search("OPUS".into());
+    assert!(state.matches_search(&state.fetched[0]));
+    assert!(!state.matches_search(&state.fetched[1]));
+
+    state.set_search("gemini-2".into());
+    assert!(!state.matches_search(&state.fetched[0]));
+    assert!(state.matches_search(&state.fetched[1]));
+}
+
+#[test]
 fn committed_rows_skips_already_added_even_if_checked() {
     let already: HashSet<String> = ["m1".to_string()].into_iter().collect();
     let mut state = FetchedModelsModalState::new_from_fetched(

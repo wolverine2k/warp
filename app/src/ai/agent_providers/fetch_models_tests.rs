@@ -8,7 +8,7 @@ use ai::local_provider::api_type::AgentProviderApiType;
 use ai::local_provider::config::LocalProviderConfig;
 use mockito::Server;
 
-use super::{fetch_models, FetchModelsOutcome};
+use super::{fetch_models, fetch_models_with_query, FetchModelsOutcome};
 
 /// Install the rustls aws-lc-rs crypto provider exactly once per test
 /// process. `reqwest::Client::new()` panics with "No provider set" without
@@ -284,6 +284,60 @@ async fn truncates_at_max_entries_cap() {
         panic!("expected Ok, got {outcome:?}")
     };
     assert_eq!(models.len(), 200, "should be capped at MAX_ENTRIES");
+}
+
+#[tokio::test]
+async fn query_fetch_continues_past_first_200_until_match() {
+    let mut server = Server::new_async().await;
+    let page_body = |start: u32, end: u32, last_id: &str, has_more: bool| {
+        serde_json::to_string(&serde_json::json!({
+            "data": (start..end).map(|i| serde_json::json!({
+                "type": "model",
+                "id": format!("model-{i:04}"),
+                "display_name": format!("Model {i}")
+            })).collect::<Vec<_>>(),
+            "last_id": last_id,
+            "has_more": has_more,
+        }))
+        .unwrap()
+    };
+
+    let _p1 = server
+        .mock("GET", "/v1/models?limit=100")
+        .with_status(200)
+        .with_body(page_body(0, 100, "model-0099", true))
+        .expect(1)
+        .create_async()
+        .await;
+    let _p2 = server
+        .mock("GET", "/v1/models?limit=100&after_id=model-0099")
+        .with_status(200)
+        .with_body(page_body(100, 200, "model-0199", true))
+        .expect(1)
+        .create_async()
+        .await;
+    let _p3 = server
+        .mock("GET", "/v1/models?limit=100&after_id=model-0199")
+        .with_status(200)
+        .with_body(
+            r#"{"data":[{"type":"model","id":"rare-opus-special","display_name":"Rare Opus Special"}],
+               "last_id":"rare-opus-special","has_more":false}"#,
+        )
+        .expect(1)
+        .create_async()
+        .await;
+
+    let outcome = fetch_models_with_query(
+        cfg_anthropic(server.url(), "sk-ant-fake"),
+        http_client(),
+        "rare".to_string(),
+    )
+    .await;
+    let FetchModelsOutcome::Ok(models) = outcome else {
+        panic!("expected Ok, got {outcome:?}")
+    };
+    assert_eq!(models.len(), 1);
+    assert_eq!(models[0].id, "rare-opus-special");
 }
 
 #[tokio::test]

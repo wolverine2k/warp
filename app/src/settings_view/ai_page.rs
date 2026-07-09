@@ -146,7 +146,7 @@ impl AISubpage {
 }
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ops::Not;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -676,10 +676,10 @@ pub struct AISettingsPageView {
     /// modal is rendered. Set by the `FetchAgentProviderModels` spawn
     /// callback on a successful resolve; cleared on Commit / Cancel.
     pub(super) fetched_models_modal: Option<super::fetched_models_modal::FetchedModelsModalState>,
-    /// Phase 4a: provider indices for which a `fetch_models` call is
-    /// currently in flight. The widget renders the button as
-    /// "Fetching…" while a provider index is present.
-    pub(super) fetch_models_in_flight: HashSet<usize>,
+    /// Phase 4a: number of `fetch_models` calls currently in flight per
+    /// provider index. The widget renders the button as "Fetching…" while a
+    /// provider index is present.
+    pub(super) fetch_models_in_flight: HashMap<usize, usize>,
     /// Phase 4a: most recent fetch failure per provider index, rendered
     /// inline near the button. Cleared on the next successful fetch.
     pub(super) last_fetch_failure: HashMap<usize, String>,
@@ -3843,6 +3843,7 @@ pub enum AISettingsPageAction {
     /// records a failure on the card.
     FetchAgentProviderModels {
         provider_index: usize,
+        query: String,
     },
 
     /// Phase 4a. User toggled a single row in the open "Fetched models"
@@ -3856,6 +3857,13 @@ pub enum AISettingsPageAction {
     /// Never touches rows already on the provider.
     SetAllFetchedModelsChecked {
         checked: bool,
+    },
+
+    /// Phase 4a. User typed in the open "Fetched models" modal search.
+    /// Updates the local row filter immediately and starts a provider fetch
+    /// using the same query so paginated providers can return deeper matches.
+    SetFetchedModelsModalSearch {
+        text: String,
     },
 
     /// Phase 4a. User clicked "Add N models" — appends checked rows to
@@ -5112,8 +5120,22 @@ impl TypedActionView for AISettingsPageView {
                 ctx.notify();
             }
 
-            AISettingsPageAction::FetchAgentProviderModels { provider_index } => {
+            AISettingsPageAction::FetchAgentProviderModels {
+                provider_index,
+                query,
+            } => {
                 let provider_index = *provider_index;
+                let query = query.clone();
+                let modal_was_open = self
+                    .fetched_models_modal
+                    .as_ref()
+                    .map(|modal| modal.provider_index == provider_index)
+                    .unwrap_or(false);
+                if let Some(modal) = self.fetched_models_modal.as_mut() {
+                    if modal.provider_index == provider_index {
+                        modal.set_search(query.clone());
+                    }
+                }
                 let providers = AISettings::as_ref(ctx).agent_providers.value().clone();
                 let Some(provider) = providers.into_iter().nth(provider_index) else {
                     log::warn!("FetchAgentProviderModels: invalid provider_index {provider_index}");
@@ -5156,19 +5178,32 @@ impl TypedActionView for AISettingsPageView {
                     provider.name.clone()
                 };
                 log::info!(
-                    "FetchAgentProviderModels: fetching for provider {provider_label} ({})",
-                    provider.id
+                    "FetchAgentProviderModels: fetching for provider {provider_label} ({}) with query {:?}",
+                    provider.id,
+                    query
                 );
 
                 self.last_fetch_failure.remove(&provider_index);
-                self.fetch_models_in_flight.insert(provider_index);
+                *self
+                    .fetch_models_in_flight
+                    .entry(provider_index)
+                    .or_insert(0) += 1;
 
                 let http = reqwest::Client::new();
                 let _ = ctx.spawn(
-                    crate::ai::agent_providers::fetch_models::fetch_models(cfg, http),
+                    crate::ai::agent_providers::fetch_models::fetch_models_with_query(
+                        cfg,
+                        http,
+                        query.clone(),
+                    ),
                     move |this, outcome, ctx| {
                         use crate::ai::agent_providers::fetch_models::FetchModelsOutcome;
-                        this.fetch_models_in_flight.remove(&provider_index);
+                        if let Some(count) = this.fetch_models_in_flight.get_mut(&provider_index) {
+                            *count = count.saturating_sub(1);
+                            if *count == 0 {
+                                this.fetch_models_in_flight.remove(&provider_index);
+                            }
+                        }
                         // Stale-resolve guard: drop the resolve if the provider
                         // was removed or replaced (different id) mid-flight.
                         let providers =
@@ -5190,6 +5225,26 @@ impl TypedActionView for AISettingsPageView {
                             ctx.notify();
                             return;
                         }
+                        if modal_was_open {
+                            let Some(modal) = this.fetched_models_modal.as_ref() else {
+                                log::debug!(
+                                    "FetchAgentProviderModels: fetched-models modal closed, \
+                                     dropping query resolve"
+                                );
+                                ctx.notify();
+                                return;
+                            };
+                            if modal.provider_index != provider_index || modal.search != query {
+                                log::debug!(
+                                    "FetchAgentProviderModels: stale query resolve for {:?}, \
+                                     current query is {:?}; dropping",
+                                    query,
+                                    modal.search
+                                );
+                                ctx.notify();
+                                return;
+                            }
+                        }
                         match outcome {
                             FetchModelsOutcome::Failed(reason) => {
                                 log::warn!(
@@ -5198,7 +5253,9 @@ impl TypedActionView for AISettingsPageView {
                                 );
                                 this.last_fetch_failure
                                     .insert(provider_index, reason);
-                                this.fetched_models_modal = None;
+                                if !modal_was_open {
+                                    this.fetched_models_modal = None;
+                                }
                             }
                             FetchModelsOutcome::Ok(fetched) => {
                                 log::info!(
@@ -5219,14 +5276,15 @@ impl TypedActionView for AISettingsPageView {
                                 };
                                 let already_added: std::collections::HashSet<String> =
                                     provider.models.iter().map(|m| m.id.clone()).collect();
-                                this.fetched_models_modal = Some(
+                                let mut modal =
                                     super::fetched_models_modal::FetchedModelsModalState::new_from_fetched(
                                         provider_index,
                                         provider_id.clone(),
                                         fetched,
                                         already_added,
-                                    ),
-                                );
+                                    );
+                                modal.set_search(query.clone());
+                                this.fetched_models_modal = Some(modal);
                                 this.last_fetch_failure.remove(&provider_index);
                             }
                         }
@@ -5234,6 +5292,22 @@ impl TypedActionView for AISettingsPageView {
                     },
                 );
                 ctx.notify();
+            }
+
+            AISettingsPageAction::SetFetchedModelsModalSearch { text } => {
+                let Some(modal) = self.fetched_models_modal.as_mut() else {
+                    return;
+                };
+                let provider_index = modal.provider_index;
+                let query = text.clone();
+                modal.set_search(query.clone());
+                self.handle_action(
+                    &AISettingsPageAction::FetchAgentProviderModels {
+                        provider_index,
+                        query,
+                    },
+                    ctx,
+                );
             }
 
             AISettingsPageAction::ToggleFetchedModelInModal { model_id, checked } => {
@@ -5278,6 +5352,7 @@ impl TypedActionView for AISettingsPageView {
 
             AISettingsPageAction::CancelFetchedAgentProviderModelsModal => {
                 self.fetched_models_modal = None;
+                self.page = Self::build_page(self.active_subpage, ctx);
                 ctx.notify();
             }
 
@@ -5327,15 +5402,33 @@ impl TypedActionView for AISettingsPageView {
             }
 
             AISettingsPageAction::RefreshCatalog => {
-                // Force a fetch regardless of cache age. Reuse the LoadCatalog
-                // body by clearing the timestamp first.
-                if let Some(cache) = self.catalog_cache.as_mut() {
-                    // Mark stale by replacing with a fresh-empty state that
-                    // needs_refresh() will surface as true; the next handler
-                    // body runs the fetch.
-                    *cache = ai::catalog::CatalogCache::load_or_default();
+                // Force a fetch regardless of cache age.
+                if self.catalog_cache.is_none() {
+                    self.catalog_cache = Some(ai::catalog::CatalogCache::load_or_default());
                 }
-                self.handle_action(&AISettingsPageAction::LoadCatalog, ctx);
+                self.catalog_load_failure = None;
+                ctx.notify();
+
+                let http = reqwest::Client::new();
+                let _ = ctx.spawn(
+                    async move { ai::catalog::fetch_catalog(&http).await },
+                    move |this, outcome, ctx| {
+                        match outcome {
+                            Ok(models) => {
+                                if let Some(cache) = this.catalog_cache.as_mut() {
+                                    cache.replace_with_fresh(models);
+                                }
+                                this.catalog_load_failure = None;
+                            }
+                            Err(e) => {
+                                let msg: String = format!("{e}").chars().take(120).collect();
+                                log::warn!("RefreshCatalog: failed — {msg}");
+                                this.catalog_load_failure = Some(msg);
+                            }
+                        }
+                        ctx.notify();
+                    },
+                );
             }
 
             AISettingsPageAction::QuickAddCatalogModel {
@@ -5431,6 +5524,15 @@ impl TypedActionView for AISettingsPageView {
             AISettingsPageAction::SetCatalogModalFilter { filter } => {
                 if let Some(modal) = self.catalog_modal.as_mut() {
                     modal.set_filter(*filter);
+                    if self
+                        .catalog_cache
+                        .as_ref()
+                        .map(|cache| cache.needs_refresh())
+                        .unwrap_or(true)
+                    {
+                        self.handle_action(&AISettingsPageAction::LoadCatalog, ctx);
+                        return;
+                    }
                     ctx.notify();
                 }
             }
@@ -5438,6 +5540,15 @@ impl TypedActionView for AISettingsPageView {
             AISettingsPageAction::SetCatalogModalSearch { text } => {
                 if let Some(modal) = self.catalog_modal.as_mut() {
                     modal.set_search(text.clone());
+                    if self
+                        .catalog_cache
+                        .as_ref()
+                        .map(|cache| cache.needs_refresh())
+                        .unwrap_or(true)
+                    {
+                        self.handle_action(&AISettingsPageAction::LoadCatalog, ctx);
+                        return;
+                    }
                     ctx.notify();
                 }
             }

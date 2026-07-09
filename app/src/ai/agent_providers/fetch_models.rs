@@ -48,7 +48,20 @@ impl FetchModelsOutcome {
 /// pre-flights API-key requirement, builds + sends the request (with
 /// pagination), dedupes by `id`, and returns a structured outcome.
 pub async fn fetch_models(cfg: LocalProviderConfig, http: reqwest::Client) -> FetchModelsOutcome {
-    match tokio::time::timeout(FETCH_TIMEOUT, fetch_models_inner(cfg, http)).await {
+    fetch_models_with_query(cfg, http, String::new()).await
+}
+
+/// Run the full fetch flow while filtering by `query`.
+///
+/// The provider list APIs do not expose a portable search parameter, so this
+/// keeps paginating and applies the query locally. With an empty query the
+/// behavior matches `fetch_models`: return the first `MAX_ENTRIES` models.
+pub async fn fetch_models_with_query(
+    cfg: LocalProviderConfig,
+    http: reqwest::Client,
+    query: String,
+) -> FetchModelsOutcome {
+    match tokio::time::timeout(FETCH_TIMEOUT, fetch_models_inner(cfg, http, query)).await {
         Ok(outcome) => outcome,
         Err(_) => FetchModelsOutcome::Failed(format!(
             "Request timed out after {}s",
@@ -57,7 +70,11 @@ pub async fn fetch_models(cfg: LocalProviderConfig, http: reqwest::Client) -> Fe
     }
 }
 
-async fn fetch_models_inner(cfg: LocalProviderConfig, http: reqwest::Client) -> FetchModelsOutcome {
+async fn fetch_models_inner(
+    cfg: LocalProviderConfig,
+    http: reqwest::Client,
+    query: String,
+) -> FetchModelsOutcome {
     let adapter = match select_adapter(cfg.api_type) {
         Ok(a) => a,
         Err(AdapterError::UnsupportedApiType(t)) => {
@@ -75,7 +92,9 @@ async fn fetch_models_inner(cfg: LocalProviderConfig, http: reqwest::Client) -> 
         return FetchModelsOutcome::Failed("API key required".into());
     }
 
+    let query = query.trim().to_lowercase();
     let mut accumulator: Vec<DiscoveredModel> = Vec::new();
+    let mut seen = std::collections::HashSet::<String>::new();
     let mut cursor: Option<String> = None;
     for _ in 0..MAX_PAGES {
         let req = match adapter.build_list_models_request(&cfg, &http, cursor.as_deref()) {
@@ -105,13 +124,23 @@ async fn fetch_models_inner(cfg: LocalProviderConfig, http: reqwest::Client) -> 
             Err(e) => return FetchModelsOutcome::Failed(truncate_to_120(&format!("{e}"))),
         };
         let ListModelsPage {
-            mut models,
+            models,
             next_cursor,
         } = match adapter.parse_list_models_response(&body) {
             Ok(p) => p,
             Err(e) => return FetchModelsOutcome::Failed(format!("Parse error: {e}")),
         };
-        accumulator.append(&mut models);
+        for model in models {
+            if !model_matches_query(&model, &query) {
+                continue;
+            }
+            if seen.insert(model.id.clone()) {
+                accumulator.push(model);
+            }
+            if accumulator.len() >= MAX_ENTRIES {
+                break;
+            }
+        }
         if accumulator.len() >= MAX_ENTRIES {
             accumulator.truncate(MAX_ENTRIES);
             break;
@@ -122,15 +151,23 @@ async fn fetch_models_inner(cfg: LocalProviderConfig, http: reqwest::Client) -> 
         }
     }
 
-    // Dedupe by `id`, keeping first occurrence. Handles overlapping pages.
-    let mut seen = std::collections::HashSet::<String>::with_capacity(accumulator.len());
-    accumulator.retain(|m| seen.insert(m.id.clone()));
-
     FetchModelsOutcome::Ok(accumulator)
 }
 
 fn truncate_to_120(s: &str) -> String {
     s.chars().take(120).collect()
+}
+
+fn model_matches_query(model: &DiscoveredModel, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    model.id.to_lowercase().contains(query)
+        || model
+            .display_name
+            .as_deref()
+            .map(|name| name.to_lowercase().contains(query))
+            .unwrap_or(false)
 }
 
 /// Phase 4b cross-phase enrichment. After a successful fetch_models()
